@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>Bionmf-gpu by bioinfo-cnb</title>
+
+    <link rel="stylesheet" href="stylesheets/styles.css">
+    <link rel="stylesheet" href="stylesheets/pygment_trac.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1>Bionmf-gpu</h1>
+        <p>BioNMF-GPU: Non-negative Matrix Factorization (NMF) on Graphics-Processing Units (GPU) for Biology</p>
+
+        <p class="view"><a href="https://github.com/bioinfo-cnb/bionmf-gpu">View the Project on GitHub <small>bioinfo-cnb/bionmf-gpu</small></a></p>
+
+
+        <ul>
+          <li><a href="https://github.com/bioinfo-cnb/bionmf-gpu/zipball/master">Download <strong>ZIP File</strong></a></li>
+          <li><a href="https://github.com/bioinfo-cnb/bionmf-gpu/tarball/master">Download <strong>TAR Ball</strong></a></li>
+          <li><a href="https://github.com/bioinfo-cnb/bionmf-gpu">View On <strong>GitHub</strong></a></li>
+        </ul>
+      </header>
+      <section>
+        <h1>
+<a name="bionmf---gpu" class="anchor" href="#bionmf---gpu"><span class="octicon octicon-link"></span></a>BioNMF - GPU</h1>
+
+<p><strong>BioNMF-GPU</strong> is an efficient implementation of the <strong><em>Non-negative Matrix Factorization</em></strong> (<strong><em>NMF</em></strong>) algorithm based on a programmable <strong><em>Graphics-Processing Unit</em></strong> (<strong><em>GPU</em></strong>). Since numerous linear-algebra operations are required to draw images on the screen, GPUs are devices specially designed to perform such tasks much faster than any conventional processor. Nevertheless, their architecture has evolved into a general-purpose programmable system able to execute <strong>non-graphics-related applications</strong>, just like a <em>co-processor</em>. GPUs represent a <em>cost-effective</em> alternative to conventional multi-processor clusters, since they are already present on almost any modern PC or laptop as a <em>graphics card</em>.</p>
+
+<p>This implementation is based on the NVIDIA’s programming model: <strong><em>CUDA</em></strong> (<strong><em>Compute Unified Device Architecture</em></strong>). Large input matrices are blockwise transferred and processed. Systems with multiple GPUs can be then synchronized through <strong><em>MPI</em></strong> (<strong><em>Message Passing Interface</em></strong>).</p>
+      </section>
+      <footer>
+        <p>This project is maintained by <a href="https://github.com/bioinfo-cnb">bioinfo-cnb</a></p>
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
+      </footer>
+    </div>
+    <script src="javascripts/scale.fix.js"></script>
+    
+  </body>
+</html>
