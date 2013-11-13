@@ -1,0 +1,1096 @@
+/************************************************************************
+ * Copyright (C) 2011-2013:
+ *
+ *	Edgardo Mejia-Roa(*), Carlos Garcia, Jose Ignacio Gomez,
+ *	Manuel Prieto, Francisco Tirado and Alberto Pascual-Montano(**).
+ *
+ *	(*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
+ *	(**) Functional Bioinformatics Group, Biocomputing Unit,
+ *		National Center for Biotechnology-CSIC, Madrid, Spain.
+ *
+ *	E-mail for E. Mejia-Roa: <edgardomejia@fis.ucm.es>
+ *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
+ *
+ *
+ * This file is part of bioNMF-mGPU..
+ *
+ * BioNMF-mGPU is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * BioNMF-mGPU is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with BioNMF-mGPU.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ ***********************************************************************/
+
+
+	<< bioNMF: a tool for Non-negative Matrix Factorization in biology >>
+
+				<< USER'S GUIDE >>
+
+This documents shows how to use bioNMF.
+
+Index:
+	1. Introduction.
+	2. Input parameters.
+	3. Data file format.
+	4. Preprocessing methods.
+	5. Analysis methods.
+	6. Analysis step - Consensus Method.
+	7. Analysis Options.
+	8. NMF Algorithms.
+	9. Running tests and examples of use.
+	10. Utilities
+	11. Issues/Troubleshooting.
+	12. How to cite bioNMF.
+
+
+=============================
+
+1. Introduction
+
+bioNMF implements the Non-negative Matrix Factorization (NMF) methodology in different analysis contexts to support some of the most important reported applications in biology. This algorithm takes one input matrix (V) and returns two matrices (W and H) whose product is equal to V (ie. V ∼ W*H). See section "8 - NMF Algorithms" for more information.
+
+If matrix V has N rows and M columns, then dimensions for output matrices W and H will be N x K and K x M respectively, where K is the selected factorization rank. This value can be specified by the user or bioNMF can find the best one within a given input range, by computing the Cophenetic Correlation Coefficient (CCC) for each of these ranks. See sections 6 (Consensus method) and 7 (Analysis Options) for more information.
+
+With this tool you can find cluster genes and samples that are highly related in sub-portions of the data (Biclustering analysis), determine the most suitable number of sample clusters in a given dataset (Sample Classification), or just perform a nonnegative matrix factorization (Standard NMF). See section 7 (Analysis methods) for details.
+
+
+---------------------------
+
+BioNMF's analysis process:
+
+Analysis process is performed in three big steps:
+
+	* Preprocessing and error-checking of input data.
+	* Analysis step (NMF algorithms, Consensus-ordering method, etc).
+	* Postprocessing of input/output data (generate heatmap graphics, etc).
+
+*************************************************************
+* IMPORTANT NOTES:
+*	Preprocessing step *OVERWRITES* your input file(s). Please make a copy of your data before using bioNMF.
+*	Input filename(s) must not have space (' ') nor TAB characters.
+*************************************************************
+
+-------------------
+
+A) Preprocessing:
+	* Checks all input data-matrices and parameters.
+	* Applies normalization and transformation methods to input matrix.
+	* Saves (*OVERWRITES*) input file(s) as binary files for faster read/write operations.
+	* Checks user initialization files for matrices W and H (if supplied).
+
+This program starts by checking all input parameters (see section 2 for details). If they seem to be correct, it loads the input data-matrix. All matrix entries are then checked, as well as matrix dimensions, in order to avoid overflows or invalid data (eg. NaNs). If upper-limits for data-matrices (eg. maximum matrix size) were supplied in a configuration file, they are also applied. See section 3 for allowed input-file formats.
+
+If the matrix is valid, then a normalization method (if selected by user) is applied. A normalization step may be convenient to accentuate the patterns of interest. See section 4 (Preprocessing methods) for a list of normalization methods.
+
+All NMF algorithms require a non-negative input matrix (ie. all entries must be greater than, or equal to, zero). Therefore, a transformation method to make data positive is also applied (if selected). It becomes a mandatory option if a normalization step was performed since these methods make data negative. However, it is ignored if the input matrix is already positive. See section 4 (Preprocessing methods) for a list of transformation methods.
+
+At this point, the input matrix does not have any negative value, but it might have a row or a column with all its entries set to zero. In this case, bioNMF adds a small value (EPS=2.2204e-16) to all matrix entries.
+
+Finally, it saves the input matrix in 'native-binary' format for faster read/write operations.
+
+Note: 'Native binary' means system's precision (float/double) and byte-ordering (big/little endian). 'Binary' means double-precision and little-endian.
+
+If initial values for matrices W and H were supplied, they are checked the same way as input matrix. Dimmension of such matrices must fit with input matrix dimensions, as well as with the given factorization rank (K) (see section 7.A). Note providing these files, forces to perform a single run with the selected K value (instead of multiples tries performed with random initial-values).
+
+IMPORTANT NOTES:
+	* Input filename(s) must not have space (' ') nor TAB characters.
+	* Initialization files must not have labels. They must be numeric-only files.
+	* No normalization nor transformation method is performed on these initial matrices.
+	* If input matrix dimmensions are modified by any Preprocessing Method, initialization matrices
+	  will *NOT* be updated. They must already fit with new input matrix dimensions.
+
+See generated output files on section 9.
+
+-------------------
+
+B) Analysis:
+	* Reads input matrix/matrices.
+	* Initializes data-structures for the selected analysis method and NMF algorithm.
+	* Performs the selected analysis method and NMF algorithm for the given number of times.
+	* Saves output files.
+	* Optionally, performs inlined 'Consensus-ordering' and 'output-files postprocessing' sub-steps.
+
+This programs starts by reading input matrix (as it was generated from the preprocessing step) and initializes all data-structures according to the selected analysis method (see section 5 - Analysis Methods). This matrix should be in 'native-binary' format. That is, system's precision (float/double) and byte-ordering (big/little endian).
+
+If a range of factorization ranks is supplied, bioNMF will try to find the best value within that range. This procedure is performed via the Consensus Method in two steps.
+
+The FIRST, requires to execute NMF multiple times (runs) for each candidate value. Each 'run' starts by initializing W and H with random values. Then, it iterates applying the selected update rules (see section 8). Each certain number of iterations, matrices W and H are adjusted to avoid underflow (ie., W is replaced by W+EPS, and H by H + EPS, where EPS=2^(-52)) and a Test of Convergence is performed. It is possible to configure a variety of parameters, please see a description on section 7 (Analysis Options). In addition, it selects the best matrices within all generated W and H (see how they are selected in section 7.E). If analysis method is Biclustering (set with option '-m Biclustering'), it also computes the representative set of genes (see 'Biclustering analysis' in Section 5.B).
+
+The SECOND step, named 'Consensus-ordering', is performed for each factorization rank. It computes the best factorization rank based on the Cophenetic Correlation Coefficients (CCC). The best rank is the one with the highest CCC. See Section 6 (Consensus Method) for details. This procedure can be skipped by setting option '-q' (eg. to perform it as a detached process). In this case it is denoted as 'postprocess_orderconsensus' sub-step.
+
+Finally, it combines all output matrices (if selected with option '-s Combine'. See Section 7.E). This procedure can be skipped by setting option '-q' (eg. to perform it as a detached process). In this case, it is named 'postprocess_output_files' sub-step.
+
+See a list of generated output files on section 9.
+
+NOTES:
+* Consensus Method is also performed if the 'Sample Classification' analysis method was selected (with option '-m SampleClassification').
+* If initial values for matrices W and H were supplied, the factorization rank is forced to a single value (ie. the search of the best rank is disabled) and the Consensus Method is not performed (except, maybe, the use of the 'connectivity matrix' to test convergence if option '-d' was not specified. See section 7.D).
+
+-------------------
+
+C) Postprocessing images:
+	* Generates heatmap graphics and profile plots for input and output matrices (if selected). See section 7.F (Heatmaps and profiles).
+	* Saves analysis-method's output images (if selected). See section 7.G (Analysis's output images).
+	* Computes Biclusters from the best W and H matrices (if Biclustering analysis was selected with option '-m Biclustering').
+	  See section 5.B (Bicluster Analysis) for details.
+
+=============================
+
+2. Input parameters.
+
+Note: See a description of these arguments in section 7 (Analysis Options).
+
+Arguments:
+	filename [preprocessing_options] [filename_w filename_h [-k kStart] | analysis_options] [other_options]
+	[ -h[=show_full_help] | --help[=show_full_help] ]
+where,
+Preprocessing options: [ -bcrx ] [ -n normalization ] [ -p positive ] [ -f config_file ]
+Analysis options: [ -m analysis_method ] [ -k kStart[,kEnd] ] [ -l nRuns[,baseRun] ] [ -s save_option ]
+Other options: [ -a nmf_algorithm[,sparseness] ] [ -i nIters ] [ -t stop_threshold ] [ -goqvw ]
+
+Generic arguments and options:
+
+<filename>
+	Input data matrix (mandatory if help is not requested).
+
+<filename_w> <filename_h>
+	Initialization data for output matrices W and H. It is valid for a single NMF execution.
+	Therefore, these arguments imply the following options to be fixed: '-k <kStart> -l 1 -s Best',
+	where <kStart> is the selected factorization rank ('2' by default). This value must be equal to
+	the number of columns in <filename_w> and the number of rows in <filename_h>.
+	Initialization files must not contain matrix labels.
+
+-A,-a [ Standard (default) | Divergence | nsNMF[,sparseness] ]
+	Executes one of the following NMF Algorithms (see section 8, NMF Algorithms, for details):
+	* Standard NMF (Lee, D.D. and Seung, H.S. 1999).
+	* Divergence NMF (Lee, D.D. and Seung, H.S. 2001).
+	* Non smooth NMF (Pascual-Montano, A. et al. 2006).
+	  Sparseness: sparsity level in range [0 (no sparse) ... 1 (sparse)]. Default: 0.5
+
+-G,-g	Saves heatmap and profile graphics for input and output matrices (NOT saved by default).
+
+-h,-H,--help,--HELP[=<show_full_help>]
+	If show_full_help is non-zero, prints this help message. Otherwise (default), prints
+	specific help.
+
+-I,-i <nIters>
+	Number of iterations per run (2000 by default).
+
+-K,-k <kStart>[,<kEnd>]
+	Range of factorization ranks K=[<kStart>...<kEnd>]. Default: K=2.
+	The 'kEnd' value is ignored (and set to <kStart>) if 'filename_w' and 'filename_h'
+	arguments are specified.
+
+-L,-l <nRuns>
+	Number of runs per rank (1 by default).
+	If nRuns is set to 1 (or if this option is not specified), implies option '-s Best'
+	(ie. only the best --and unique-- output matrices are saved). Option '-l' is ignored
+	(and set to default) if 'filename_w' and 'filename_h' arguments are specified.
+	The analysis program allows to specify a starting run number as a second argument (ie.
+	-l <nRuns>,<baseRun>) if option '-w' is also set (otherwise, <baseRun> is ignored).
+	This is useful to split all <nRuns> factorizations into smaller ranges performed by
+	several running analysis programs. For instance, to split 10 runs into 3 groups
+	(l=[0..2], l=[3..7] and l=[8..9], respectively):
+	bin/bionmf ... -l 3,0 -w  ;  bin/bionmf ... -l 5,3 -w  ;  bin/bionmf ... -l 2,8 -w
+
+	Help message for analysis program:
+
+	-L,-l <nRuns>[,<baseRun>]
+		Number of runs per rank (1 by default), starting from <baseRun> (0 by default).
+		If this options is set to default values, and option '-w' is not specified, it
+		implies the option '-s Best' (ie. only the best output matrices are saved).
+		Option '-l' is ignored (and set to default) if 'filename_w' and 'filename_h'
+		arguments are specified. The <baseRun> parameter is useful to split all
+		factorizations into different smaller ranges performed by several running
+		analysis programs. Therefore, it makes sense only in conjunction with option
+		'-w' (otherwise, this parameter is ignored). For instance, to split 10 runs into
+		3 groups (l=[0..2], [3..7] and [8..9], respectively):
+		bin/bionmf ... -l 3,0 -w  ;  bin/bionmf ... -l 5,3 -w  ;  bin/bionmf ... -l 2,8 -w
+		See option '-w' for details.
+
+-M,-m [ StandardNMF (default) | SampleClassification | Biclustering ]
+	Performs one of the following Analysis Methods (see section 5):
+	* Standard NMF (Lee, D.D. and Seung, H.S. 1999). Default.
+	* Sample Classification (Brunet J.P. and Tamayo P. et al. 2004).
+	* Biclustering Analysis (Carmona-Saez P. et al. 2006).
+
+-O,-o	Saves analysis output images (NOT saved by default).
+
+-S,-s [ Best (default) | All | Combine ]
+	Saves output matrices W and H in one of the following ways:
+	* Save only the best matrices (default).
+	* Save all matrices - Saves W and H matrices corresponding to all random runs.
+	* Combine all matrices - Combines all W and H matrices into two files.
+	This option is ignored (and set to the default) if number of runs is set to 1 (with
+	option '-l <nRuns>'), or if 'filename_w' and 'filename_h' arguments are specified.
+
+-T,-t	<stop_threshold>
+	Stopping threshold (default: 40).
+	When the selected test of convergence (see option '-d' for details) has not changed
+	its value over last <stop_threshold> times it has been check, the NMF algorithm is
+	considered to have converged and stops iterating.
+	See section 7.E - Convergence Test for details.
+
+-V,-v	HIDES some information messages (eg. some input parameters). Flag disabled by default.
+
+---------------
+
+Preprocessing options:
+
+-B,-b	Input file is binary (disabled by default, so input file is read in ASCII-text format).
+
+-C,-c	Input text file has numeric column headers (disabled by default).
+
+-F,-f <config_filename>
+	Configuration file containing on-line limits.
+	File with limits on size or dimensions to be applied to the input matrix.
+	Useful for public sites to prevent monopolizing computings resources with too large
+	input-data.
+
+-N,-n [ No (default) | SubGMean | SColsNRows | SDRows | SDCols | SubMRows | SubMCols | SubMRowsCols ]
+	Performs one of the following normalization method (see section 4 - Preprocessing methods):
+	* Do not normalize (default).
+	* Subtract global mean.
+	* Scale columns, then normalize rows.
+	* Set mean to 0 and standard deviation to 1, by rows.
+	* Set mean to 0 and standard deviation to 1, by columns.
+	* Subtract mean by rows.
+	* Subtract mean by columns.
+	* Subtract mean by rows and then by columns.
+	If you set a normalization method other than the default, you must set also a transformation
+	method (see option '-p'). This option ignored if data matrix is already positive.
+
+-P,-p [ No (default) | SubMin | FoldCols | FoldRows | ExpScal ]
+	Performs one of the following methods in order to make data positive (see section 4 - Preprocessing methods):
+	* Do not do anything.
+	* Subtract the absolute minimum.
+	* Fold data by columns (reserved for Standard-NMF analysis method).
+	* Fold data by rows (reserved for Standard-NMF analysis method).
+	* Exponential scaling.
+	This option is mandatory if a normalization method is selected (see option '-n'),
+	but ignored if data matrix is already positive.
+
+-R,-r	Input text file has numeric row labels (disabled by default).
+
+-X,-x	Transposes input data matrix (as well as initialization matrices, if specified).
+
+---------------
+
+Analysis-step options:
+
+-D,-d	Compute convergence based on the distance between input matrix and W*H. Otherwise
+	(default), convergence is based on changes on connectivity matrix. Option ignored
+	(and set to the default) if Sample Classification Analysis was selected (with
+	'-m SampleClassification'). This option does NOT disable Consensus method.
+	See section 7.E - Convergence Test for details.
+
+-J,-j <niter_test_conv>
+	Test convergence each <niter_test_conv> iterations. The default is 10 iterations.
+	If greater than the maximum number of iterations (set with option '-i <nIters>'),
+	no convergence test is performed.
+
+-Q,-q	If set, the analysis program skips the inlined postprocessing step.
+	Flag disabled by default.
+
+-U,-u max_delta
+	Threshold for changes in convergence test. Only changes higher than this value
+	are counted. When counter arrives to <stop_threshold> (set with option
+	'-t <stop_threshold>'), algorithm is considered as having converged and stops
+	processing. Option '-u' is ignored (and set to 0) if Sample Classification is selected
+	(ie. if '-m SampleClassification' is specified).
+
+---------------
+
+Analysis-step, postprocess_orderconsensus and postprocess_output_files options:
+
+-W,-w	Running detached processes (disabled by default).
+	This flag indicates that all factorizations, or computings of Cophenetic
+	Correlation Coefficients (CCC), are split into smaller ranges perfomed
+	by several running instances of the analysis (or orderconsensus) program.
+	This option is ignored if 'filename_w' and 'filename_h' arguments are specified.
+	* Analysis program: this option forces Consensus data to be written and to skip
+	inlined post-processing, as well as some information messages (ie. it forces
+	options '-q' and '-v', respectively).
+	Example: K=[2..4], 10 times each, split into 3 running analysis programs as follows:
+		Program 1: K=[2..3], 10 runs each:	bin/bionmf ... -k 2,3 -l 10 -w
+		Program 2: K=4, 4 runs (l=[0..3]):	bin/bionmf ... -k 4 -l 4,0 -w
+		Program 3: K=4, 6 runs (l=[4..9]):	bin/bionmf ... -k 4 -l 6,4 -w
+	  Please note this is equivalent to run: bin/bionmf ... -k 2,4 -l 10
+	  See options '-k' and '-l' for details.
+	* Orderconsensus: This option forces to compute the CCC(s) corresponding to the
+	  given (range of) factorization rank(s). It also hides some information messages
+	  (ie. forces option '-v').
+	  Example: to compute CCCs values corresponding to K=[2..5], 10 runs each,
+	  split into 3 groups as follows:
+		Program 1: K=[2..3]:	bin/postprocess_orderconsensus ... -k 2,3 -l 10 -w
+		Program 2: K=4 :	bin/postprocess_orderconsensus ... -k 4 -l 10 -w
+		Program 3: K=5 :	bin/postprocess_orderconsensus ... -k 5 -l 10 -w
+	  Please note this is equivalent to run: bin/postprocess_orderconsensus ... -k 2,5 -l 10
+	  See options '-k' and '-l' for details.
+	* Output_files: Select the best run corresponding to the best factorization rank.
+
+	Help message for analysis program:
+
+	-W,-w	Performing detached factorizations (disabled by default).
+		This flag indicates that all factorizations are split into smaller ranges
+		perfomed by several running instances of the analysis program. It forces
+		Consensus data to be written and skips inlined post-processing, as well as,
+		some information messages (ie. forces options '-q' and '-v', respectively).
+		Option '-w' is ignored if 'filename_w' and 'filename_h' arguments are specified.
+		Example: K=[2..4], 10 times each, split into 3 running analysis programs as follows:
+			Program 1: K=[2..3], 10 runs each:	bin/bionmf ... -k 2,3 -l 10 -w
+			Program 2: K=4, 4 runs (l=[0..3]):	bin/bionmf ... -k 4 -l 4,0 -w
+			Program 3: K=4, 6 runs (l=[4..9]):	bin/bionmf ... -k 4 -l 6,4 -w
+		Please note this is equivalent to run: bin/bionmf ... -k 2,4 -l 10
+		See full help on option '-w' (just type: ./bionmf -h=1)
+
+	Help message for postprocess_orderconsensus program:
+
+	-W,-w	Forces to compute Cophenetic Correlation Coefficients (NOT performed by default).
+		This flag indicates that computing of CCC values is being split into smaller
+		ranges perfomed by several running instances of the orderconsensus program.
+		Therefore, this option forces the computing of CCC value corresponding to the
+		given factorization rank. It also skips inlined post-processing, as well as,
+		some information messages (ie. forces options '-q' and '-v', respectively).
+		The '-w' option is ignored if 'filename_w' and 'filename_h' arguments are specified.
+		For instance, to compute CCCs values corresponding to K=[2..5], 10 runs each,
+		split into 3 groups as follows:
+			Program 1: K=[2..3]:	bin/postprocess_orderconsensus ... -k 2,3 -l 10 -w
+			Program 2: K=4 :	bin/postprocess_orderconsensus ... -k 4 -l 10 -w
+			Program 3: K=5 :	bin/postprocess_orderconsensus ... -k 5 -l 10 -w
+		Please note this is equivalent to run: bin/postprocess_orderconsensus ... -k 2,5 -l 10
+		See full help on option '-w' (just type: ./postprocess_orderconsensus -h=1)
+
+	Help message for postprocess_output_files program:
+
+	-W,-w	Select the best run (NOT performed by default).
+		This flag indicates that all factorizations were split into smaller ranges
+		perfomed by several running instances of the analysis program. Therefore, this
+		program selects the best run corresponding to the best factorization rank.
+		This option is ignored if 'filename_w' and 'filename_h' arguments are specified.
+
+
+=============================
+
+3. Data file format.
+
+*************************************************************
+* IMPORTANT NOTES:
+*	- Preprocessing step *OVERWRITES* your input file(s). Please make a copy of your data before using bioNMF.
+*	- Please read instructions below about valid text-file and binary-file formats. No .XLS, .MAT nor .CVS files are accepted.
+	- Input filename(s) must not have space (' ') nor TAB characters.
+*************************************************************
+
+
+By default, bioNMF accepts input text files where data is separated by *single TAB characters*. It might also contain row labels and/or column headers, as well as a short description string at the beginning of the file (any of these three elements is optional). Each header, label or the description string might be composed by several *space-separated* words and/or numbers. If set, both column-headers and the description string, must be located at the first line. Please do NOT use quote characters.
+
+*All rows and columns must be filled with data (either numbers, labels or TAB characters)*. Consecutive TABs will be processed as empty values and will be replaced by 0 or empty labels.
+
+*WARNING:*
+	- By default, this programs follows the 'C' locale, ie. it uses dots ('.') as decimal symbol. Therefore, bioNMF will report an invalid-file-format error if another character is used.
+	- Only UNIX (LF, '\n') and MS-DOS (CR+LF, '\r\n'), end-of-line styles are accepted
+
+Under the following conditions, input data might be separated by whitespace characters (' '):
+	* Each matrix label is a single word (including the description string).
+	* There must not be any TAB character in the file.
+	* Consecutive space characters will be processed as empty values (ie. as 0) or empty labels.
+	* First and second rows must not have empty labels since they will be processed as empty numeric values (ie. as 0).
+	  In such case, please use the '-r' option to avoid it.
+
+
+In addition to text files, bioNMF also accepts data binary files encoded using IEEE little-endian byte ordering. *Data must be written in the following format:*
+
+	* Number of rows (n): a 32-bits signed integer.
+	* Number of columns (m): a 32-bits signed integer.
+	* Data matrix: n-by-m 64-bits floating-point values stored in row-major order
+	  (ie. contiguous elements belongs to the same row).
+	* Optionally, headers, labels or a description string can be written as follows:
+		+ Row labels: n tab-separated strings in ASCII format.
+		+ A newline ('\n') character (in ASCII format).
+		+ Column headers: m tab-separated strings in ASCII format.
+		+ A newline ('\n') character (in ASCII format).
+		+ Name (the short description string): String in ASCII format.
+
+Please note that newline ('\n') characters are mandatory if any of headers, labels or name fields is set.
+
+Both, UNIX (LF) and MS-DOS (CR+LF), end-of-line styles are accepted.
+
+NOTE: Input file may be OVERWRITEN by system's precision (float/double) and byte-ordering (big/little endian) format. It is denoted as 'Native binary' format. It is used as internal format for input and intermediary files. 'Binary' refers to double-precision and little-endian.
+
+There are some examples of valid input matrices under the <BIONMF_PATH>/test/data folder.
+
+=============================
+
+4. Preprocessing methods.
+
+Even if NMF seems to be an especially robust algorithm compared with other clustering methods like hierarchical clustering or SOM, a previous normalization step is may be convenient to make more evident the patterns of interest. Therefore, data normalization is provided as a pre-processing step before analysis.
+
+A normalization method can be selected using option '-n', with the appropiated argument, as follows:
+
+	-n [ No (default) | SubGMean | SColsNRows | SDRows | SDCols | SubMRows | SubMCols | SubMRowsCols ]
+
+where:
+	* 'No' - No normalization. This is the default option, data won't be normalized.
+
+	* 'SubGMean' - Subtract global mean: The global mean of the data matrix is calculated and then subtracted from all data items.
+
+	* 'SColsNRows' - Scale columns, then normalize rows: This is the approach proposed by Getz, et al. (PNAS 2000) that first divide each column by its mean and then normalize each row.
+
+	* 'SDRows' - mean=0, std=1 by rows: Each row of the data matrix is transformed in such a way that its mean will be zero and its standard deviation will be 1.
+
+	* 'SDCols' - mean=0, std=1 by columns: Each column of the data matrix is transformed in such a way that its mean will be zero and its standard deviation will be 1.
+
+	* 'SubMRows' - Subtract mean by rows: The mean for each row of the data matrix is calculated and then subtracted from all data items of that row.
+
+	* 'SubMCols' - Subtract mean by columns: The mean for each column of the data matrix.is calculated and then subtracted from all data items of that column.
+
+	* 'SubMRowsCols' - Subtract mean by rows and then by columns: The mean for each row of the data matrix is calculated and then subtracted from all data items of that row. In a subsequent step, the mean for each column of the data matrix is calculated and then subtracted from all data items of that column.
+
+-------------------
+
+After the normalization step --or if the data originally contains negative values--, this tool offers a set of methodologies to make it positive. Any of these can be selected using option '-p', with the appropriated argument, as follows:
+
+	-p [ No (default) | SubMin | FoldCols | FoldRows | ExpScal ]
+
+where:
+	* 'No' - Don't do anything: This is the default option, data is expected to be positive.
+
+	* 'SubMin' - Subtract absolute minimum: This a very simple method to make positive data. The minimum negative value is subtracted to every single cell of the data matrix.
+
+	* 'FoldCols' - Fold data by rows: This approach was used by Kim and Tidor (Genome Res. 2003) for the analysis of log-transformed gene expression data. Every row (item) is represented in two new rows of a new matrix. The first one is used to indicate positive expression (up-regulation) and the second one to indicate a negative expression value (down-regulation). This process doubles the number of rows of the data set. It is reserved for Standard-NMF analysis method.
+
+	* 'FoldRows' - Fold data by columns: Similar to the above case but this option makes the data positive by folding columns (variables). It is reserved for Standard-NMF analysis method.
+
+	* 'ExpScal' - Exponential scaling: Data is exponentially scaled to make it positive. This is an inverse operation of a logarithmic transformation.
+
+
+IMPORTANT NOTE:
+	These methods are NOT applied to Initialization Files (user-supplied files with initial values for matrices W and H). Therefore, if input matrix dimensions are modified by any Preprocessing method, Initialization files will NOT be updated. They must already fit with new input-matrix dimensions.
+
+=============================
+
+
+5. Analysis Methods.
+
+bioNMF can be used to perform three types of analysis. To select a method, please use the option '-m' as follow:
+	-m [ StandardNMF (default) | Biclustering | SampleClassification ]
+
+where:
+	* 'StandardNMF' - Standard NMF: Just performs the selected NMF algorithm.
+	* 'Biclustering' - Bicluster analysis: Clusters highly-related genes and samples.
+	* 'SampleClassification' - Sample classification: Unsupervised classification method of experimental samples.
+
+In any of these analyses, if a range of factorization ranks is provided (set by option '-k <kStart>[,<kEnd>]'), bioNMF will use the Consensus Method to compute the best rank. If option '-d' was not selected, this method is also used to test convergence, based on changes on a connectivity matrix, and to compute the best W and H within the best factorization rank. See section 7.D for details.
+
+There is a variety of parameters to customize the selected analysis method, all these features are described in sections 6, 7 and 8 below.
+
+-------------------
+
+A) Standard NMF:
+
+This module (set with '-m StandardNMF') performs a non-negative factorization of the input data. It returns the resulting W and H matrices.
+
+-------------------
+
+B) Bicluster Analysis:
+
+This module (set with '-m Biclustering') is intended mainly for gene-expression analysis, although its applications can be extended to other type of data. Taking gene expression as a case of study, this method groups genes and samples based on local features generating sets of samples and genes that are locally related. The result is a set of K biclusters (submatrices) encoding modular patterns, where K is the best factorization rank within a given input range ('-k' option). Each bicluster matrix contains the set of genes that are highly associated to a local pattern and samples sorted by its importance in this pattern.
+
+Output files:
+	* Bicluster data - Bicluster submatrix
+	* Bicluster row-indexes - Contains the row indexes of the extracted biclusters.
+	* Bicluster column-indexes - Contains the column indexes of the extracted biclusters.
+
+If option '-o' (save_output_images) is specified, an image with a heatmap and a plot is generated per bicluster. The heatmap shows the subset of genes and all samples sorted by its association to the local pattern. The plot represents the coefficients of all samples in the corresponding row of matrix H. Marked in blue are samples that show the largest coefficient for that factor while in green are marked samples that show largest coefficients in other rows in H. The consistency value represents the percentage of times that a bicluster is found in all N runs of the algorithm. For this purpose, two biclusters are assumed to be similar if they share at least 75% of their genes. Finally, a bicluster is considered to be "consistent" if it is found in 80% or more of the factorizations.
+
+More information about this method can be found in the following papers:
+
+* Carmona-Saez P, Pascual-Marqui RD, Tirado F, Carazo JM, Pascual-Montano A. Biclustering of gene expression data by non-smooth non-negative matrix factorization. BMC Bioinform. (2006) 7:78. http://www.biomedcentral.com/1471-2105/7/78
+
+* Chagoyen M, Carmona-Saez P, Shatkay H, Carazo JM, Pascual-Montano A. Discovering semantic features in the literature: a foundation for building functional associations. BMC Bioinform. (2006) 7:41. http://www.biomedcentral.com/1471-2105/7/41
+
+
+-------------------
+
+C) Sample Classification:
+
+This module (set with '-m SampleClassification') implements the method proposed by Brunet et al. (PNAS 2004) (*) to group data samples into K clusters, being K the best factorization rank within a given input range (set by option '-k <kStart>[,<kEnd>]').
+
+(*) Brunet JP, Tamayo P, Golub TR, Mesirov JP. Metagenes and molecular pattern discovery using matrix factorization. Proc. Natl Acad. Sci. USA (2004) 101:4164–4169.
+
+Results will be the cluster assignments of each experimental condition.
+
+Output files are:
+	* Cluster IDs - Cluster ID where each column of the input data set was assigned.
+
+If option '-o' (save output images) is specified, bioNMF generates an image that shows the reordered consensus matrix and the Cophenetic Correlation Coefficient computed for each factorization rank used in the analysis.
+
+This method forces to test convergence based on changes on the connectivity matrix (ie. options '-d' and '-u' are ignored).
+
+
+=============================
+
+6. Analysis step - Consensus method:
+
+NMF decomposes your data into K clusters, being K (a.k.a. Factorization Rank) the inner dimension of the matrix product W*H. bioNMF can find the best factorization rank within a given input range by computing the Cophenetic Correlation Coefficient (CCC) for each of these ranks. CCC is a quantitative measure of clustering stability based on the Consensus Clustering Method. Since the NMF algorithm is non-deterministic, its solutions might vary from run to run when executed with different random initial values for W and H. If the factorization is stable for a given value, K, it is expected that data assignments to these K clusters would vary little from run to run. CCC values will vary from 1 (a perfect stability) to 0 (instability). The best factorization rank then corresponds to the one with the highest CCC value.
+
+Consensus method is computed if ANY of the following condition is true:
+	* A range of factorization ranks [<kStart>...<kEnd>] was supplied (with option '-k <kStart>[,<kEnd>]')
+	  <AND> multiple runs per rank were performed (set by option '-l <nRuns>' with nRuns > 1).
+	* Sample Classification analysis method was selected (set by option '-m SampleClassification').
+
+This method is performed in two steps. The FIRST, requires to execute NMF multiple times (runs) for each candidate rank. The number of runs is set with option '-l <nRuns>' (on our own experience, a value of 100 runs per factorization rank is normally enough to achieve reasonable results).
+
+Each 'run' starts by initializing W and H with random values. Then, it iterates applying the selected update rules (see section 8). Each certain number of iterations (set with option '-j <niter_test_conv>'), matrices W and H are adjusted to avoid underflow (ie., W is replaced by W+EPS, and H by H + EPS, where EPS=2^(-52)) and a Test of Convergence is performed.
+
+By default (ie. if option '-d' is not set), bioNMF uses the Consensus Method as test of convergence. It is based on changes on a connectivity matrix C of size M × M, where M is the number of columns of matrix H. Each entry Cij in this matrix is set to 1 if column i and j in H have their maximum value for the same factor (ie. on the same row in H), and 0 otherwise. This matrix is then compared with the one computed on the previous iteration and changes are counted.
+
+bioNMF considers the algorithm has converged when convergence test does not change its value after a certain number of times it is performed. This number is controlled by the 'stop_threshold' input parameter (set with '-t <stop_threshold>' option). Otherwise, the number of iterations is limited to the value specified by option '-i'. A maximum of 2000 iterations is enough on most cases.
+
+The SECOND step, named 'Consensus-ordering', is performed for each factorization rank and is based on the Cophenetic Correlation Coefficients (CCC). First, it computes the Consensus matrix as the mean of connectivity matrices on all runs for the current factorization rank. Then, Consensus is reordered by dissimilarities using hierarchical clustering (previously, it is converted to distances since Consensus indicates similarities). Once the tree is built, the cophenetic correlation is computed as the linear correlation coefficient between the cophenetic distances obtained from the tree, and the original distances used to construct the tree. The cophenetic distance between two observations is represented in a dendrogram by the height of the link at which those two observations are first joined. That height is the distance between the two subclusters that are merged by that link. Therefore, CCC can be seen as a measure of how faithfully the tree represents the dissimilarities among observations. Finally, this procedure returns a vector of CCCs (one for each factorization rank). The best rank is the one with the highest CCC value.
+
+CCC values are computed only if *BOTH* conditions are true:
+	* Consensus method was performed.
+	* Several runs per rank were performed (set by option '-l <nRuns>' with <nRuns> greater than 1).
+
+
+NOTES:
+	* Consensus-ordering step can be skipped by setting option '-q' (eg. to perform it as a detached program,
+	  which is useful in Grid environments).
+	* If user selected to perform detached factorizations (option '-w'), classification files (necessary to
+	  build the connectivity matrix) are generated, but Consensus method is skipped (ie. it implies option '-q').
+	* If initial values for matrices W and H were supplied, the factorization rank is forced to a single value
+	  (ie. the search of the best rank is disabled) and the Consensus Method is not performed (except, maybe,
+	  the use of the 'connectivity matrix' to test convergence if option '-d' was not specified. See section 7.D).
+
+See a list of generated output files on section 9.
+
+Example of use:
+$> bin/bionmf [...] -m SampleClassification -t 40 -j 10 -i 2000
+Test of convergence (based on differences on connectivity matrix) is performed each 10 iterations. If connectivity matrix does not change, an internal counter is incremented. When this counter reaches 40, it is considered that the NMF algorithm has converged. However, a limit of 2000 iterations is set just in case NMF never converges.
+
+
+
+For more details about the Consensus method and CCC values, please read the following papers:
+
+* E. Mejía-Roa, P. Carmona-Saez, R. Nogales, C. Vicente, M. Vázquez, X. Y. Yang, C. García, F. Tirado and A. Pascual-Montano. bioNMF: a web-based tool for nonnegative matrix factorization in biology. Nucl. Acids Res. 2008, 36 (suppl 2), W523-W528. doi:10.1093/nar/gkn335
+http://nar.oxfordjournals.org/cgi/content/full/36/suppl_2/W523
+
+* Brunet JP, Tamayo P, Golub TR, Mesirov JP. Metagenes and molecular pattern discovery using matrix factorization. Proc. Natl Acad. Sci. USA (2004) 101:4164–4169.
+
+
+=============================
+
+
+7. Analysis Options:
+
+The analysis process can be controlled by several parameters:
+
+	A. Range of factorization ranks (-k <kStart>[,<kEnd>]).
+	B. Number of runs per rank (-l <nRuns>).
+	C. Number of iterations per run (-i <nIters>).
+	D. Test of Convergence ([-d]).
+	E. Saving mode of output files (-s [ Best | All | Combine ]).
+	F. Heatmaps and profile plots ([-g]).
+	G. Analysis's output images ([-o]).
+	H. NMF Algorithm (see section 8).
+
+-------------------
+
+A) Range of factorization ranks (-k <kStart>[,<kEnd>])
+
+NMF decomposes your data into K clusters, being K (a.k.a. Factorization Rank) the inner dimension of the matrix product W*H. bioNMF can find the best factorization rank within a given input range [<kStart>...<kEnd>], by computing the Cophenetic Correlation Coefficient (CCC) for each of these ranks.
+
+CCC is a quantitative measure of clustering stability. It is based on the Consensus clustering method which exploits the stochastic nature of the NMF algorithm.
+
+Since the NMF algorithm is non-deterministic, its solutions might vary from run to run when executed with different random initial values for W and H. If the factorization is stable for a given value, K, it is expected that data assignments to these K clusters would vary little from run to run.
+
+CCC values will vary from 1 (a perfect stability) to 0 (instability). The best factorization rank then corresponds to the one with the highest CCC value.
+
+On our own experience, a value of 100 runs per factorization rank (set with option '-l <nRuns>'. See 'Number of runs' parameter) is normally enough to achieve reasonable results.
+
+This method is always used if a range of factorization ranks is supplied, or if the Sample Classification analysis method is selected (by option '-m SampleClassification').
+
+
+For details about the Consensus method, please read the following papers:
+
+* E. Mejía-Roa, P. Carmona-Saez, R. Nogales, C. Vicente, M. Vázquez, X. Y. Yang, C. García, F. Tirado and A. Pascual-Montano. bioNMF: a web-based tool for nonnegative matrix factorization in biology. Nucl. Acids Res. 2008, 36 (suppl 2), W523-W528. doi:10.1093/nar/gkn335
+http://nar.oxfordjournals.org/cgi/content/full/36/suppl_2/W523
+
+* Brunet JP, Tamayo P, Golub TR, Mesirov JP. Metagenes and molecular pattern discovery using matrix factorization. Proc. Natl Acad. Sci. USA (2004) 101:4164–4169.
+
+
+-------------------
+
+
+B) Number of runs (-l <nRuns>)
+
+Due to the non-deterministic nature of NMF, it may or may not converge to the same solution on each run depending on the random initial conditions. Therefore, executing the algorithm several times with different random initializations is a good approach for selecting the W and H matrices that best approximates the input matrix. Depending on the problem, more or less runs will be necessary to achieve an optimum solution. However, considering that the computational cost of this algorithm is very high, a limited number of runs is recommended. On our own experience, a value of 100 runs is normally enough to achieve reasonable results.
+
+If you select a range of factorization ranks (with '-k <kStart>,<kEnd>'), bioNMF will try the specified number of runs for each rank in that range and select the best W and H.
+
+
+-------------------
+
+C) Number of iterations per run (-i <nIters>).
+
+This parameter controls the maximum number of iterations per run to allow algorithm convergence. A maximum of 2000 iterations is enough on most cases.
+
+
+-------------------
+
+D) Convergence test ([-d]), stop threshold ('-t <stop_threshold>') and
+
+There are several parameter that controls the convergence of the algorithm on each run.
+
+By default, bioNMF uses the Consensus Method as test of convergence. It is based on changes on a connectivity matrix C of size M × M, where M is the number of columns of matrix H. Each entry Cij in this matrix is set to 1 if column i and j in H have their maximum value for the same factor (ie. on the same row in H), and 0 otherwise. This matrix is then compared with the one computed on the previous iteration and changes are counted. Before this test, matrices W and H are adjusted to avoid underflow---small entries are replaced by the epsilon value EPS=2^(-52).
+
+However, if the '-d' option is set, bioNMF tests convergence based on the distance between the input matrix and W*H. Distance is computed according to the selected NMF algorithm (with option '-a'. See algorithms in section 8). Consensus Method stills being used to compute the best factorization rank, but matrices W and H are not adjusted. This option is ignored if Sample Classification Analysis is selected (by option '-m SampleClassification').
+
+bioNMF considers algorithm has converged when test of convergence (connectivity matrix or distance) does not change its value after a certain number of times it is performed. This number is controlled by the 'stop_threshold' input parameter (set with '-t <stop_threshold>' option). The test is performed each <niter_test_conv> iterations (set with '-j <niter_test_conv>' option). Finally, a threshold for changes on convergence test can be specified with the '-u <max_delta>' option, so that only changes greater than this value are counted (disabled if Sample Classification Analysis is selected).
+
+Examples:
+* bin/bionmf [...] -d -t 40 -j 10 -i 2000 -u 1e-3
+  The test of convergence (distance between W*H and input-matrix) is performed each 10 iterations. If its value is less than 1e-3, an internal counter is incremented. When this counter reaches 40, it is considered that the NMF algorithm has converged. However, a limit of 2000 iterations is set just in case NMF never converges.
+
+* bin/bionmf [...] -m SampleClassification -t 40 -j 10 -i 2000
+  Test of convergence (differences on connectivity matrix) is performed each 10 iterations. If connectivity matrix does not change, an internal counter is incremented. When this counter reaches 40, it is considered that the NMF algorithm has converged. However, a limit of 2000 iterations is set just in case NMF never converges.
+
+For details about the Consensus method, please read the following papers:
+
+[1] E. Mejía-Roa, P. Carmona-Saez, R. Nogales, C. Vicente, M. Vázquez, X. Y. Yang, C. García, F. Tirado and A. Pascual-Montano. bioNMF: a web-based tool for nonnegative matrix factorization in biology. Nucl. Acids Res. 2008, 36 (suppl 2), W523-W528. doi:10.1093/nar/gkn335
+http://nar.oxfordjournals.org/cgi/content/full/36/suppl_2/W523
+
+[2] Brunet JP, Tamayo P, Golub TR, Mesirov JP. Metagenes and molecular pattern discovery using matrix factorization. Proc. Natl Acad. Sci. USA (2004) 101:4164–4169.
+
+
+-------------------
+
+E) Save options (-s [ Best | All | Combine ])
+
+This parameter controls the mode on which output files are saved:
+
+	* 'Best' -  Save best matrices (default): Saves only the best matrices W and H in single files.
+		<filename>_W_k_<bestK>.txt
+		<filename>_H_k_<bestK>.txt
+
+	* 'All' - Save all matrices: Saves all W and H matrices corresponding to all runs in single files. Best output matrices are also saved in single files.
+		<filename>_W_k_<bestK>_randomRun_<Run>.txt
+		<filename>_H_k_<bestK>_randomRun_<Run>.txt
+
+	* 'Combine' - Combine matrices in a single file: Combines all matrices W and all marices H corresponding to all runs into two files.
+	  See [*] for more information. Best output matrices are also saved in single files.
+		<filename>_W_k_<bestK>_combined.txt
+		<filename>_H_k_<bestK>_combined.txt
+
+This option is ignored if the number of runs is set to 1 (with option '-l <nRuns>'), or if initialization files for matrices W and H were specified.
+
+The best output matrices are those whose product, W*H, has the minimum distance from the input matrix. If convergence test is based on connectivity matrix, this value of distance is computed as follow:
+	distance = ( norm(V-WH,'fro')**2 ) / ( norm(V,'fro')**2 ),
+where:
+	norm( A , 'Frobenius' ) = sqrt( sum( diag(At * A) ) )
+	diag( X ) is the main diagonal of X.
+
+Otherwise (ie. if option '-d' was set), distance is based on the cost function used for the test of convergence, which is set according to the selected NMF algorithm (with '-a' option. See Section 8 - NMF Algorithms).
+
+In any case, distance value corresponding to the best W and H is saved in the file: '<filename>_distance_k_<bestK>.txt'
+
+[*] Chagoyen M, Carmona-Saez P, Shatkay H, Carazo JM, Pascual-Montano A. Discovering semantic features in the literature: a foundation for building functional associations. BMC Bioinformatics. 2006 Jan 26;7:41.
+
+-------------------
+
+F) Heatmaps and profiles ([-g])
+
+If this option is selected, bioNMF will generate heatmaps graphics and profile plots for input and output matrices.
+
+If the input matrix contains negative data, bioNMF uses a red-green colormap to generate the heatmap. Otherwise, a blue-red scale is used. Heatmaps for output files always uses a blue-red colormap.
+
+Output files generated:
+	* <filename>_V_heatmap.png and <filename>_V_profile.png - Heatmap and profile of input matrix.
+	* <filename>_W_k_<bestK>_heatmap.png and <filename>_H_k_<bestK>_heatmap.png - Heatmap of W and H.
+	* <filename>_W_k_<bestK>_profile.png and <filename>_H_k_<bestK>_profile.png - Profiles of W and H.
+
+
+-------------------
+
+G) Analysis's output images ([-o])
+
+If this option is selected, bioNMF will generate output images of the selected analysis method:
+
+	* Sample Classification: It shows the reordered consensus matrix and cophenetic correlation coefficient computed for each rank used in the analysis.
+	* Biclustering Analysis: It shows a heatmap with the subset of genes and all samples (sorted by their association to the local pattern), and a plot representing the coefficients of all samples in the corresponding row of matrix H. Marked in blue are samples that show the largest coefficient for that factor while in green are marked samples that show largest coefficients in other rows in H. The consistency value represents the percentage of times that a bicluster is found in all N runs of the algorithm. For this purpose, two biclusters are assumed to be similar if they share at least 75% of their genes. Finally, a bicluster is considered to be "consistent" if it is found in 80% or more of the factorizations.
+
+
+
+=============================
+
+
+8. NMF Algorithms.
+
+
+All three analysis methods described in section 5 can be customized by using any of the available NMF Algorithms. To select one of them, please use the option '-a' as follow:
+-a [ Standard (default) | Divergence | nsNMF[,<sparseness>] ]
+where:
+* 'Standard' - Standard NMF
+* 'Divergence' - Divergence NMF
+* 'nsNMF'[,<sparseness>] - Non-smooth NMF
+
+
+-------------------
+
+A) Standard NMF:
+
+This is the classical algorithm proposed by Lee and Seung in 1999 (*). It is selected with option '-a Standard'.
+
+The update rules are the following:
+
+H = H .* { Wt * [ V ./ (W*H) ] }
+W = W .* { [ V ./ (W*H) ] * Ht }
+accum_w = reduce_to_a_row( W )		// Returns a row vector of length <K>.
+W = W ./ accum_W
+
+Note: Symbols '.*' and './' denote point-wise matrix operations.
+
+
+If test of convergence is based on distance (selected with option '-d'), it is computed as follow (*):
+distance = (-1) * sum( sum( V .* log(WH) - WH ) )
+
+
+(*) For more information, please read the following paper:
+D.D Lee, H.S. Seung. Learning the parts of objects by non-negative matrix factorization. Nature (1999) 401:788–791. doi:10.1038/44565.
+
+
+-------------------
+
+B) Divergence NMF:
+
+Variant proposed by Lee and Seung in 2001 (*) using a 'divergence'-cost function. It is selected with option '-a Divergence'.
+
+The update rules are the following:
+
+accum_W = reduce_to_a_row( W )		// Returns a row-vector of length <K>.
+H = H .* { Wt * [ V ./ (W*H) ] } ./ accum_W
+
+accum_H = reduce_to_a_column( H )	// Returns a column-vector of length <K>.
+W = W .* { [ V ./ (W*H) ] * Ht } ./ accum_H
+
+
+If test of convergence is based on distance (selected with option '-d'), it is computed as follow (*):
+divergence = sum( sum( V .* log(V./WH) + V - WH ) )
+
+
+(*) For more information, please read the following paper:
+D.D. Lee, H.S. Seung, Algorithms for non-negative matrix factorization, in: Advances in Neural Information Processing Systems (NIPS), Vol. 13, MIT Press, 2001, pp. 556–562.
+
+
+-------------------
+
+C) Non-smooth NMF:
+
+This variant was proposed by Pascual-Montano, A. et al. in 2006 (*). The cost function is derived by introducing an extra matrix (S), of size K x K, in order to demand sparseness to data. This algorithm can be selected with the option '-a nsNMF'.
+
+The update rules are the following:
+
+H = H .* { [W*S]t * [ V ./ ( (W*S) * H ) ] } ./ accum_WS
+W = W .* { [ V ./ ( W * (S*H) ) ] * [S*H]t } ./ accum_SH
+W = W ./ accum_W
+
+where accum_WS and accum_WS are vectors of length <K> resulting from the reduction of matrices W*S and S*H, respectively. Similarly, accum_W is the result of reducing matrix W.
+
+
+Regarding matrix S, it is build as follow:
+S(i,i) = 1 - theta + (theta / K)
+S(i,j) = theta / K		(for i != j)
+or:
+S = (1-theta)*I + (theta/K)*1*1t	(I=identity matrix ; 1=vector of ones ; 1t=transposed vector of ones).
+
+where 'theta' is an optional argument passed to the '-a' parameter used to control sparseness (ie. '-a nsNMF[,<sparseness>]'). This parameter ranges between 0 (No sparse) and 1 (sparse), being 0.5 the default value. In this way, setting sparseness to 0 (ie. '-a nsNMF,0') transforms matrix S into the Identity matrix, making the algorithm very similar to the 'Divergence' and 'Standard' variants. In contrast, setting sparseness to 1 (ie. '-a nsNMF,1') forces data to be sparse. We found that the best value is the default one: 0.5 (*).
+
+
+If test of convergence is based on distance (selected with option '-d'), it is computed as follow (*):
+divergence = sum( sum( V .* log(V./WSH) + V - WSH ) )
+
+Note this is similar to Divergence-NMF's distance function, but using the S matrix.
+
+
+
+(*) For more information, please read the following papers:
+
+* A. Pascual-Montano, J. Carazo, K. Kochi, D. Lehmann, R. D. Pascual-Marqui, Nonsmooth Nonnegative Matrix Factorization (nsNMF), IEEE Transactions on Pattern Analysis and Machine Intelligence 28 (3) (2006) 403–415. doi:
+10.1109/TPAMI.2006.60.
+
+* Carmona-Saez P, Pascual-Marqui RD, Tirado F, Carazo JM, Pascual-Montano A. Biclustering of gene expression data by non-smooth non-negative matrix factorization. BMC Bioinform. (2006) 7:78. http://www.biomedcentral.com/1471-2105/7/78
+
+
+=============================
+
+9. Output files.
+
+This section describes all output files generated by each processing step.
+Note: Temporary files might or might not be deleted by the systems.
+
+-------------------
+
+A) Preprocessing
+
+* <filename> - Processed input matrix. Binary file.
+
+* <filename>_original.dat - Temporary file with the original input matrix (with no preprocessing).
+  Required by Biclustering Analysis and to generate a heatmap for this matrix (performed at postprocessing step).
+
+* <filename>_minValue.dat - Temporary file with input-matrix's lowest-value. It is required to generate a heatmap for this matrix (performed at postprocessing step).
+
+
+-------------------
+
+B) Analysis step (includes postprocess_orderconsensus and postprocess_output_files sub-steps).
+
+Generic output data:
+	* <filename>_coph.txt - Vector of CCC (only if consensus method was performed).
+	* <filename>_bestK.txt - Best factorization rank (bestK). Only if consensus method was performed.
+	* <filename>_bestRun_k_<bestK>.txt - Best random-run number.
+	* <filename>_distance_k_<bestK>.txt - Distance between input matrix and W*H (see section 7.E - Save Options).
+	* <filename>_W_k_<bestK>.txt and <filename>_H_k_<bestK>.txt - Best W and H matrices (see section 7.E - Save Options).
+
+
+Adittional output matrices might be generated according to the option '-s [ Best (default) | All | Combine ]' (see section 7.E):
+	* '-s All' - Saves W and H matrices corresponding to all random runs
+		+ <filename>_W_k_<bestK>_randomRun_<R>.txt
+		+ <filename>_H_k_<bestK>_randomRun_<R>.txt
+	* '-s Combine' - Combine all matrices - Combines all W and H matrices in two files.
+		+ <filename>_W_k_<bestK>_combined.txt
+		+ <filename>_H_k_<bestK>_combined.txt
+Option '-s' is ignored if the number of runs is set to 1 (see '-l' option) or if initialization files for matrices W and H are specified.
+NOTE: If input matrix has labels, then a numeric-only copy of each output matrix W and H is also saved.
+
+
+Temporary files:
+	* <filename>_classf_k_<K>_run_<RUN>.dat - Classification vector resulting from matrix H (using <K> as factorization rank) in test/run number <RUN>. These files are used to rebuild all Consensus matrix.
+	* <filename>_repRows_k_<K>_run_<RUN>.dat - Biclustering Only. Set of representative genes. See Biclustering analysis for details.
+
+-------------------
+
+C) Postprocessing
+
+If the '-g' option is specified, bioNMF generates heatmap images and profile plots for input/output matrices (see section 7.F):
+	* <filename>_V_heatmap.png and <filename>_V_profile.png - Heatmap and profile of input matrix.
+	* <filename>_W_k_<bestK>_heatmap.png and <filename>_H_k_<bestK>_heatmap.png - Heatmap of W and H.
+	* <filename>_W_k_<bestK>_profile.png and <filename>_H_k_<bestK>_profile.png - Profiles of W and H.
+
+According to the selected analysis method, other outputs can be:
+	* Biclustering (option '-m Biclustering'):
+		+ <filename>_bicluster_<B>.txt - Bicluster data. Bicluster submatrix
+		+ <filename>_bicluster_<B>_row_indexes.txt - Bicluster row-indexes. Contains the row indexes of the extracted biclusters.
+		+ <filename>_bicluster_<B>_column_indexes.txt - Bicluster column-indexes. Contains the column indexes of the extracted biclusters.
+		In addition, if option '-o' (save_output_images) is specified:
+			- <filename>_bicluster_image_<B>.png - Heatmap and ploting of the Bicluster sumbatrix.
+		Where B = [1..<bestK>]
+	* Sample Classification ('-m sampleClassification'):
+		+ <filename>_clustid_k_<K>.txt - Cluster IDs. Cluster ID where each column of the input data set was assigned.
+		In addition, if option '-o' (save_output_images) is specified:
+			- <filename>_sc_image_k_<K>.png - Heatmap of Consensus Matrix and plot of CCC vector.
+
+
+
+=============================
+
+9. Running tests and examples of use.
+
+Please see <BIONMF_PATH>/script/doc/config_and_user_guide.txt
+
+
+=============================
+
+10. Utilities
+
+In addition to bioNMF, there are some utilities programs to make easier working with input files. It includes two programs for binary-text file conversion, another to generate input matrices with random data (useful for testing bioNMF) and several testing programs.
+
+-----------------------------
+
+A) src/matrix/io/file_converter.c
+	Program to perform binary-text file conversions according to the arguments.
+Usage:
+	file_converter <filename> <file_is_binary> [<has_numeric_column-headers> [<hasn_umeric_row-labels> [<save_as_native-binary>]]]
+
+Notes:
+	* 'Native binary' refers to system's precision (float/double) and byte-ordering (big/little endian) binary format.
+	  It is used as internal format for input and intermediary files. 'Binary' refers to double-precision and little-endian.
+	* See valid input file formats in section 3.
+	* There are some examples of valid input matrices under the <BIONMF_PATH>/test/data folder.
+
+-----------------------------
+
+B) src/matrix/io/native_file_converter.c
+	Performs native-binary - text file conversions.
+Arguments:
+	<filename> <file_is_native-binary> [<has_numeric_column-headers> [<hasn_umeric_row-labels> [<save_as_non-native-binary>]]]
+
+Notes:
+	* 'Native binary' refers to system's precision (float/double) and byte-ordering (big/little endian) binary format.
+	  It is used as internal format for input and intermediary files. 'Binary' refers to double-precision and little-endian.
+	* See valid input file formats in section 3.
+	* There are some examples of valid input matrices under the <BIONMF_PATH>/test/data folder.
+
+-----------------------------
+
+C) src/bionmf/generate_matrices.c
+	Program to generate synthetic input files.
+Arguments:
+	<directory_to_save_files> <nrows> <ncols> [ <set_labels> [<kStart> [<kEnd> [<nRuns>]]] ]
+
+Generates R matrices W and H of size <nrows> x <K> and <K> x <ncols>, respectively, where R = (kEnd-kStart+1)*nRuns and K=[kStart..kEnd]
+That is, generates initialization data for all matrices W and H computed among all runs on all factorization ranks. By default, bioNMF initializes all matrices W and H with random values. This program is useful to test bioNMF by providing "known" initial values for such matrices.
+
+If <kStart> is zero, or is not specified, it outputs a single matrix of size <nrows>-by-<ncols>. Useful to generate a synthetic input matrix.
+
+
+-----------------------------
+
+D) src/matrix/io/test_matrix_io.c
+	Test functions for reading/writing input files.
+Arguments:
+	<filename> <file_is_binary> <has_numeric_column-headers> <hasn_umeric_row-labels> <transpose> [<online-limits_filename>]
+
+Tests I/O methods in <BIONMF_PATH>/src/matrix/io/matrix_io.c. First, it reads the input matrix according to the given arguments, It includes transposing and applying additional limits on matrix size and other parameters (this is intended for online public versions). Then, it shows the file contents and saves two copies: in binary and in text file formats. Finally, it reads both files and show their contents, which should not differ from the input file.
+
+If this program is compiled with the directive '-DDEBUG_TEST_READ_FILE' it just read a text file and shows all its content as it is being processed. This is useful to test row-labels and column-headers recognition.
+
+
+-----------------------------
+
+E) src/bionmf/sample_classification/orderconsensus/test_orderconsensus.c
+	Test Test Consensus Ordering step.
+Arguments:
+	<filename> <M> <K>,
+where M is the number of columns (samples).
+
+This program tests all action performed in the consensus-ordering (sub-) step. It reads a Consensus matrix and computes the Cophenetic Correlation Coefficient (CCC) value for the given factorization rank (K). It also generates all outputs of the "Sample Classification" analysis method.
+
+NOTE: Input data must be a (M*(M-1)/2)-length vector stored in a single text line WITHOUT any kind of labels, where M is is the number of columns of a valid input matrix for bioNMF.
+
+
+=============================
+
+11. Issues/Troubleshooting.
+
+	A) Premature End-Of-Line or End-Of-File detected on Initialization Files.
+
+	B) Input matrix not recognized ('Data in column <X> is not numeric', or 'illegal character')
+
+	C) You get a lot of files for each random run and K value (eg. classification files: <...>_classf_k_<K>_run_<RUN>.dat)
+	   but Consensus method was not executed.
+
+	D) Unable to read file <...>_bestK.txt: No such file or directory.
+
+	E) Unable to read <...>_minValue.dat: No such file or directory
+	   Unable to read <...>_original.dat: No such file or directory
+
+	F) Matlab images (heatmaps, profile plots, etc) takes a long time to be generated.
+
+	G) Problems with postprocess_images.ctf (MATLAB).
+
+
+For troubleshooting on user intefaces, please see specific guides.
+For troubleshooting when testing, please see <BIONMF_PATH>/script/doc/config_and_user_guide.txt.
+
+-------------------
+
+A) Premature End-Of-Line or End-Of-File detected on Initialization Files.
+
+Please note the following:
+	* Input filename(s) must not have space (' ') nor TAB characters.
+	* Initialization files must not have labels. They must be numeric-only files.
+	* No normalization nor transformation method is performed on these initial matrices.
+	* If input matrix dimmensions are modified by any Preprocessing Method, initialization matrices
+	  will *NOT* be updated. They must already fit with new input matrix dimensions.
+
+-------------------
+
+E) Input matrix no recognized ('Data in column <X> is not numeric. Invalid numeric format', or 'illegal character')
+
+By default, this programs follows the 'C' locale, ie. it uses dots ('.') as decimal symbol. Therefore, bioNMF will report an invalid-file-format error if another character is used (unless another locale is  set with setlocale(3) ).
+
+-------------------
+
+C) You get a lot of files for each random run and K value (eg. classification files: <...>_classf_k_<K>_run_<RUN>.dat) but Consensus method was not executed.
+
+Was the option "-w" specified? It indicates that there are several bionmf processes executing simultaneously (perhaps on different hosts), each with a subset of all the factorizations. Therefore, subsequents 'postprocess_orderconsensus' and 'postprocess_output_files' processes must read all these files in order to perform the Consensus method.
+
+This option is useful only for grid environments, not for local MPI processes.
+
+Please execute the detached 'postprocess_orderconsensus' and 'postprocess_output_files' to finish the analysis, or set the option '-q' if you are using the script API.
+
+-------------------
+
+B) Unable to read file <...>_bestK.txt: No such file or directory.
+
+If you set the "-w" option, you might get the following message:
+
+Error:
+Error using ==> load
+Unable to read file <...>_bestK.txt: No such file or directory.
+
+This option is useful only for grid environments.
+
+For some combination of arguments, you might use option '-q', and then, call bin/postprocess_orderconsensus and bin/postprocess_output_files after the analysis step.
+
+-------------------
+
+D) Unable to read <...>_minValue.dat: No such file or directory
+   Unable to read <...>_original.dat: No such file or directory
+
+You get any of the following message from analysis or postprocess_images steps:
+
+
+Error:
+Error using ==> read_binary_native at 33
+<...>_minValue.dat: No such file or directory
+
+or
+
+Error:
+Error using ==> read_binary_native at 33
+<...>_original.dat: No such file or directory
+
+
+These files are generated by the preprocessing step. Therefore the '-m' and/or '-g' options (respectively) must also be specified for this step (not just for analysis or postprocessing).
+
+As a general rule, is better to specify all analysis options in the preprocessing step (even if they will not be actually used) as it performs error-checking on them.
+
+-------------------
+
+F) Matlab images (heatmaps, profile plots, etc) takes a long time to be generated.
+
+This timeout seems to be related with X11.
+
+Please unset your DISPLAY variable, or set it to an empty string.
+$> unset -v DISPLAY
+
+You might need to force to not make use of display by specifing:
+#$ -v DISPLAY=
+
+in <BIONMF_PATH>/scripts/*/submit_analysis_*.sh and <BIONMF_PATH>/scripts/*/submit_postprocessing_images_*.sh
+
+-------------------
+
+G) Problems with postprocess_images.ctf (MATLAB).
+
+Please see Issues/Troubleshooting section on <BIONMF_PATH>/doc/installation_guide.txt
+
+=============================
+
+12. How to cite bioNMF.
+
+If you use this software, please cite the following work:
+
+E. Mejía-Roa, P. Carmona-Saez, R. Nogales, C. Vicente, M. Vázquez, X. Y. Yang, C. García, F. Tirado and A. Pascual-Montano. "bioNMF: a web-based tool for nonnegative matrix factorization in biology". Nucl. Acids Res. 2008, 36 (suppl 2, Web Server issue), W523-W528. doi:10.1093/nar/gkn335.
+http://nar.oxfordjournals.org/cgi/content/full/36/suppl_2/W523
+http://bionmf.dacya.ucm.es
