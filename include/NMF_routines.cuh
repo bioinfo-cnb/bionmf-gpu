@@ -111,6 +111,56 @@
 #include "index_type.h"
 #include "real_type.h"
 
+///////////////////////////////////////////////////////
+
+/* Selects the appropriate "restrict" keyword. */
+
+#undef RESTRICT
+
+#if __CUDACC__				/* CUDA source code */
+	#define RESTRICT __restrict__
+#else					/* C99 source code */
+	#define RESTRICT restrict
+#endif
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+/* C linkage, not C++. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* HOST-ONLY GLOBAL Variables */
+
+// Block Configuration
+
+extern index_t pBLN;		// Current index in block_N.xxx[].
+extern index_t pBLM;		// Current index in block_M.xxx[].
+
+extern int stepN;		// Loop directions: +1 (forward) || -1 (backward).
+extern int stepM;		// Loop directions: +1 (forward) || -1 (backward).
+
+extern index_t psNMF_N;		// Current index in NMF_streams[].
+extern index_t psNMF_M;		// Current index in NMF_streams[].
+
+extern index_t offset_Vcol;	// Current column index on first row in Vcol. Used for Vcol -> d_Vcol data transfers.
+
+// Data matrices (host side)
+extern real *pVcol;		// Pointers to V
+extern real *pVrow;		// Pointers to V
+
+// ---------------------------------------------
+
+/* DEVICE-ONLY GLOBAL Variables */
+
+// Data matrices (device side)
+extern real *pd_W;	// Pointer to current row in d_W
+extern real *pd_H;	// Pointer to current column in d_H (actually, the current row, since it is transposed).
+
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
@@ -125,7 +175,7 @@
  * remaining block(s).
  * It also updates 'stepM' according to the processing direction (forward or backward).
  */
-void update_H();
+void update_H( void );
 
 // -----------------------------------
 
@@ -140,7 +190,7 @@ void update_H();
  * remaining block(s).
  * It also updates 'stepN' according to the processing direction (forward or backward).
  */
-void update_W();
+void update_W( void );
 
 // -----------------------------------
 
@@ -156,11 +206,11 @@ void update_W();
  * NOTE: This is a portion of the Test of Convergence. Therefore,
  *	the elapsed time is added to the convergence-test time.
  */
-void adjust_matrix( real *__restrict__ d_A, index_t height,
-			#if NMFGPU_DEBUG
-				bool transpose, char const *__restrict__ const matrix_name_A,
+void adjust_matrix( real *RESTRICT d_A, index_t height,
+			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+				bool transpose, char const *RESTRICT const matrix_name_A,
 			#endif
-			cudaStream_t *__restrict__ stream_A, cudaEvent_t *__restrict__ event_A );
+			cudaStream_t stream_A, cudaEvent_t event_A );
 
 // -----------------------------------
 
@@ -168,7 +218,7 @@ void adjust_matrix( real *__restrict__ d_A, index_t height,
  * Computes classification vector from matrix d_H (full size).
  * Result is downloaded from the GPU and stored in 'classification[]'.
  */
-void get_classification( int *__restrict__ const classification );
+void get_classification( int *RESTRICT const classification );
 
 // -----------------------------------
 
@@ -181,7 +231,19 @@ void get_classification( int *__restrict__ const classification );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH );
+int dot_product_VWH( real *RESTRICT dot_V, real *RESTRICT dot_VWH );
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+#ifdef __cplusplus
+}
+#endif
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+#undef RESTRICT
 
 ///////////////////////////////////////////////////////
 

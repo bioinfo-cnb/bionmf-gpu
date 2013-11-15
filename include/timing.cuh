@@ -39,7 +39,6 @@
  *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
  *
  *	Timing (WARNING: They PREVENT asynchronous operations):
- *		NMFGPU_PROFILING_CONV: Compute timing of convergence test.
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers (should be used with NMFGPU_SYNC_TRANSF).
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels.
  *
@@ -52,28 +51,44 @@
 
 #include <stdint.h>	/* [u]intmax_t */
 
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 	#include <cuda_runtime_api.h>
 #endif
 
 #include "index_type.h"
 
-// --------------------------------------
-// --------------------------------------
+///////////////////////////////////////////////////////
+
+/* Selects the appropriate "restrict" keyword. */
+
+#undef RESTRICT
+
+#if __CUDACC__				/* CUDA source code */
+	#define RESTRICT __restrict__
+#else					/* C99 source code */
+	#define RESTRICT restrict
+#endif
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+/* C linkage, not C++. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ---------------------------------------------
+// ---------------------------------------------
 
 /* Data types */
 
-
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 	// Indexes for timing_events[], the array of CUDA Events for timing.
 	enum timing_event_idx {
 		START_EVENT,			// Start timer.
-		#if NMFGPU_PROFILING_CONV
-			START_OUTER_EVENT,	// Start outer timer.
-		#endif
 		STOP_EVENT,			// Stop timer.
 		NUM_TIMING_EVENTS		// Number of timing events (ie. length of array timing_events[]).
-	}
+	};
 #endif
 
 // Information for timing.
@@ -85,27 +100,35 @@ typedef struct timing_data {
 
 // --------------------------------------
 
-
-#if defined(NMFGPU_PROFILING_TRANSF) || defined(NMFGPU_PROFILING_KERNELS) || defined(NMFGPU_PROFILING_CONV)
+#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 	// CUDA Event(s) for timing.
-	extern cudaEvent_t *__restrict__ const timing_events;	// Length: NUM_TIMING_EVENTS
+	extern cudaEvent_t timing_events[ NUM_TIMING_EVENTS ];	// Length: NUM_TIMING_EVENTS
 #endif
 
 #ifdef NMFGPU_PROFILING_KERNELS
-	extern timing_data_t	*__restrict__ const reduce_timing, *__restrict__ const div_timing, *__restrict__ const mul_div_timing,
-				*__restrict__ const adjust_timing, *__restrict__ const idx_max_timing, *__restrict__ const sub_timing;
+	extern timing_data_t reduce_timing[4];
+	extern timing_data_t div_timing[2];
+	extern timing_data_t mul_div_timing[2];
+	extern timing_data_t adjust_timing[2];
+	extern timing_data_t idx_max_timing[2];
+	extern timing_data_t sub_timing[2];
 #endif
 
 #if NMFGPU_PROFILING_TRANSF
 	// Timing on data transfers
-	extern timing_data_t upload_Vrow_timing, upload_Vcol_timing, upload_H_timing, upload_W_timing, download_H_timing, download_W_timing,
-			download_classf_timing;
+	extern timing_data_t upload_Vrow_timing;
+	extern timing_data_t upload_Vcol_timing;
+	extern timing_data_t upload_H_timing;
+	extern timing_data_t upload_W_timing;
+	extern timing_data_t download_H_timing;
+	extern timing_data_t download_W_timing;
+	extern timing_data_t download_classf_timing;
 #endif
 
-#if NMFGPU_PROFILING_CONV
-	// Time spent performing the test of convergence.
-	extern timing_data_t classf_timing;
-#endif
+// --------------------------------------
+
+// Required extern variable
+extern index_t device_id;
 
 ///////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////
@@ -113,21 +136,14 @@ typedef struct timing_data {
 /*
  * Initializes kernel timers.
  */
-void init_kernel_timers();
+void init_kernel_timers( void );
 
 // ------------------------------------------
 
 /*
  * Initializes timers for data-transfers.
  */
-void init_transfer_timers();
-
-// ------------------------------------------
-
-/*
- * Initializes structure for timing of convergence test.
- */
-void init_conv_timer();
+void init_transfer_timers( void );
 
 // ------------------------------------------
 
@@ -136,7 +152,7 @@ void init_conv_timer();
  *
  * Returns EXIT_SUCCESS OR EXIT_FAILURE.
  */
-int init_timing_events( index_t device_id );
+int init_timing_events( void );
 
 // ------------------------------------------
 
@@ -145,27 +161,27 @@ int init_timing_events( index_t device_id );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int destroy_timing_events( index_t device_id );
+int destroy_timing_events( void );
 
 // ------------------------------------------
 
 /*
-* Starts the CUDA timer for the given CUDA event.
+ * Starts the CUDA timer for the given CUDA event.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int start_cuda_timer_ev( cudaEvent_t timing_event, index_t device_id );
+int start_cuda_timer_ev( cudaEvent_t timing_event );
 
 // ------------------------------------------
 
 /*
  * Starts the CUDA timer using the timing_events[ START_EVENT ] CUDA event.
  *
- * It is equivalent to: start_cuda_timer_ev( timing_events[ START_EVENT ], device_id );
+ * It is equivalent to: start_cuda_timer_ev( timing_events[ START_EVENT ] );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int start_cuda_timer( index_t device_id );
+int start_cuda_timer( void );
 
 // ------------------------------------------
 
@@ -174,18 +190,18 @@ int start_cuda_timer( index_t device_id );
  *
  * Returns the elapsed time (in ms) or a negative value on error.
  */
-float stop_cuda_timer_ev( cudaEvent_t start_timing_event, index_t device_id );
+float stop_cuda_timer_ev( cudaEvent_t start_timing_event );
 
 // ------------------------------------------
 
 /*
  * Stops the CUDA timer started using the timing_events[ START_EVENT ] CUDA event.
  *
- * It is equivalent to: stop_cuda_timer_ev( timing_events[ START_EVENT ], device_id );
+ * It is equivalent to: stop_cuda_timer_ev( timing_events[ START_EVENT ] );
  *
  * Returns the elapsed time (in ms) or a negative value on error.
  */
-float stop_cuda_timer( index_t device_id );
+float stop_cuda_timer( void );
 
 // ------------------------------------------
 
@@ -199,7 +215,7 @@ float stop_cuda_timer( index_t device_id );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__restrict__ td, index_t nitems, index_t counter, index_t device_id );
+int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *RESTRICT td, index_t nitems, index_t counter);
 
 // ------------------------------------------
 
@@ -213,7 +229,7 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__res
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, index_t nitems, index_t counter, index_t device_id );
+int stop_cuda_timer_cnt( timing_data_t *RESTRICT td, index_t nitems, index_t counter);
 
 // ------------------------------------------
 
@@ -225,21 +241,33 @@ int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, index_t nitems, index_t
  *
  * size_of_data: Size, in bytes, of data processed.
  */
-void print_elapsed_time( char const *__restrict__ const op, timing_data_t *__restrict__ td, size_t size_of_data );
+void print_elapsed_time( char const *RESTRICT const op, timing_data_t *RESTRICT td, size_t size_of_data );
 
 // ------------------------------------------
 
 /*
  * Shows time elapsed on some kernels.
  */
-void show_kernel_times();
+void show_kernel_times( void );
 
 // ------------------------------------------
 
 /*
  * Shows time elapsed on data transfers.
  */
-void show_transfer_times();
+void show_transfer_times( void );
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+#ifdef __cplusplus
+}
+#endif
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+#undef RESTRICT
 
 ///////////////////////////////////////////////////////
 

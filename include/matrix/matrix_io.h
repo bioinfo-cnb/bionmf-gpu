@@ -176,6 +176,21 @@ int matrix_load_binary_native( char const *RESTRICT filename, index_t offset, in
 				index_t *RESTRICT nrows, index_t *RESTRICT ncols, struct matrix_labels *RESTRICT ml );
 
 //////////////////////////////////////////////////
+
+/*
+ * Reads input matrix according to the selected file format
+ *
+ * is_bin: Reads output matrix from a binary file.
+ *		== 0: Disabled. Reads the file as ASCII text.
+ *		== 1: Uses "non-native" format (i.e., double-precision data, and "unsigned int" for dimensions).
+ *		 > 1: Uses "native" or raw format (i.e., the compiled types for matrix data and dimensions).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int matrix_load( char const *RESTRICT filename, bool numeric_hdrs, bool numeric_lbls, index_t is_bin, real *RESTRICT *RESTRICT matrix,
+		index_t *RESTRICT nrows, index_t *RESTRICT ncols, struct matrix_labels *RESTRICT ml );
+
+//////////////////////////////////////////////////
 //////////////////////////////////////////////////
 
 /*
@@ -243,6 +258,33 @@ int matrix_save_binary( char const *RESTRICT filename, real const *RESTRICT matr
  */
 int matrix_save_binary_native( char const *RESTRICT filename, real const *RESTRICT matrix, index_t nrows, index_t ncols,
 				struct matrix_labels const *RESTRICT ml );
+
+//////////////////////////////////////////////////
+
+/*
+ * Writes matrix to a file according to the selected file format
+ * Skips name, headers and labels if 'ml' is set to NULL.
+ *
+ * save_bin: Saves output matrix to a binary file.
+ *		== 0: Disabled. Saves file as ASCII text.
+ *		== 1: Uses "non-native" format (i.e., double-precision data, and "unsigned int" for dimensions).
+ *		 > 1: Uses "native" or raw format (i.e., the compiled types for matrix data and dimensions).
+ *
+ * If 'transpose' is 'true', transposes matrix in file as follows:
+ * - Matrix dimensions in memory: <ncols> rows, <nrows> columns.
+ * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
+ * - Writes <ncols> ml->headers (as column headers) and <nrows> ml->labels (as row labels).
+ *
+ * ncols <= padding, unless matrix transposing is set (in that case, nrows <= padding).
+ *
+ * WARNING:
+ *	"Native" mode (i.e., save_bin > 1) skips ALL data transformation (matrix transposing, padding, etc).
+ *	All related arguments are ignored. The file is saved in raw format.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int matrix_save( char const *RESTRICT filename, index_t is_bin, real *RESTRICT matrix, index_t nrows, index_t ncols, bool transpose,
+		struct matrix_labels const *RESTRICT ml, index_t padding );
 
 //////////////////////////////////////////////////
 //////////////////////////////////////////////////

@@ -36,7 +36,6 @@
  *	behavior of routines, as well as some constant and data-type definitions.
  *
  *	Timing (WARNING: They PREVENT asynchronous operations):
- *		NMFGPU_PROFILING_CONV: Compute timing of convergence test.
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers (should be used with NMFGPU_SYNC_TRANSF).
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels.
  *
@@ -112,38 +111,47 @@
 #include <cuda_runtime_api.h>
 #include <cublas_v2.h>
 
-#include "nmf_routines.cuh"
-#include "matrix/matrix_operations.h"
-#include "GPU_setup.h"
-#if defined(NMFGPU_PROFILING_TRANSF) || defined(NMFGPU_PROFILING_CONV)
-	#include "timing.h"
+#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_CONV
+	#include "timing.cuh"
 #endif
+#include "GPU_setup.cuh"
+#include "matrix/matrix_operations.cuh"
+#include "NMF_routines.cuh"
 
 // ---------------------------------------------
 // ---------------------------------------------
 
 /* HOST-ONLY GLOBAL Variables */
 
-// Block Configuration
-index_t pBLN = 0, pBLM = 0;		// Current index in block_N.*[] and block_M.*[], respectively.
-int stepN = 1, stepM = 1;		// Loop directions: +1 (forward) || -1 (backward).
-index_t psNMF_N = 0, psNMF_M = 0;	// Current index in NMF_streams[].
+index_t pBLN = 0;		// Current index in block_N.xxx[].
+index_t pBLM = 0;		// Current index in block_M.xxx[].
 
-index_t offset_Vcol = 0;		// Current column index on first row in Vcol. Used for Vcol -> d_Vcol data transfers.
+int stepN = 1;			// Loop directions: +1 (forward) || -1 (backward).
+int stepM = 1;			// Loop directions: +1 (forward) || -1 (backward).
+
+index_t psNMF_N = 0;		// Current index in NMF_streams[].
+index_t psNMF_M = 0;		// Current index in NMF_streams[].
+
+index_t offset_Vcol = 0;	// Current column index on first row in Vcol. Used for Vcol -> d_Vcol data transfers.
 
 // Data matrices (host side)
-real *pVcol = NULL, *pVrow = NULL;	// Pointers to V
+real *pVcol = NULL;		// Pointers to V
+real *pVrow = NULL;		// Pointers to V
 
 // ---------------------------------------------
 
 /* DEVICE-ONLY GLOBAL Variables */
 
 // Data matrices (device side)
-real *pd_W = NULL, *pd_H = NULL;		// Pointers to d_W and d_H
+real *pd_W = NULL;		// Pointer to current row in d_W
+real *pd_H = NULL;		// Pointer to current column in d_H (actually, the current row, since it is transposed).
 
-// Data matrix for dot_product_VWH()
-real *d_dot_VWH = NULL, d_dot_V = NULL;
-real *pd_dot_VWH = NULL, *pd_dot_V = NULL;	// Pointer to d_dot_VWH
+// Data matrices for dot_product_VWH()
+real *d_dot_VWH = NULL;
+real *d_dot_V	= NULL;
+
+real *pd_dot_VWH = NULL;	// Pointer to d_dot_VWH
+real *pd_dot_V   = NULL;	// Pointer to d_dot_V
 
 
 /////////////////////////////////////////////////////////////////////
@@ -182,29 +190,32 @@ static void get_H_BLM( index_t const BLM, index_t const BLMp )
 	cublas_status =
 	#endif
 		// NMF_streams[ psNMF_M ]
-		cublasRgemm( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, BLM, N, K, d_one, pd_H, Kp, d_W, Kp, d_zero, d_WH, BLMp );
+		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, BLM, N, K, d_one, pd_H, Kp, d_W, Kp, d_zero, d_WH, BLMp );
 
-
-		#ifdef NMFGPU_DEBUG
-		///////////////////////////////
-			printf("\n--- [GPU%" PRI_IDX "] Resulting WHcol=W*H (BLM=%" PRI_IDX ", BLMp=%" PRI_IDX "): ---\n",
-				device_id, BLM, BLMp );
-			check_cublas_status_st( cublas_status );
-			check_cuda_status();
-			show_device_matrix( d_WH, N, BLM, BLMp, false, NULL );
-		/////////////////////////////
-		#endif
+			#ifdef NMFGPU_DEBUG
+			///////////////////////////////
+				printf("\n--- [GPU%" PRI_IDX "] Resulting WHcol=W*H (BLM=%" PRI_IDX ", BLMp=%" PRI_IDX "): ---\n",
+					device_id, BLM, BLMp );
+				check_cublas_status_st( cublas_status );
+				check_cuda_status();
+				show_device_matrix( d_WH, N, BLM, BLMp, false, NULL );
+			/////////////////////////////
+			#endif
 
 	// ---------------------------
 
         // WH(N,BLMp) = Vcol(N,BLMp) ./ WH(N,BLMp)
 
         matrix_div_sub( d_WH, d_Vcol, N, BLMp,
-			#ifdef NMFGPU_DEBUG
-				BLM, "WHcol", "Vcol",
-			#endif
-			true,		// division
-			NMF_streams[ psNMF_M ], Vcol_event, div_timing );
+				#ifdef NMFGPU_DEBUG
+					BLM, "WHcol", "Vcol",
+				#endif
+				true,	// division
+				NMF_streams[ psNMF_M ], &Vcol_event
+				#if NMFGPU_PROFILING_KERNELS
+					, div_timing
+				#endif
+			);
 
 	// ----------------------------
 
@@ -214,7 +225,7 @@ static void get_H_BLM( index_t const BLM, index_t const BLMp )
 	cublas_status =
 	#endif
 		// NMF_streams[ psNMF_M ]
-		cublasRgemm( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, K, BLM, N, d_one, d_W, Kp, d_WH, BLMp, d_zero, d_Haux, Kp );
+		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, K, BLM, N, d_one, d_W, Kp, d_WH, BLMp, d_zero, d_Haux, Kp );
 
 		#ifdef NMFGPU_DEBUG
 		///////////////////////////////
@@ -302,14 +313,21 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 		pVcol += (int) (stepM * (int) BLM);
 		offset_Vcol += (int) (stepM * (int) BLM);
 
-		#if defined(NMFGPU_DEBUG) || defined(NMFGPU_DEBUG_TRANSF)
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 			///////////////////////////////
 			printf("\n--- [GPU%" PRI_IDX "]: Vcol processed (N=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ") (offset=%"
 				PRI_IDX ", pitch=%" PRI_IDX "): ---\n", device_id, N, BLM, BLMp, offset_Vcol, MnPp);
 			//////////////////////////////
 		#endif
-		upload_matrix_partial( pVcol, N, MnPp, offset_Vcol, BLM, "Vcol", "d_Vcol", BLMp, d_Vcol, Vcol_event, Vcol_stream,
-					&upload_Vcol_timing );
+		upload_matrix_partial( pVcol, N, MnPp, offset_Vcol,
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+						BLM, "Vcol", "d_Vcol",
+					#endif
+					BLMp, d_Vcol, Vcol_stream, Vcol_event
+					#if NMFGPU_PROFILING_TRANSF
+						, &upload_Vcol_timing
+					#endif
+				);
 
 		// ----------------
 
@@ -320,7 +338,7 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 		psNMF_M += (int) stepM;	// forward or backward
 
 		// Sets new CUBLAS stream.
-		cublasSetStream( NMF_streams[ psNMF_M ] );
+		cublasSetStream( cublas_handle, NMF_streams[ psNMF_M ] );
 
 		// -----------------------
 
@@ -363,7 +381,7 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
  * remaining block(s) (getH_loop() is called again).
  * It also updates 'stepM' according to the processing direction (forward or backward).
  */
-void update_H()
+void update_H( void )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
@@ -386,7 +404,7 @@ void update_H()
 	// --------------------------------
 
 	// Changes CUBLAS stream.
-	cublasSetStream( NMF_streams[ psNMF_M ] );
+	cublasSetStream( cublas_handle, NMF_streams[ psNMF_M ] );
 
 	// --------------------------------
 
@@ -451,7 +469,7 @@ void update_H()
 		psNMF_M += (int) stepM;	// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( NMF_streams[ psNMF_M ] );
+		cublasSetStream( cublas_handle, NMF_streams[ psNMF_M ] );
 
 		// ------------------------
 
@@ -464,14 +482,21 @@ void update_H()
 				num_steps, offset_Vcol, psNMF_M );
 		#endif
 
-		#if defined(NMFGPU_DEBUG) || defined(NMFGPU_DEBUG_TRANSF)
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 			///////////////////////////////
 			printf("\n--- [GPU%" PRI_IDX "]: Vcol processed (N=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ") (offset=%"
 				PRI_IDX ", pitch=%" PRI_IDX "): ---\n", device_id, N, BLM, BLMp, offset_Vcol, MnPp);
 			//////////////////////////////
 		#endif
-		upload_matrix_partial( pVcol, N, MnPp, offset_Vcol, BLM, "Vcol", "d_Vcol", BLMp, d_Vcol, Vcol_event, Vcol_stream,
-					&upload_Vcol_timing );
+		upload_matrix_partial( pVcol, N, MnPp, offset_Vcol,
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							BLM, "Vcol", "d_Vcol",
+						#endif
+							BLMp, d_Vcol, Vcol_stream, Vcol_event
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vcol_timing
+						#endif
+					);
 
 		// -------------------------
 
@@ -482,7 +507,7 @@ void update_H()
 		 * Haux(BLM,Kp) = W' * WH(N,BLMp)
 		 * H(BLM,Kp) = H(BLM,Kp) .* Haux(BLM,Kp) ./ accum_W
 		 */
-		getH_loop( num_steps, BLM, BLMp, psNMF_M );
+		getH_loop( num_steps, BLM, BLMp );
 
 		// -------------------------
 
@@ -541,7 +566,7 @@ static void get_W_BLN( index_t const BLN )
 	cublas_status =
 	#endif
 		// NMF_streams[ psNMF_N ]
-		cublasRgemm( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, pd_W, Kp, d_zero, d_WH, Mp );
+		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, pd_W, Kp, d_zero, d_WH, Mp );
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
@@ -558,11 +583,15 @@ static void get_W_BLN( index_t const BLN )
 	// WH(BLN,Mp) = Vrow(BLN,Mp) ./ WH(BLN,Mp)
 
 	matrix_div_sub( d_WH, d_Vrow, BLN, Mp,
-		#ifdef NMFGPU_DEBUG
-			M, "WHrow", "Vrow",
-		#endif
-		true,	// division
-		NMF_streams[ psNMF_N ], Vrow_event, div_timing );
+				#ifdef NMFGPU_DEBUG
+					M, "WHrow", "Vrow",
+				#endif
+				true,	// division
+				NMF_streams[ psNMF_N ], &Vrow_event
+				#if NMFGPU_PROFILING_KERNELS
+					, div_timing
+				#endif
+			);
 
 	// ---------------------------
 
@@ -572,7 +601,7 @@ static void get_W_BLN( index_t const BLN )
 	cublas_status =
 	#endif
 
-	cublasRgemm( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, K, BLN, M, d_one, d_H, Kp, d_WH, Mp, d_zero, d_Waux, Kp );
+	CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, K, BLN, M, d_one, d_H, Kp, d_WH, Mp, d_zero, d_Waux, Kp );
 
 		#ifdef NMFGPU_DEBUG
 		///////////////////////////////
@@ -590,10 +619,9 @@ static void get_W_BLN( index_t const BLN )
 	// W(BLN,Kp) = W(BLN,Kp) .* Waux(BLN,Kp) ./ accum_H(Kp)
 
 	matrix_mul_div( pd_W, d_Waux, d_accum_h, BLN, Kp,
-
-		#ifdef NMFGPU_DEBUG
-			K, false, "W", "Waux", "accum_H",
-		#endif
+			#ifdef NMFGPU_DEBUG
+				K, false, "W", "Waux", "accum_H",
+			#endif
 			NMF_streams[ psNMF_N ] );
 
 
@@ -663,12 +691,20 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 		// Sets pointers to the block to be transferred.
 		pVrow += (int)(stepN * (int)(BLN * Mp));
 
-		#if defined(NMFGPU_DEBUG) || defined(NMFGPU_DEBUG_TRANSF)
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 			///////////////////////////////
 			printf("\n--- [GPU%" PRI_IDX "]: Vrow processed (BLN=%" PRI_IDX "): ---\n", device_id, BLN);
 			//////////////////////////////
 		#endif
-		upload_matrix_partial( pVrow, BLN, Mp, 0, M, "Vrow", "d_Vrow", Mp, Vrow_stream, Vrow_event, &upload_Vrow_timing );
+		upload_matrix_partial( pVrow, BLN, Mp, 0,
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							M, "Vrow", "d_Vrow",
+						#endif
+							Mp, d_Vrow, Vrow_stream, Vrow_event
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vrow_timing
+						#endif
+					);
 
 		// ----------------
 
@@ -679,7 +715,7 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 		psNMF_N += (int) stepN;	// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( NMF_streams[ psNMF_N ] );
+		cublasSetStream( cublas_handle, NMF_streams[ psNMF_N ] );
 
 		// ----------------
 
@@ -724,7 +760,7 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
  * remaining block(s) (getW_loop() is called again).
  * It also updates 'stepN' according to the processing direction (forward or backward).
  */
-void update_W()
+void update_W( void )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
@@ -745,7 +781,7 @@ void update_W()
 	// --------------------------------
 
 	// Changes CUBLAS stream.
-	cublasSetStream( NMF_streams[ psNMF_N ] );
+	cublasSetStream( cublas_handle, NMF_streams[ psNMF_N ] );
 
 	// --------------------------------
 
@@ -807,7 +843,7 @@ void update_W()
 		psNMF_N += (int) stepN;			// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( NMF_streams[ psNMF_N ] );
+		cublasSetStream( cublas_handle, NMF_streams[ psNMF_N ] );
 
 		// ----------------
 
@@ -819,13 +855,21 @@ void update_W()
 				", psNMF_N=%" PRI_IDX ")-----\n", pBLN, stepN, BLN, num_steps, psNMF_N );
 		#endif
 
-		#if defined(NMFGPU_DEBUG) || defined(NMFGPU_DEBUG_TRANSF)
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 			///////////////////////////////
 			printf("\n--- [GPU%" PRI_IDX "]: Vrow processed (BLN=%" PRI_IDX ", M=%" PRI_IDX ", Mp=%" PRI_IDX "): ---\n",
 				device_id, BLN, M, Mp);
 			//////////////////////////////
 		#endif
-		upload_matrix_partial( pVrow, BLN, Mp, 0, M, "Vrow", "d_Vrow", Mp, Vrow_stream, Vrow_event, &upload_Vrow_timing );
+		upload_matrix_partial( pVrow, BLN, Mp, 0,
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							M, "Vrow", "d_Vrow",
+						#endif
+						Mp, d_Vrow, Vrow_stream, Vrow_event
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vrow_timing
+						#endif
+					);
 
 		// ---------------------------
 
@@ -878,7 +922,7 @@ void adjust_matrix( real *__restrict__ d_A, index_t height,
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
 				bool transpose, char const *__restrict__ const matrix_name_A,
 			#endif
-			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
+			cudaStream_t stream_A, cudaEvent_t event_A )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
@@ -907,19 +951,11 @@ void adjust_matrix( real *__restrict__ d_A, index_t height,
 
 	// ----------------------------
 
-	#ifdef NMFGPU_PROFILING_CONV
-		start_cuda_timer_ev( timing_events[START_OUTER_EVENT], device_id );
-	#endif
-
-		matrix_adjust( d_A, height, Kp,
+	matrix_adjust( d_A, height, Kp,
 			#if NMFGPU_DEBUG
 				K, transpose, matrix_name_A,
 			#endif
 			stream_A );
-
-	#ifdef NMFGPU_PROFILING_CONV
-		stop_cuda_timer_cnt_ev( timing_events[START_OUTER_EVENT], adjust_timing, height*Kp, 1, device_id );
-	#endif
 
 	// ----------------------------
 
@@ -948,7 +984,7 @@ void adjust_matrix( real *__restrict__ d_A, index_t height,
 void get_classification( index_t *__restrict__ classification )
 {
 
-	#if defined(NMFGPU_DEBUG) || defined(NMFGPU_DEBUG_TRANSF)
+ #if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 		printf("\n[GPU%" PRI_IDX "] get_classification()...\n", device_id );
 	#elif defined(NMFGPU_VERBOSE_2)
 		if ( ! device_id )
@@ -962,38 +998,33 @@ void get_classification( index_t *__restrict__ classification )
 
 	// ---------------------------------
 
-	#ifdef NMFGPU_PROFILING_CONV
-		start_cuda_timer_ev( timing_events[START_OUTER_EVENT], device_id );
+	// Computes the classification vector: Column index of highest values.
+
+	matrix_idx_max( d_H, K, Kp, M,
+			#if NMFGPU_DEBUG
+				"d_H", "d_classification"
+			#endif
+			stream_A, d_classification );
+
+	///////////////////////////////
+	#ifdef NMFGPU_DEBUG
+		printf( "\n[GPU%" PRI_IDX "] Classification vector computed. Downloading...\n", device_id );
+		check_cuda_status();
 	#endif
+	///////////////////////////////
 
-		// Computes the classification vector: Column index of highest values.
+	// ------------------------------
 
-		matrix_idx_max( d_H, K, Kp, M,
-				#if NMFGPU_DEBUG
-					"d_H", "d_classification"
-				#endif
-				stream_A, d_classification );
+	// Downloads output vector.
 
-		///////////////////////////////
-		#ifdef NMFGPU_DEBUG
-			printf( "\n[GPU%" PRI_IDX "] Classification vector computed. Downloading...\n", device_id );
-			check_cuda_status();
-		#endif
-		///////////////////////////////
-
-		// ------------------------------
-
-		// Downloads output vector.
-
-		download_matrix_int( classification, 1, Mp, d_classification,
+	download_matrix_int( classification, 1, Mp, d_classification
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						M, false, "classification", "d_classification",
+						, M, false, "classification", "d_classification"
 					#endif
-					&download_classf_timing );
-
-	#ifdef NMFGPU_PROFILING_CONV
-		stop_cuda_timer_cnt_ev( timing_events[START_OUTER_EVENT], &download_classf_timing, Mp, 1, device_id );
-	#endif
+					#if NMFGPU_PROFILING_TRANSF
+						, &download_classf_timing
+					#endif
+				);
 
 	// -----------------------------
 
@@ -1003,7 +1034,7 @@ void get_classification( index_t *__restrict__ classification )
 
 	// -----------------------------
 
-	#if defined(NMFGPU_DEBUG) || defined(NMFGPU_DEBUG_TRANSF)
+ #if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 		printf("\n[GPU%" PRI_IDX "] get_classification()... Done.\n",device_id);
 	#elif defined(NMFGPU_VERBOSE_2)
 		if ( ! device_id )
@@ -1040,7 +1071,7 @@ static void get_dot_VWH_BLN( index_t const BLN )
 	cublas_status =
 	#endif
 		// NMF_streams[ psNMF_N ]
-		cublasRgemm( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, pd_W, Kp, d_zero, d_WH, Mp );
+		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, pd_W, Kp, d_zero, d_WH, Mp );
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
@@ -1052,17 +1083,20 @@ static void get_dot_VWH_BLN( index_t const BLN )
 			/////////////////////////////
 			#endif
 
-
 	// ---------------------------
 
-
 	// WH(BLN,Mp) = Vcol(BLN,Mp) - WH(BLN,Mp)
+
 	matrix_div_sub( d_WH, d_Vrow, BLN, Mp,
-		#ifdef NMFGPU_DEBUG
-			M, "WHrow", "Vrow",
-		#endif
-		false,	// subtraction
-		NMF_streams[ psNMF_N ], Vrow_event, sub_timing );
+				#ifdef NMFGPU_DEBUG
+					M, "WHrow", "Vrow",
+				#endif
+				false,	// subtraction
+				NMF_streams[ psNMF_N ], &Vrow_event
+				#if NMFGPU_PROFILING_KERNELS
+					, sub_timing
+				#endif
+			);
 
 
 	// ---------------------------
@@ -1073,12 +1107,12 @@ static void get_dot_VWH_BLN( index_t const BLN )
 
 	// TODO: Change this loop for specific kernel(s).
 
-	pd_WH = d_WH;
+	real *pd_WH = d_WH;
 	{
 		#ifdef NMFGPU_DEBUG
 		cublasStatus_t cs =
 		#endif
-			cublasRdot( cublas_handle, M, pd_WH, 1, pd_WH, 1, pd_dot_VWH );
+			CUBLAS_R_DOT( cublas_handle, M, pd_WH, 1, pd_WH, 1, pd_dot_VWH );
 
 			#ifdef NMFGPU_DEBUG
 				if ( cs != CUBLAS_STATUS_SUCCESS );
@@ -1099,14 +1133,14 @@ static void get_dot_VWH_BLN( index_t const BLN )
 	for ( index_t i = 1 ; i < BLN ; i++, pd_WH += Mp, pd_dot_VWH++ ) {
 
 		// Sets new CUBLAS stream.
-		cublasSetStream( NMF_streams[ stream_idx ] );
+		cublasSetStream( cublas_handle, NMF_streams[ stream_idx ] );
 
 		// --------------------
 
 		#ifdef NMFGPU_DEBUG
 		cublasStatus_t cs =
 		#endif
-			cublasRdot( cublas_handle, M, pd_WH, 1, pd_WH, 1, pd_dot_VWH );
+			CUBLAS_R_DOT( cublas_handle, M, pd_WH, 1, pd_WH, 1, pd_dot_VWH );
 
 			#ifdef NMFGPU_DEBUG
 				if ( cs != CUBLAS_STATUS_SUCCESS );
@@ -1141,17 +1175,17 @@ static void get_dot_VWH_BLN( index_t const BLN )
 	// TODO: Change this loop for specific kernel(s).
 
 	real *pd_Vrow = d_Vrow;
-	for ( index_t i = 0 ; i < BLN ; i++, dp_Vrow += Mp, pd_dot_V++ ) {
+	for ( index_t i = 0 ; i < BLN ; i++, pd_Vrow += Mp, pd_dot_V++ ) {
 
 		// Sets new CUBLAS stream.
-		cublasSetStream( NMF_streams[ stream_idx ] );
+		cublasSetStream( cublas_handle, NMF_streams[ stream_idx ] );
 
 		// --------------------
 
 		#ifdef NMFGPU_DEBUG
 		cublasStatus_t cs =
 		#endif
-			cublasRdot( cublas_handle, M, dp_Vrow, 1, dp_Vrow, 1, pd_dot_V );
+			CUBLAS_R_DOT( cublas_handle, M, pd_Vrow, 1, pd_Vrow, 1, pd_dot_V );
 
 			#ifdef NMFGPU_DEBUG
 				if ( cs != CUBLAS_STATUS_SUCCESS );
@@ -1211,7 +1245,7 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN )
 	 * dot_VWH(BLN) = SUM((V-WH)**2)
 	 * dot_V(BLN)	= SUM(V**2)
 	 */
-	get_dot_VWH_BLN BLN );
+	get_dot_VWH_BLN( BLN );
 
 	// -----------------------
 
@@ -1232,12 +1266,20 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN )
 		// Sets pointers to the block to be transferred.
 		pVrow += (int)(stepN * (int)(BLN * Mp));
 
-		#if defined(NMFGPU_DEBUG) || defined(NMFGPU_DEBUG_TRANSF)
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 			///////////////////////////////
 			printf("\n--- [GPU%" PRI_IDX "]: Vrow processed (BLN=%" PRI_IDX "): ---\n", device_id, BLN);
 			//////////////////////////////
 		#endif
-		upload_matrix_partial( pVrow, BLN, Mp, 0, M, "Vrow", "d_Vrow", Mp, Vrow_stream, Vrow_event, &upload_Vrow_timing );
+		upload_matrix_partial( pVrow, BLN, Mp, 0,
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							M, "Vrow", "d_Vrow",
+						#endif
+						Mp, d_Vrow, Vrow_stream, Vrow_event
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vrow_timing
+						#endif
+					);
 
 		// ----------------
 
@@ -1249,7 +1291,7 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN )
 		psNMF_N += (int) stepN;	// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( NMF_streams[ psNMF_N ] );
+		cublasSetStream( cublas_handle, NMF_streams[ psNMF_N ] );
 
 		// ----------------
 
@@ -1258,7 +1300,7 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN )
 		 * dot_VWH(BLN) = SUM((V-WH)**2)
 		 * dot_V(BLN)	= SUM(V**2)
 		 */
-		get_dot_VWH_BLN BLN );
+		get_dot_VWH_BLN( BLN );
 
 		#ifdef NMFGPU_VERBOSE_2
 		if ( ! device_id )
@@ -1292,7 +1334,7 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN )
  * remaining block(s) (get_dot_VWH_loop() is called again).
  * It also updates 'stepN' according to the processing direction (forward or backward).
  */
-static void get_dot_VWH()
+static void get_dot_VWH( void )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
@@ -1313,7 +1355,7 @@ static void get_dot_VWH()
 	// --------------------------------
 
 	// Changes CUBLAS stream.
-	cublasSetStream( NMF_streams[ psNMF_N ] );
+	cublasSetStream( cublas_handle, NMF_streams[ psNMF_N ] );
 
 	// --------------------------------
 
@@ -1377,7 +1419,7 @@ static void get_dot_VWH()
 		psNMF_N += (int) stepN;			// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( NMF_streams[ psNMF_N ] );
+		cublasSetStream( cublas_handle, NMF_streams[ psNMF_N ] );
 
 		// ----------------
 
@@ -1389,13 +1431,21 @@ static void get_dot_VWH()
 				", num_steps=%" PRI_IDX ", psNMF_N=%" PRI_IDX ")-----\n", pBLN, stepN, BLN, num_steps, psNMF_N );
 		#endif
 
-		#if defined(NMFGPU_DEBUG) || defined(NMFGPU_DEBUG_TRANSF)
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 			///////////////////////////////
 			printf("\n--- [GPU%" PRI_IDX "]: Vrow processed (BLN=%" PRI_IDX ", M=%" PRI_IDX ", Mp=%" PRI_IDX "): ---\n",
 				device_id, BLN, M, Mp);
 			//////////////////////////////
 		#endif
-		upload_matrix_partial( pVrow, BLN, Mp, 0, M, "Vrow", "d_Vrow", Mp, Vrow_stream, Vrow_event, &upload_Vrow_timing );
+		upload_matrix_partial( pVrow, BLN, Mp, 0,
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							M, "Vrow", "d_Vrow",
+						#endif
+						Mp, d_Vrow, Vrow_stream, Vrow_event
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vrow_timing
+						#endif
+					);
 
 		// ---------------------------
 
@@ -1479,17 +1529,20 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 	// Downloads partial results.
 
 	// Size = 2*N: d_dot_VWH and d_dot_V
-	real *__restrict__ const h_dot_VWH = getHostMemory( 2 * N * sizeof(real), false );
+	real *__restrict__ const h_dot_VWH = (real *) getHostMemory( 2 * N * sizeof(real), false );
 	if ( ! h_dot_VWH ) {
 		fprintf( stderr, "[GPU%" PRI_IDX "] Error in dot_product_VWH( N=%" PRI_IDX " )\n", device_id, N );
 		return EXIT_FAILURE;
 	}
 
-	download_matrix( h_dot_VWH, 1, N, d_dot_VWH,
+	download_matrix( h_dot_VWH, 1, N, d_dot_VWH
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					N, false, "dot_VWH", "d_dot_VWH",
+					, N, false, "dot_VWH", "d_dot_VWH"
 				#endif
-				NULL );
+				#if NMFGPU_PROFILING_TRANSF
+				, NULL
+				#endif
+			);
 
 	if ( check_cuda_status() == EXIT_FAILURE ) {
 		freeHostMemory( h_dot_VWH );
@@ -1512,14 +1565,14 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 
 	#if defined(NMFGPU_DEBUG) || defined(NMFGPU_VERBOSE)
 		///////////////////////////////
-		printf("\n[GPU%" PRI_IDX "] dot_product_VWH: dot_V=%g dot_VWH=%g\n", device_id, );
+		printf("\n[GPU%" PRI_IDX "] dot_product_VWH: dot_V=%g dot_VWH=%g\n", device_id, l_dot_V, l_dot_VWH );
 		///////////////////////////////
 	#endif
 
 	// ----------------------------------------
 
 	if ( freeHostMemory( h_dot_VWH ) == EXIT_FAILURE )
-		return EXIT_FAILURE
+		return EXIT_FAILURE;
 
 
 	*dot_V = l_dot_V;

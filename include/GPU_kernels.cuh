@@ -202,7 +202,6 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
  *
  * div_operand: 'True' if operation to perform is a floating-point division.
  *		Otherwise, a subtraction is performed.
- *
  * WARNING:
  *	- On Compute Capability 1.x:
  *		In a non-"extended" grid (i.e., with grid_extension == gridDim.y == 1):
@@ -210,7 +209,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
  *		In any case, (gridDim.y * gridDim.x) must be < 2**24
  */
 __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index_t matrix_size, index_t block_size,
-			index_t grid_extension, index_t grid_length, cudaStream_t stream_A );
+			index_t grid_extension, index_t grid_length, bool div_operand, cudaStream_t stream_A );
 
 // ==========================================
 
@@ -276,8 +275,8 @@ __host__ void adjust( real *__restrict__ d_A, index_t pitch, index_t matrix_size
  *			matrix_size <= (grid_length * block_height * pitch) must be < 2**24
  *		In any case, (grid_extension * grid_length) must be < 2**24
  */
-__host__ void idx_max( real const *__restrict__ d_A, index_t width, index_t pitch, index_t matrix_size, index_t block_height,
-			index_t grid_extension, index_t grid_length, cudaStream_t stream_A, index_t *__restrict__ d_Idx );
+__host__ void idx_max( real const *__restrict__ d_A, index_t width, index_t pitch, index_t matrix_size, index_t block_width,
+		index_t block_height, index_t grid_extension, index_t grid_length, cudaStream_t stream_A, index_t *__restrict__ d_Idx );
 
 ////////////////////////////////////////////////
 

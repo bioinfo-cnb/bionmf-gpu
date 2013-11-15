@@ -41,12 +41,11 @@
  *
  *	Timing:
  *		NMFGPU_PROFILING_GLOBAL: Compute total elapsed time.
- *		NMFGPU_PROFILING_CONV: Compute timing of convergence test. Shows additional information.
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
  *
  *	Debug / Testing:
- *		NMFGPU_FIXED_INIT: Initializes matrices W and H with fixed random values.
+ *		NMFGPU_FIXED_INIT: Initializes W and H with "random" values generated from a fixed seed (defined in common.h).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_FORCE_BLOCKS: Forces the processing of the input matrix as four blocks.
  *		NMFGPU_FORCE_DIMENSIONS: Overrides matrix dimensions.
@@ -117,15 +116,15 @@
 
 #include "index_type.h"
 #include "real_type.h"
-#include "common.h"
 #include "matrix/matrix_io_routines.h"
 #include "matrix/matrix_io.h"
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+#include "common.h"
+#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 	#include "timing.cuh"
 #endif
 #include "GPU_setup.cuh"
 #include "matrix/matrix_operations.cuh"
-#include "NMF_routines.h"
+#include "NMF_routines.cuh"
 
 // ---------------------------------------------
 // ---------------------------------------------
@@ -135,16 +134,9 @@ real *restrict V = NULL;
 real *restrict W = NULL;
 real *restrict H = NULL;
 
-// Convergence test.
+// Classification vectors.
 index_t *restrict classification = NULL;
 index_t *restrict last_classification = NULL;
-
-// Total time
-#if NMFGPU_PROFILING_GLOBAL
-	struct timeval tv1,tv2;
-	double total_gpu_time = 0;
-#endif
-
 
 /////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////
@@ -164,31 +156,15 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 		printf("Initializing input matrix from file %s...\n", filename);
 	#endif
 
+	int status = EXIT_SUCCESS;
+
 	// ----------------------------
 
 	index_t nrows = 0, ncols = 0;
 
 	real *restrict matrix = NULL;
 
-	printf("\nLoading input file...\n");
-
-	if ( is_bin ) {	// Input file is (non-native) binary.
-
-		printf("\tFile selected as (non-\"native\") binary (i.e., double-precision data and unsigned int's). Loading...\n");
-
-		status = matrix_load_binary_verb( filename, &matrix, &nrows, &ncols, &ml );
-
-	} else { // Input file is ASCII-text.
-
-		printf("\nFile selected as ASCII-text. Loading...\n"
-			"\t\tData matrix selected as having numeric column headers: %s.\n"
-			"\t\tData matrix selected as having numeric row labels: %s.\n",
-			( numeric_hdrs ? "Yes" : "No" ), ( numeric_lbls ? "Yes" : "No" ) );
-
-		status = matrix_load_ascii_verb( filename, numeric_hdrs, numeric_lbls, &matrix, &nrows, &ncols, ml );
-
-	} // If file is binary or text.
-
+	status = matrix_load( filename, numeric_hdrs, numeric_lbls, isBinary, &matrix, &nrows, &ncols, ml );
 	if ( status == EXIT_FAILURE ) {
 		fprintf( stderr, "Error reading '%s'\n", filename );
 		fflush(NULL);
@@ -201,7 +177,7 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 		/* Ignores dimensions in file and uses the ones provided.
 		 * NOTE: Both N and M are global variables.
 		 */
-		if ( (N > 0) * (M > 0) ) {	// N>0 && M>0
+		if ( (N > 1) * (M > 1) ) {
 			if ( N*M <= nrows*ncols ) {
 				nrows = N;
 				ncols = M;
@@ -224,10 +200,10 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 
 	// Changes matrix to a PINNED HOST memory.
 
-	V = getHostMemory( N * Mp * sizeof(real), true );	// Write Combined
+	V = (real *restrict) getHostMemory( N * Mp * sizeof(real), true );	// Write Combined
 	if ( ! V ) {
 		fprintf( stderr, "Error allocating memory for input matrix,\n" );
-		matrix_clean( matrix, ml );
+		matrix_clean( matrix, *ml );
 		fflush(NULL);
 		return EXIT_FAILURE;
 	}
@@ -241,10 +217,12 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 		real *p = memcpy( pV, pMatrix, M * sizeof(real) );
 		if ( ! p ) {
 			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "memcpy:%sError setting memory for input matrix (row %" PRI_IDX " / %" PRI_IDX ").\n",
-				( errno ? " " strerror(errno) "\n" : " " ), i, N );
+			fprintf( stderr, "\nmemcpy: " );
+			if ( errno )
+				fprintf( stderr, "%s\n", strerror(errno) );
+			fprintf( stderr, "Error setting memory for input matrix (row %" PRI_IDX " / %" PRI_IDX ").\n", i, N );
 			freeHostMemory( V );
-			matrix_clean( matrix, ml );
+			matrix_clean( matrix, *ml );
 			fflush(NULL);
 			return EXIT_FAILURE;
 		}
@@ -269,10 +247,10 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
  *
  * Return EXIT_SUCCESS or EXIT_FAILURE.
  */
-int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
+static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
 {
 
-	int status
+	int status = EXIT_SUCCESS;
 
 	// Pointers to d_W and d_H
 	pd_H = d_H;
@@ -280,35 +258,45 @@ int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
 
 	pVcol = pVrow = V;
 
+
+	#if NMFGPU_PROFILING_GLOBAL
+		// GPU time
+		struct timeval gpu_tv;
+		gettimeofday( &gpu_tv, NULL );
+	#endif
+
 	// ----------------------------
 
 	// Initializes matrices W and H with random values.
+	{
+		status = init_randomGenerator();
+		if ( status == EXIT_FAILURE )
+			return EXIT_FAILURE;
 
-	status = init_randomGenerator();
-	if ( status == EXIT_FAILURE )
-		return EXIT_FAILURE;
+		index_t seed = get_seed();
 
-	status = set_randomGenerator_seed( 575435 ); // FIXME: seed!
-	if ( status == EXIT_FAILURE ) {
+		status = set_randomGenerator_seed( seed );
+		if ( status == EXIT_FAILURE ) {
+			finalize_randomGenerator();
+			return EXIT_FAILURE;
+		}
+
+		// W
+		matrix_random( d_W, N, K,
+				#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+					false, "d_W",
+				#endif
+				Kp );
+
+		// H
+		matrix_random( d_H, M, K,
+				#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+					true, "d_H",
+				#endif
+				Kp );
+
 		finalize_randomGenerator();
-		return EXIT_FAILURE;
 	}
-
-	// W
-	matrix_random( d_W, N, K,
-			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-				false, "d_W",
-			#endif
-			Kp );
-
-	// H
-	matrix_random( d_H, M, K,
-			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-				true, "d_H",
-			#endif
-			Kp );
-
-	finalize_randomGenerator();
 
 	// ----------------------------
 
@@ -321,11 +309,26 @@ int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
 
 		// d_Vcol
 		if ( d_Vcol != d_Vrow )
-			upload_matrix_partial( pVcol, N, MnPp, offset_Vcol, BLM, "Vcol", "d_Vcol", BLMp, d_Vcol, Vcol_event, Vcol_stream,
-						&upload_Vcol_timing );
+			upload_matrix_partial( pVcol, N, MnPp, offset_Vcol,
+							#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+								BLM, "Vcol", "d_Vcol",
+							#endif
+							BLMp, d_Vcol, Vcol_stream, Vcol_event
+							#if NMFGPU_PROFILING_TRANSF
+								, &upload_Vcol_timing
+							#endif
+						);
 
 		// d_Vrow
-		upload_matrix_partial( pVrow, BLN, Mp, 0, M, "Vrow", "d_Vrow", Mp, Vrow_stream, Vrow_event, &upload_Vrow_timing );
+		upload_matrix_partial( pVrow, BLN, Mp, 0,
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							M, "Vrow", "d_Vrow",
+						#endif
+						Mp, d_Vrow, Vrow_stream, Vrow_event
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vrow_timing
+						#endif
+					);
 	}
 
 	// ----------------------------
@@ -350,7 +353,9 @@ int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
 	 * of <niter_test_conv> iterations each.
 	 */
 
-	for ( index_t iter=0 ; iter<niter_conv ; iter++ ) {
+	index_t iter = 0;	// Required outside this loop.
+
+	for ( ; iter<niter_conv ; iter++ ) {
 
 		// Runs NMF for niter_test_conv iterations...
 		for ( index_t i=0 ; i<niter_test_conv ; i++ ) {
@@ -405,16 +410,16 @@ int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
 		// Adjusts matrices W and H.
 
 		adjust_matrix( d_H, block_M.BL[ pBLM ],
-					#if NMFGPU_DEBUG
-						true, "d_H",
-					#endif
+				#if NMFGPU_DEBUG
+					true, "d_H",
+				#endif
 				matrix_stream, matrix_event );
 
 		adjust_matrix( d_W, block_N.BL[ pBLN ],
-					#if NMFGPU_DEBUG
-						false, "d_W",
-					#endif
-				stream_NMF[ psNMF_N ], matrix_event );
+				#if NMFGPU_DEBUG
+					false, "d_W",
+				#endif
+				NMF_streams[ psNMF_N ], matrix_event );
 
 		// -------------------------------------
 
@@ -431,12 +436,13 @@ int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
 		// Saves the new classification.
 		{
 			// It just swaps the pointers.
-			int *tmp = classification;
+			index_t *tmp = classification;
 			classification = last_classification;
 			last_classification = tmp;
 		}
 
 		// Stops if Connectivity matrix (actually, classification vector) has not changed over last <stop_threshold> iterations.
+
 		if ( diff )
 			inc = 0;	// Restarts counter.
 
@@ -459,7 +465,7 @@ int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
 
 	// Remaining iterations (if NMF has not converged yet).
 
-	if ( (!converged) * niter_rem ) { // (converged == 0) && (niter_rem > 0)
+	if ( (!converged) * niter_rem ) { // (converged == false) && (niter_rem > 0)
 
 		#if NMFGPU_VERBOSE
 			printf("Performing remaining iterations (%" PRI_IDX ")...\n",niter_rem);
@@ -535,25 +541,62 @@ int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
 	// Downloads output matrices
 
 	// d_H
-	download_matrix( H, M, Kp, d_H,
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-			M, true, "H", "d_H",
-		#endif
-		&download_H_timing );
+	download_matrix( H, M, Kp, d_H
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+					, M, true, "H", "d_H"
+				#endif
+				#if NMFGPU_PROFILING_TRANSF
+					, &download_H_timing
+				#endif
+			);
 
 	// d_W
-	download_matrix( W, N, Kp, d_W,
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-			N, false, "W", "d_W",
-		#endif
-		&download_W_timing );
+	download_matrix( W, N, Kp, d_W
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+					, N, false, "W", "d_W"
+				#endif
+				#if NMFGPU_PROFILING_TRANSF
+					, &download_W_timing
+				#endif
+			);
 
 	// --------------------------------
 
-	if ( check_cuda_status() == EXIT_FAILURE )
+	/* Checks results:
+	 *
+	 * Computes the "distance" between V and W*H as follow:
+	 *
+	 *	distance = norm( V - (W*H) ) / norm( V ),
+	 * where
+	 *	norm( X ) = sqrt( dot_X )
+	 *	dot_V	 <-- dot_product( V, V )
+	 *	dot_VWH  <-- dot_product( V-(W*H), V-(W*H) )
+	 */
+
+	real dot_V = REAL_C( 0.0 ), dot_VWH = REAL_C( 0.0 );
+
+	status = dot_product_VWH( &dot_V, &dot_VWH );
+	if ( status == EXIT_FAILURE )
 		return EXIT_FAILURE;
 
-	return EXIT_SUCCESS;
+	printf( "\nDistance between V and W*H: %g\n", SQRTR( dot_VWH ) / SQRTR( dot_V ) );
+
+	// --------------------------------
+
+	status = check_cuda_status();
+
+	#if NMFGPU_PROFILING_GLOBAL
+		// GPU time
+		{
+			struct timeval gpu_ftv, gpu_etv;
+			gettimeofday( &gpu_ftv, NULL );
+			timersub( &gpu_ftv, &gpu_tv, &gpu_etv );	// etv = ftv - tv
+			double const total_gpu_time = gpu_etv.tv_sec + ( gpu_etv.tv_usec * 1e-06 );
+			printf( "\nTotal GPU time: %g seconds.\n", total_gpu_time );
+		}
+	#endif
+
+	return status;
 
 } // nmf
 
@@ -564,8 +607,10 @@ int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static int write_matrices( const char *restrict filename, struct matrix_labels ml )
+static int write_matrices( const char *restrict filename, index_t save_bin, struct matrix_labels ml )
 {
+
+	int status = EXIT_SUCCESS;
 
 	// Initializes labels for output matrices.
 
@@ -610,11 +655,7 @@ static int write_matrices( const char *restrict filename, struct matrix_labels m
 		return EXIT_FAILURE;
 	}
 
-	if ( isBinary )
-		status = matrix_save_binary( filename_out, W, N, K, false, &labels_W, Kp );
-	else
-		status = matrix_save_ascii( filename_out, W, N, K, false, false, &labels_W, Kp );
-
+	status = matrix_save( filename_out, save_bin, W, N, K, false, &labels_W, Kp );
 	if ( status == EXIT_FAILURE ) {
 		fprintf( stderr, "Error writing matrix W.\n" );
 		free( filename_out );
@@ -631,20 +672,15 @@ static int write_matrices( const char *restrict filename, struct matrix_labels m
 		return EXIT_FAILURE;
 	}
 
-	if ( isBinary )
-		status = matrix_save_binary( filename_out, H, K, M, true, &labels_H, Kp );
-	else
-		status = matrix_save_ascii( filename_out, H, K, M, true, false, &labels_H, Kp );
-	if (status == EXIT_FAILURE ) {
+	status = matrix_save( filename_out, save_bin, H, K, M, true, &labels_H, Kp );
+	if (status == EXIT_FAILURE )
 		fprintf( stderr, "Error writting matrix H\n" );
-		free( filename_out );
-		clean_labels( labels_factor );
-		return EXIT_FAILURE;
-	}
+
 	free( filename_out );
+
 	clean_labels( labels_factor );
 
-	return EXIT_SUCCESS;
+	return status;
 
 } // write_matrices
 
@@ -655,8 +691,13 @@ static int write_matrices( const char *restrict filename, struct matrix_labels m
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int main( int argc, char **argv )
+int main( int argc, char const *restrict *restrict argv )
 {
+
+	#if NMFGPU_PROFILING_GLOBAL
+	// Total time
+		struct timeval t_tv;
+	#endif
 
 	int status = EXIT_SUCCESS;
 
@@ -664,7 +705,7 @@ int main( int argc, char **argv )
 
 	/* Reads all parameters and performs error-checking. */
 
-	bool help = false;	// Help message requested
+	bool help = false;			// Help message requested
 
 	struct input_arguments arguments;	// Input arguments
 
@@ -672,7 +713,7 @@ int main( int argc, char **argv )
 	if ( check_arguments( argc, argv, true, &help, &arguments ) == EXIT_FAILURE ) {
 		if ( help ) {
 			fprintf(stderr, "\n==========\n");
-			print_help( *argv, stderr );
+			print_nmf_gpu_help( *argv, stderr );
 		}
 		fflush(NULL);
 		return EXIT_FAILURE;
@@ -680,37 +721,56 @@ int main( int argc, char **argv )
 
 	// If help was requested, just prints a help message and returns.
 	if ( help ) {
-		print_help( *argv, stdout );
+		print_nmf_gpu_help( *argv, stdout );
 		fflush(NULL);
 		return EXIT_SUCCESS;
 	}
 
-	char const *restrict const filename = arguments.filename;	// Output filename
-	bool const is_bin = arguments.is_bin;				// File is (non-"native") binary.
+	char const *restrict const filename = arguments.filename;	// Input filename
 	bool const numeric_hdrs = arguments.numeric_hdrs;		// Has numeric columns headers.
 	bool const numeric_lbls = arguments.numeric_lbls;		// Has numeric row labels.
+	index_t const is_bin = arguments.is_bin;			// Input  file is binary (native or non-native format).
+	index_t const save_bin = arguments.save_bin;			// Output file is binary (native or non-native format).
 		K = arguments.k;					// Factorization rank.
 	index_t const nIters = arguments.nIters;			// Maximum number of iterations per run.
 	index_t const niter_test_conv = arguments.niter_test_conv;	// Number of iterations before testing convergence.
 	index_t const stop_threshold = arguments.stop_threshold;	// Stopping criterion.
 	index_t const gpu_device = arguments.gpu_device;		// Device ID.
+	index_t const idx_other_args = arguments.idx_other_args;	// Index in argv[] with additional arguments.
 
 
-	// Perform a convergence test??
-	bool const need_conv = ( nIters >= niter_test_conv );
+	// Compute classification vector?
+	bool const do_classf = ( nIters >= niter_test_conv );
 
 
 	#if NMFGPU_FORCE_DIMENSIONS
 		/* Uses optional arguments to force matrix dimensions.
 		 * NOTE: Both N and M are global variables.
 		 */
-		N = arguments.N;
-		M = arguments.M;
+		if ( idx_other_args < (argc-1) ) {
+			N = atoi( argv[ idx_other_args++ ] );
+			M = atoi( argv[ idx_other_args++ ] );
+			if ( ( N < 2 ) + ( M < 2 ) ) {
+				fflush(stdout);
+				if ( verbose_error )
+					fprintf( stderr, "\nError: Invalid forced matrix dimensions: '%i' x '%i'\n", N, M );
+				fflush(NULL);
+				return EXIT_FAILURE;
+			}
+		}
 	#endif
 
-	#if NMFGPU_DEBUG
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_READ_MATRIX || NMFGPU_DEBUG_READ_MATRIX2 \
+		|| NMFGPU_DEBUG_READ_FILE || NMFGPU_DEBUG_READ_FILE2 || NMFGPU_VERBOSE_2
 		// Removes the buffer associated to 'stdout' in order to prevent losing messages if the program crashes.
 		setbuf( stdout, NULL );
+	#endif
+
+	// ----------------------------------------
+
+	#if NMFGPU_PROFILING_GLOBAL
+		// Total elapsed time
+		gettimeofday( &t_tv, NULL );
 	#endif
 
 	// ----------------------------------------
@@ -732,7 +792,7 @@ int main( int argc, char **argv )
 	// ----------------------------------------
 
 	// Initializes other CUDA structures
-	status = init_GPUdevice( 1, mem_size, need_conv );
+	status = init_GPUdevice( 1, mem_size, do_classf );
 	if ( status == EXIT_FAILURE ) {
 		finalize_GPU();
 		fflush(NULL);
@@ -745,7 +805,7 @@ int main( int argc, char **argv )
 
 	struct matrix_labels ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
 
-	status = init_V( filename, numeric_hdrs, numeric_lbls, isBinary, &ml );
+	status = init_V( filename, numeric_hdrs, numeric_lbls, is_bin, &ml );
 	if ( status == EXIT_FAILURE ) {
 		finalize_GPUdevice();
 		fflush(NULL);
@@ -778,7 +838,7 @@ int main( int argc, char **argv )
 
 	// Initializes classification vectors.
 
-	if ( need_conv ) {
+	if ( do_classf ) {
 		classification = getHostMemory( Mp * sizeof(index_t), false );
 		if ( status == EXIT_FAILURE ) {
 			fprintf( stderr, "Error allocating memory for HOST classification vector (M=%" PRI_IDX ", Mp=%" PRI_IDX ").\n", M, Mp );
@@ -810,37 +870,7 @@ int main( int argc, char **argv )
 			return EXIT_FAILURE;
 		}
 
-	} // need_conv
-
-	// ----------------------------------------
-
-	// Initializes time data structures
-
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
-
-		#if NMFGPU_PROFILING_KERNELS
-			init_kernel_timers();
-		#endif
-
-		#if NMFGPU_PROFILING_TRANSF
-			init_transfer_timers();
-		#endif
-
-		#if NMFGPU_PROFILING_CONV
-			init_conv_timer();
-		#endif
-
-		status = init_timing_events( device_id );
-
-		if ( status == EXIT_FAILURE ) {
-			if ( need_conv ) { freeHostMemory(last_classification); freeHostMemory(classification); }
-			freeHostMemory( H ); freeHostMemory( W ); freeHostMemory( V ); clean_matrix_labels( ml );
-			finalize_GPUdevice();
-			fflush(NULL);
-			return EXIT_FAILURE;
-		}
-
-	#endif
+	} // do_classf
 
 	// ----------------------------------------
 
@@ -848,85 +878,60 @@ int main( int argc, char **argv )
 
 	status = nmf( nIters, niter_test_conv, stop_threshold );
 	if ( status == EXIT_FAILURE ) {
-		destroy_timing_events( device_id );
-		if ( need_conv ) { freeHostMemory(last_classification); freeHostMemory(classification); }
+		if ( do_classf ) { freeHostMemory(last_classification); freeHostMemory(classification); }
 		freeHostMemory( H ); freeHostMemory( W ); freeHostMemory( V ); clean_matrix_labels( ml );
 		finalize_GPUdevice();
 		fflush(NULL);
 		return EXIT_FAILURE;
 	}
 
-	// ----------------------------------------
-
-	/* Checks results:
-	 *
-	 * Computes the "distance" between V and W*H as follow:
-	 *
-	 *	distance = norm( V - (W*H) ) / norm( V ),
-	 * where
-	 *	norm( X ) = sqrt( dot_X )
-	 *	dot_V	 <-- dot_product( V, V )
-	 *	dot_VWH  <-- dot_product( V-(W*H), V-(W*H) )
-	 */
-
-	real dot_V = REAL_C( 0.0 ), dot_VWH = REAL_C( 0.0 );
-
-	status = dot_product_VWH( &dot_V, &dot_VWH );
-	if ( status == EXIT_FAILURE ) {
-		destroy_timing_events( device_id );
-		if ( need_conv ) { freeHostMemory(last_classification); freeHostMemory(classification); }
-		freeHostMemory( H ); freeHostMemory( W ); freeHostMemory( V ); clean_matrix_labels( ml );
-		finalize_GPUdevice();
-		fflush(NULL);
-		return EXIT_FAILURE;
-	}
-
-	printf( "\nDistance between V and W*H: %g\n", SQRTR( dot_VWH ) / SQRTR( dot_V ) );
+	if ( do_classf ) { freeHostMemory(last_classification); freeHostMemory(classification); }
 
 	// ----------------------------------------
 
 	// Writes output matrices.
 
-	printf( "\nWriting output matrices.\n" )
+	printf( "\nWriting output matrices.\n" );
 
-	status = write_matrices( filename, ml );
+	status = write_matrices( filename, save_bin, ml );
 	if ( status == EXIT_FAILURE ) {
-		destroy_timing_events( device_id );
-		if ( need_conv ) { freeHostMemory(last_classification); freeHostMemory(classification); }
-		freeHostMemory(last_classification); freeHostMemory(classification);
 		freeHostMemory( H ); freeHostMemory( W ); freeHostMemory( V ); clean_matrix_labels( ml );
 		finalize_GPUdevice();
 		fflush(NULL);
 		return EXIT_FAILURE;
 	}
 
-	if ( need_conv ) { freeHostMemory(last_classification); freeHostMemory(classification); }
-
 	// ----------------------------------------
 
 	// Show elapsed time:
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_GLOBAL
+		// Total elapsed time
+		{
+			struct timeval t_ftv, t_etv;
+			gettimeofday( &t_ftv, NULL );
+			timersub( &t_ftv, &t_tv, &t_etv );	// etv = ftv - tv
+			double const total_nmf_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06 );
+			printf( "\nTotal elapsed time: %g seconds.\n", total_nmf_time );
+		}
+	#endif
 
-		printf( "\nElapsed time:\n" );
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
+		printf( "\nTime elapsed on GPU operations:\n" );
 
-		#if NMFGPU_PROFILING_KERNELS
-			show_kernel_times();
-		#endif
+		show_kernel_times();
 
-		#if NMFGPU_PROFILING_TRANSF
-			show_transfer_times();
-		#endif
-
-		destroy_timing_events( device_id );
-
+		show_transfer_times();
 	#endif
 
 	// ----------------------------------------
 
 	freeHostMemory( H ); freeHostMemory( W ); freeHostMemory( V ); clean_matrix_labels( ml );
 
-	status = finalize_GPUdevice();
+	if ( finalize_GPUdevice() == EXIT_FAILURE )
+		status = EXIT_FAILURE;
+
+	// ----------------------------------------
 
 	fflush(NULL);
 

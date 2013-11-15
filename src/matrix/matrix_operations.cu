@@ -71,13 +71,11 @@
 #include <cuda_runtime_api.h>
 #include <curand.h>	/* Random values */
 
-#include "matrix/matrix_operations.cuh"
+#include "matrix/matrix_io.h"
 #include "GPU_kernels.cuh"
 #include "GPU_setup.cuh"
-#include "matrix/matrix_io.h"
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
-	#include "timing.cuh"
-#endif
+#include "matrix/matrix_operations.cuh"
+
 
 ///////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////
@@ -100,7 +98,7 @@ int show_device_matrix( real const *__restrict__ dMatrix, index_t nrows, index_t
 {
 
 	// Downloads the device matrix to a temporary array and shows its content.
-	real *__restrict__ const buffer = malloc( nrows * pitch * sizeof(real) );
+	real *__restrict__ const buffer = (real *) malloc( nrows * pitch * sizeof(real) );
 	if ( ! buffer ) {
 		int const err = errno; fflush(stdout); errno = err;
 		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error in HOST memory allocation (malloc): %s\nError in show_device_matrix()\n",
@@ -149,7 +147,7 @@ int show_device_matrix_int( index_t const *__restrict__ dMatrix, index_t nrows, 
 {
 
 	// Downloads the device matrix to a temporary array and shows its content.
-	real *__restrict__ const buffer = malloc( nrows * pitch * sizeof(index_t) );
+	index_t *__restrict__ const buffer = (index_t *) malloc( nrows * pitch * sizeof(index_t) );
 	if ( ! buffer ) {
 		int const err = errno; fflush(stdout); errno = err;
 		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error in HOST memory allocation (malloc): %s\nError in show_device_matrix_int()\n",
@@ -307,7 +305,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 	// ----------------------------------------
 
 	// Event and Stream for this operation.
-	cudaEvent_t event_AccA = matrix_events;
+	cudaEvent_t event_AccA = matrix_event;
 	cudaStream_t stream_AccA = matrix_stream;
 
 	// ----------------------------------------
@@ -370,7 +368,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 				index_t const max_block_height2 = maxThreadsPerBlock / pitch;
 
-				block_length = PREV_POWER_2( MIN( max_block_height1, max_block_height2 ) );	// A power of 2
+				block_height = PREV_POWER_2( MIN( max_block_height1, max_block_height2 ) );	// A power of 2
 
 				grid_length = 1;
 
@@ -575,7 +573,12 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 		#if NMFGPU_DEBUG
 			index_t width, char const *__restrict__ const matrix_name_A, char const *__restrict__ const matrix_name_B,
 		#endif
-		bool div_operand, cudaStream_t stream_A, cudaEvent_t *__restrict__ event_B, timing_data_t *__restrict__ td )
+		bool div_operand, cudaStream_t stream_A, cudaEvent_t *__restrict__ event_B
+		#if NMFGPU_PROFILING_KERNELS
+			, timing_data_t *__restrict__ td
+		#endif
+		)
+
 {
 
 	#if NMFGPU_PROFILING_KERNELS
@@ -649,11 +652,11 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 		 */
 
 		// Grid "extension"
-		index_t const gh = maxGridSizeX * abh;
+		index_t const gh = maxGridSizeX * act_bs;
 		grid_extension = ( height + gh - 1 ) / gh;	// << maxGridSizeY
 
 		// Grid "length"
-		index_t const gw = grid_extension * abh;
+		index_t const gw = grid_extension * act_bs;
 		grid_length = ( height + gw - 1 ) / gw;		// <= maxGridSizeX
 
 		#if NMFGPU_PROFILING_KERNELS
@@ -694,7 +697,7 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 		start_cuda_timer( device_id );
 	#endif
 
-		host_div( d_A, d_B, matrix_size, block_size, grid_extension, grid_length, div_operand, stream_A );
+		div_sub( d_A, d_B, matrix_size, block_size, grid_extension, grid_length, div_operand, stream_A );
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
@@ -855,7 +858,7 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
 		start_cuda_timer( device_id );
 	#endif
 
-		mul_div( d_A, d_Aux, d_accum_B, pitch, matrix_size, maxBlockHeight_pitch, grid_extension, grid_length, stream_AccA );
+		mul_div( d_A, d_Aux, d_accum_B, pitch, matrix_size, maxBlockHeight_pitch, grid_extension, grid_length, stream_A );
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG
@@ -981,7 +984,7 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 		start_cuda_timer( device_id );
 	#endif
 
-		adjust( d_A, pitch, matrix_size, maxBlockHeight_pitch, grid_extension, grid_length, stream_AccA );
+		adjust( d_A, pitch, matrix_size, maxBlockHeight_pitch, grid_extension, grid_length, stream_A );
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG
@@ -1147,12 +1150,15 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
  *
  * The transfer is performed with stream "matrix_stream". No event is recorded.
  */
-void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A,
+void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
-				char const *__restrict__ const matrix_name_dA,
+				, index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+				char const *__restrict__ const matrix_name_dA
 			#endif
-			timing_data_t *__restrict__ const upload_timing )
+			#if NMFGPU_PROFILING_TRANSF
+				, timing_data_t *__restrict__ const upload_timing
+			#endif
+		)
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1227,12 +1233,15 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
  *
  * The transfer is performed with stream "matrix_stream", and is recorded as event "transfer_event".
  */
-void upload_matrix_event( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A,
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
-				char const *__restrict__ const matrix_name_dA,
-			#endif
-			timing_data_t *__restrict__ const upload_timing )
+void upload_matrix_event( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+					, index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+					char const *__restrict__ const matrix_name_dA
+				#endif
+				#if NMFGPU_PROFILING_TRANSF
+					, timing_data_t *__restrict__ const upload_timing
+				#endif
+			)
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1348,12 +1357,15 @@ void upload_matrix_event( real const *__restrict__ A, index_t height, index_t pi
  * and adjusts the width of the block to be transferred, if necessary.
  */
 void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_t pitch, index_t offset,
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				index_t block_width, char const *__restrict__ const matrix_name_A,
-				char const *__restrict__ const matrix_name_dA,
-			#endif
-			index_t block_pitch, real *__restrict__ d_A, cudaEvent_t event_A, cudaStream_t stream_A,
-			timing_data_t *__restrict__ upload_timing )
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+					index_t block_width, char const *__restrict__ const matrix_name_A,
+					char const *__restrict__ const matrix_name_dA,
+				#endif
+				index_t block_pitch, real *__restrict__ d_A, cudaStream_t stream_A, cudaEvent_t event_A
+				#if NMFGPU_PROFILING_TRANSF
+					, timing_data_t *__restrict__ const upload_timing
+				#endif
+			)
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1421,7 +1433,7 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 			cuda_status =
 		#endif
 
-			cudaMemcpy2DAsync( d_Matrix, block_pitch * sizeof(real), p_A, pitch * sizeof(real),
+			cudaMemcpy2DAsync( d_A, block_pitch * sizeof(real), p_A, pitch * sizeof(real),
 						width * sizeof(real), height, cudaMemcpyHostToDevice, stream_A );
 
 			/* Same code using CUBLAS:
@@ -1447,11 +1459,11 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 				cuda_status =
 			#endif
 
-				cudaMemcpyAsync( d_A, A, nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
+				cudaMemcpyAsync( d_A, p_A, nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
 
 				/* Same code using CUBLAS:
 				 *	cublasStatus cublas_status =
-				 *		cublasSetVectorAsync( nitems, sizeof(real), A, 1, d_A, 1, stream_A );
+				 *		cublasSetVectorAsync( nitems, sizeof(real), p_A, 1, d_A, 1, stream_A );
 				 */
 
 
@@ -1520,12 +1532,15 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
  *
  * The transfer is performed with stream "matrix_stream". No event is recorded.
  */
-void download_matrix( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A,
+void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real const *__restrict__ d_A
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
-				char const *__restrict__ const matrix_name_dA,
+				, index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+				char const *__restrict__ const matrix_name_dA
 			#endif
-			timing_data_t *__restrict__ const download_timing )
+			#if NMFGPU_PROFILING_TRANSF
+				, timing_data_t *__restrict__ const download_timing
+			#endif
+		)
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1558,7 +1573,7 @@ void download_matrix( real const *__restrict__ A, index_t height, index_t pitch,
 		cudaError_t cuda_status =
 		#endif
 
-			cudaMemcpyAsync( A, d_A, size * sizeof(real), cudaMemcpyDeviceToHost, stream_A );
+			cudaMemcpyAsync( A, d_A, nitems * sizeof(real), cudaMemcpyDeviceToHost, stream_A );
 
 			/* Same code using CUBLAS:
 			 *	cublasStatus cublas_status =
@@ -1600,12 +1615,15 @@ void download_matrix( real const *__restrict__ A, index_t height, index_t pitch,
  *
  * The transfer is performed with stream "matrix_stream". No event is recorded.
  */
-void download_matrix_int( index_t const *__restrict__ A, index_t height, index_t pitch, index_t *__restrict__ d_A,
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
-				char const *__restrict__ const matrix_name_dA,
-			#endif
-			timing_data_t *__restrict__ const download_timing )
+void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch, index_t const *__restrict__ d_A
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+					, index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+					char const *__restrict__ const matrix_name_dA
+				#endif
+				#if NMFGPU_PROFILING_TRANSF
+					, timing_data_t *__restrict__ const download_timing
+				#endif
+			)
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1638,7 +1656,7 @@ void download_matrix_int( index_t const *__restrict__ A, index_t height, index_t
 		cudaError_t cuda_status =
 		#endif
 
-			cudaMemcpyAsync( A, d_A, size * sizeof(index_t), cudaMemcpyDeviceToHost, stream_A );
+			cudaMemcpyAsync( A, d_A, nitems * sizeof(index_t), cudaMemcpyDeviceToHost, stream_A );
 
 			/* Same code using CUBLAS:
 			 *	cublasStatus cublas_status =

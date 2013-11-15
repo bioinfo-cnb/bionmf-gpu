@@ -39,7 +39,6 @@
  *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
  *
  *	Timing (WARNING: They PREVENT asynchronous operations):
- *		NMFGPU_PROFILING_CONV: Compute timing of convergence test.
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers (should be used with NMFGPU_SYNC_TRANSF).
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels.
  *
@@ -47,7 +46,11 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+#ifndef __STDC_FORMAT_MACROS
+	#define __STDC_FORMAT_MACROS
+#endif
+#include <inttypes.h> /* PRIuMAX */
+#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 	#include <math.h> /* isless */
 #endif
 
@@ -56,7 +59,7 @@
 // --------------------------------------
 // --------------------------------------
 
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 	// CUDA Events for timing.
 	cudaEvent_t timing_events[ NUM_TIMING_EVENTS ];
 #endif
@@ -72,18 +75,13 @@
 			download_classf_timing;
 #endif
 
-#if NMFGPU_PROFILING_CONV
-	// Time spent performing the test of convergence.
-	timing_data_t classf_timing;
-#endif
-
 /////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////
 
 /*
  * Initializes kernel timers.
  */
-void init_kernel_timers()
+void init_kernel_timers( void )
 {
 
 	#if NMFGPU_PROFILING_KERNELS
@@ -107,12 +105,12 @@ void init_kernel_timers()
 		}
 
 		for( index_t i=0 ; i<2 ; i++ ) {
-			adjust_timing.time = 0.0;
-			adjust_timing.counter = 0;
+			adjust_timing[i].time = 0.0;
+			adjust_timing[i].counter = 0;
 			adjust_timing[i].nitems = 0;
 		}
 
-		for( i=0 ; i<2 ; i++ ) {
+		for( index_t i=0 ; i<2 ; i++ ) {
 			idx_max_timing[i].time = 0.0;
 			idx_max_timing[i].counter = 0;
 			idx_max_timing[i].nitems = 0;
@@ -133,7 +131,7 @@ void init_kernel_timers()
 /*
  * Initializes timers for data-transfers.
  */
-void init_transfer_timers()
+void init_transfer_timers( void )
 {
 
 	#if NMFGPU_PROFILING_TRANSF
@@ -173,30 +171,14 @@ void init_transfer_timers()
 /////////////////////////////////////////////////////////////////////
 
 /*
- * Initializes structure for timing of convergence test.
- */
-void init_conv_timer()
-{
-
-	#if NMFGPU_PROFILING_CONV
-		classf_timing.time = 0.0;
-		classf_timing.counter = 0;
-		classf_timing.nitems = 0;
-	#endif
-
-} // init_conv_timer
-
-/////////////////////////////////////////////////////////////////////
-
-/*
  * Initializes the array of CUDA Events for timing.
  *
  * Returns EXIT_SUCCESS OR EXIT_FAILURE.
  */
-int init_timing_events( index_t device_id )
+int init_timing_events( void )
 {
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
 		#if NMFGPU_VERBOSE_2
 			printf("\n[GPU%" PRI_IDX "] Initializing array of CUDA Events for timing (number of events: %" PRI_IDX ")...\n",
@@ -216,27 +198,12 @@ int init_timing_events( index_t device_id )
 			return EXIT_FAILURE;
 		}
 
-		#if NMFGPU_PROFILING_CONV
-			// Start outer timer
-			cuda_status = cudaEventCreateWithFlags( &timing_events[ START_OUTER_EVENT ], cudaEventBlockingSync);
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf( stderr, "\n[GPU%" PRI_IDX "] Error creating CUDA event for timing (outer timer start): %s\n",
-					device_id, cudaGetErrorString(cuda_status) );
-				cudaEventDestroy( timing_events[ START_EVENT ] );
-				return EXIT_FAILURE;
-			}
-		#endif
-
 		// Stop timer
 		cuda_status = cudaEventCreateWithFlags( &timing_events[ STOP_EVENT ], cudaEventBlockingSync );
 		if ( cuda_status != cudaSuccess ) {
 			fflush(stdout);
 			fprintf( stderr, "\n[GPU%" PRI_IDX "] Error creating CUDA event for timing (timer stop): %s\n",
 				device_id, cudaGetErrorString(cuda_status) );
-			#if NMFGPU_PROFILING_CONV
-				cudaEventDestroy( timing_events[ START_OUTER_EVENT ] );
-			#endif
 			cudaEventDestroy( timing_events[ START_EVENT ] );
 			return EXIT_FAILURE;
 		}
@@ -248,7 +215,7 @@ int init_timing_events( index_t device_id )
 				device_id, NUM_TIMING_EVENTS );
 		#endif
 
-	#endif /* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV */
+	#endif /* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS */
 
 	return EXIT_SUCCESS;
 
@@ -261,12 +228,12 @@ int init_timing_events( index_t device_id )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int destroy_timing_events( index_t device_id )
+int destroy_timing_events( void )
 {
 
 	int status = EXIT_SUCCESS;
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
 		#if NMFGPU_VERBOSE_2
 			printf("\n[GPU%" PRI_IDX "] Finalizing CUDA Events for timing (%" PRI_IDX " objects)...\n",
@@ -286,17 +253,6 @@ int destroy_timing_events( index_t device_id )
 			status = EXIT_FAILURE;
 		}
 
-		#if NMFGPU_PROFILING_CONV
-			// Start outer timer
-			cuda_status = cudaEventDestroy( timing_events[ START_OUTER_EVENT ] );
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying CUDA event for timing (outer timer start): %s\n",
-					device_id, cudaGetErrorString(cuda_status) );
-				status = EXIT_FAILURE;
-			}
-		#endif
-
 		// Start timer
 		cuda_status = cudaEventDestroy( timing_events[ START_EVENT ] );
 		if ( cuda_status != cudaSuccess ) {
@@ -313,7 +269,7 @@ int destroy_timing_events( index_t device_id )
 				device_id, NUM_TIMING_EVENTS );
 		#endif
 
-	#endif /* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV */
+	#endif /* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS */
 
 	return status;
 
@@ -326,10 +282,10 @@ int destroy_timing_events( index_t device_id )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int start_cuda_timer_ev( cudaEvent_t timing_event, index_t device_id )
+int start_cuda_timer_ev( cudaEvent_t timing_event )
 {
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
 		cudaError_t cuda_status = cudaSuccess;
 
@@ -347,7 +303,7 @@ int start_cuda_timer_ev( cudaEvent_t timing_event, index_t device_id )
 			return EXIT_FAILURE;
 		}
 
-	#endif	/* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV */
+	#endif	/* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS */
 
 	return EXIT_SUCCESS;
 
@@ -358,18 +314,18 @@ int start_cuda_timer_ev( cudaEvent_t timing_event, index_t device_id )
 /*
  * Starts the CUDA timer using the timing_events[ START_EVENT ] CUDA event.
  *
- * It is equivalent to: start_cuda_timer_ev( timing_events[ START_EVENT ], device_id );
+ * It is equivalent to: start_cuda_timer_ev( timing_events[ START_EVENT ] );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int start_cuda_timer( index_t device_id )
+int start_cuda_timer( void )
 {
 
 	int status = EXIT_SUCCESS;
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
-		status = start_cuda_timer_ev( timing_events[ START_EVENT ], device_id );
+		status = start_cuda_timer_ev( timing_events[ START_EVENT ] );
 
 	#endif
 
@@ -384,12 +340,12 @@ int start_cuda_timer( index_t device_id )
  *
  * Returns the elapsed time (in ms) or a negative value on error.
  */
-float stop_cuda_timer_ev( cudaEvent_t start_timing_event, index_t device_id )
+float stop_cuda_timer_ev( cudaEvent_t start_timing_event )
 {
 
 	float elapsed_time = 0.0f;
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
 		cudaError_t cuda_status = cudaSuccess;
 
@@ -418,7 +374,7 @@ float stop_cuda_timer_ev( cudaEvent_t start_timing_event, index_t device_id )
 			return -1.0f;
 		}
 
-	#endif	/* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV */
+	#endif	/* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS */
 
 	return elapsed_time;
 
@@ -433,14 +389,14 @@ float stop_cuda_timer_ev( cudaEvent_t start_timing_event, index_t device_id )
  *
  * Returns the elapsed time (in ms) or a negative value on error.
  */
-float stop_cuda_timer( index_t device_id )
+float stop_cuda_timer( void )
 {
 
 	float elapsed_time = 0.0f;
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
-		elapsed_time = stop_cuda_timer_ev( timing_events[ START_EVENT ], device_id );
+		elapsed_time = stop_cuda_timer_ev( timing_events[ START_EVENT ] );
 
 	#endif
 
@@ -460,13 +416,13 @@ float stop_cuda_timer( index_t device_id )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__restrict__ td, index_t nitems, index_t counter, index_t device_id )
+int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__restrict__ td, index_t nitems, index_t counter )
 {
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
 
-		float elapsed_time = stop_cuda_timer_ev( start_timing_event, device_id );
+		float elapsed_time = stop_cuda_timer_ev( start_timing_event );
 		if ( isless( elapsed_time, 0.0f ) )
 			return EXIT_FAILURE;
 
@@ -476,7 +432,7 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__res
 			td->time += (long double) elapsed_time;
 		}
 
-	#endif	/* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV */
+	#endif	/* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS */
 
 	return EXIT_SUCCESS;
 
@@ -494,16 +450,16 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__res
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, index_t nitems, index_t counter, index_t device_id )
+int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, index_t nitems, index_t counter )
 {
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
-		int status = stop_cuda_timer_cnt( timing_events[ START_EVENT ], td, nitems, counter, device_id );
+		int status = stop_cuda_timer_cnt( timing_events[ START_EVENT ], td, nitems, counter );
 		if ( status == EXIT_FAILURE )
 			return EXIT_FAILURE;
 
-	#endif	/* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV */
+	#endif	/* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS */
 
 	return EXIT_SUCCESS;
 
@@ -523,15 +479,15 @@ void print_elapsed_time( char const *__restrict__ const op, timing_data_t *__res
 {
 
 	// if ( op != NULL ) && ( td != NULL ) && ( size_of_data > 0 )
-	if ( ((size_t) op) * ((size_t) td) * size_of_data ) {
+	if ( (size_t) op * (size_t) td * size_of_data ) {
 
 		/* Throughput(GB/sec):
 		 *	( (td->nitems * size_of_data) bytes / (2**30 bytes/GB) )  /  ( td->time (ms) / (1000 ms/sec) )
 		 *
 		 * Note that (size_of_data * ( 1000 / 2**30 )) is calculated at compile time.
 		 */
-		printf( "%s: %.3Lg sec (%" PRIuMAX " time(s), avg: %.6Lg ms), %.3Lg GB/s\n", op, td->time / 1000, td->counter,
-			td->time / td->counter, ( ( td->nitems * size_of_data * (1000.0/(1<<30)) ) / td->time ) );
+		printf( "%s: %.3Lg sec (%" PRIuMAX " time(s), avg: %.6Lg ms), %.3Lg GB/s\n", op, (td->time / 1000), td->counter,
+			(td->time / td->counter), ( ( td->nitems * size_of_data * (1000.0/(1<<30)) ) / td->time ) );
 	}
 
 } // print_elapsed_time
@@ -541,7 +497,7 @@ void print_elapsed_time( char const *__restrict__ const op, timing_data_t *__res
 /*
  * Shows time elapsed on some kernels.
  */
-void show_kernel_times()
+void show_kernel_times( void )
 {
 
 	#if NMFGPU_PROFILING_KERNELS
@@ -648,7 +604,7 @@ void show_kernel_times()
 /*
  * Shows time elapsed on data transfers.
  */
-void show_transfer_times()
+void show_transfer_times( void )
 {
 
 	#if NMFGPU_PROFILING_TRANSF
@@ -669,7 +625,7 @@ void show_transfer_times()
 		print_elapsed_time( "\t\tGet H", &download_H_timing, sizeof(real) );
 
 		// Transfer of classification vector (test of convergence).
-		print_elapsed_time( "\t\tGet Classification", &download_classf_timing, sizeof(index_t) );
+		print_elapsed_time( "\t\tGet Classification vector", &download_classf_timing, sizeof(index_t) );
 
 		long double const total_data_transf = upload_Vrow_timing.time + upload_Vcol_timing.time +
 							upload_W_timing.time + upload_H_timing.time +

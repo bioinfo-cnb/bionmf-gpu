@@ -40,12 +40,11 @@
  *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
  *
  *	Timing:
- *		NMFGPU_PROFILING_CONV: Compute timing of convergence test. Shows additional information.
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
  *
  *	Debug / Testing:
- *		NMFGPU_FIXED_INIT: Initializes matrices W and H with fixed random values.
+ *		NMFGPU_FIXED_INIT: Uses "random" values generated from a fixed seed (defined in common.h).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_FORCE_BLOCKS: Forces the processing of the input matrix as four blocks.
  *		NMFGPU_TEST_BLOCKS: Just shows block information structure. No GPU memory is allocated.
@@ -115,6 +114,26 @@
 #include "index_type.h"
 #include "real_type.h"
 
+///////////////////////////////////////////////////////
+
+/* Selects the appropriate "restrict" keyword. */
+
+#undef RESTRICT
+
+#if __CUDACC__				/* CUDA source code */
+	#define RESTRICT __restrict__
+#else					/* C99 source code */
+	#define RESTRICT restrict
+#endif
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+/* C linkage, not C++. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // ---------------------------------------------
 // ---------------------------------------------
 
@@ -181,7 +200,7 @@ extern cudaEvent_t matrix_event;		// Matrix reductions and other operations on d
 extern cudaStream_t Vrow_stream;		// d_Vrow
 extern cudaStream_t Vcol_stream;		// d_Vcol
 extern cudaStream_t matrix_stream;		// Matrix reductions, data transfers and other operations on d_W and d_H.
-extern cudaStream_t *__restrict__ NMF_streams;	// Main-flow streams for blockwise processing.
+extern cudaStream_t *RESTRICT NMF_streams;	// Main-flow streams for blockwise processing.
 extern index_t num_NMF_streams;			// Number of main-flow streams: MAX( SUM(block_N.num_steps[i]), SUM(block_M.num_steps[i]) )
 
 // Matrix dimensions (host side):
@@ -203,18 +222,18 @@ extern index_t MnPp;	// 'MnP' rounded up to the next multiple of <memory_alignme
 /* DEVICE-ONLY GLOBAL Variables */
 
 // Data matrices (device side):
-extern real *__restrict__ d_Vrow;		// Block of BLN rows from input matrix V.
-extern real *__restrict__ d_Vcol;		// Block of BLM columns from input matrix V.
-extern real *__restrict__ d_H;			// Output matrix. Note that it is transposed.
-extern real *__restrict__ d_W;			// Output matrix.
-extern real *__restrict__ d_WH;			// Temporary matrix: d_WH = d_W * d_H
-extern real *__restrict__ d_Aux;		// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
-extern real *__restrict__ d_accum;		// Accumulator. K-length vector (<Kp> with padding).
-extern index_t  *__restrict__ d_classification;	// Classification vector.
+extern real *RESTRICT d_Vrow;		// Block of BLN rows from input matrix V.
+extern real *RESTRICT d_Vcol;		// Block of BLM columns from input matrix V.
+extern real *RESTRICT d_H;			// Output matrix. Note that it is transposed.
+extern real *RESTRICT d_W;			// Output matrix.
+extern real *RESTRICT d_WH;			// Temporary matrix: d_WH = d_W * d_H
+extern real *RESTRICT d_Aux;		// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
+extern real *RESTRICT d_accum;		// Accumulator. K-length vector (<Kp> with padding).
+extern index_t  *RESTRICT d_classification;	// Classification vector.
 
-extern real const *__restrict__ const d_scalars;	// Scalars for CUBLAS Library calls.
-extern real const *__restrict__ const d_zero;		// Pointer to d_scalar[0]
-extern real const *__restrict__ const d_one;		// Pointer to d_scalar[1]
+extern real const *RESTRICT d_scalars;	// Scalars for CUBLAS Library calls.
+extern real const *RESTRICT d_zero;		// Pointer to d_scalar[0]
+extern real const *RESTRICT d_one;		// Pointer to d_scalar[1]
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -260,7 +279,7 @@ int check_cuda_status_st( cudaError_t cuda_status );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int check_cuda_status();
+int check_cuda_status( void );
 
 // ------------------------------------------
 
@@ -273,7 +292,7 @@ int check_cuda_status();
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_GPU( index_t dev_id, size_t *__restrict__ const mem_size );
+int init_GPU( index_t dev_id, size_t *RESTRICT const mem_size );
 
 // ------------------------------------------
 
@@ -292,9 +311,11 @@ index_t get_padding( index_t dim );
  * Initializes CUDA, CUBLAS and data structures.
  * Computes the required amount of memory and allocates memory for data matrices.
  *
+ * do_classf: Set to 'true' if classification vector will be computed.
+ *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_GPUdevice( index_t num_devices, size_t mem_size, bool need_conv );
+int init_GPUdevice( index_t num_devices, size_t mem_size, bool do_classf );
 
 // ------------------------------------------
 
@@ -303,7 +324,7 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool need_conv );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int finalize_GPU();
+int finalize_GPU( void );
 
 // ------------------------------------------
 
@@ -315,7 +336,7 @@ int finalize_GPU();
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int finalize_GPUdevice();
+int finalize_GPUdevice( void );
 
 // ------------------------------------------
 
@@ -348,7 +369,7 @@ void *getHostMemory( size_t size, bool wc );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int freeHostMemory( void *__restrict__ pHost );
+int freeHostMemory( void *RESTRICT pHost );
 
 // ------------------------------------------
 
@@ -366,7 +387,7 @@ void sync_GPU( cudaStream_t stream );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_randomGenerator();
+int init_randomGenerator( void );
 
 // ------------------------------------------
 
@@ -384,7 +405,19 @@ int set_randomGenerator_seed( unsigned long long seed );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int finalize_randomGenerator();
+int finalize_randomGenerator( void );
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+#ifdef __cplusplus
+}
+#endif
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+#undef RESTRICT
 
 ///////////////////////////////////////////////////////
 

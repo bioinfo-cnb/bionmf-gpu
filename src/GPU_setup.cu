@@ -40,12 +40,11 @@
  *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
  *
  *	Timing:
- *		NMFGPU_PROFILING_CONV: Compute timing of convergence test. Shows additional information.
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
  *
  *	Debug / Testing:
- *		NMFGPU_FIXED_INIT: Initializes matrices W and H with fixed random values.
+ *		NMFGPU_FIXED_INIT: Uses "random" values generated from a fixed seed (define in common.h).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_FORCE_BLOCKS: Forces the processing of the input matrix as four blocks.
  *		NMFGPU_TEST_BLOCKS: Just shows block information structure. No GPU memory is allocated.
@@ -106,11 +105,11 @@
 #include <errno.h>
 #include <string.h>
 
-#include "GPU_setup.cuh"
-#include "GPU_kernels.cuh"	/* __ITEMS_PER_THREAD constants */
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 	#include "timing.cuh"
 #endif
+#include "GPU_kernels.cuh"	/* __ITEMS_PER_THREAD constants */
+#include "GPU_setup.cuh"
 
 // ---------------------------------------------
 // ---------------------------------------------
@@ -203,13 +202,13 @@ index_t MnPp = 0;	// 'MnP' rounded up to the next multiple of <memory_alignment>
 real *__restrict__ d_Vrow = NULL;		// Block of BLN rows from input matrix V.
 real *__restrict__ d_Vcol = NULL;		// Block of BLM columns from input matrix V.
 real *__restrict__ d_H = NULL;			// Output matrix. Note that it is transposed.
-real *__restrict__ d_W = NULL			// Output matrix.
+real *__restrict__ d_W = NULL;			// Output matrix.
 real *__restrict__ d_WH = NULL;			// Temporary matrix: d_WH = d_W * d_H
 real *__restrict__ d_Aux = NULL;		// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
 real *__restrict__ d_accum = NULL;		// Accumulator. K-length vector (<Kp> with padding).
 index_t  *__restrict__ d_classification = NULL;	// Classification vector.
 
-real const *__restrict__ d_scalar = NULL;	// Scalars for CUBLAS Library calls. d_scalar[2] = { 0, 1 };
+real const *__restrict__ d_scalar = NULL;		// Scalars for CUBLAS Library calls. d_scalar[2] = { 0, 1 };
 real const *__restrict__ d_zero = NULL;		// Pointer to d_scalar[0] == 0
 real const *__restrict__ d_one = NULL;		// Pointer to d_scalar[1] == 1
 
@@ -283,7 +282,7 @@ void printCurandErrorString( curandStatus_t curand_status )
 			fprintf(stderr, "CURAND generator not initialized.\n");
 		break;
 
-		case CURAND_STATUS_ALLOC_FAILED:
+		case CURAND_STATUS_ALLOCATION_FAILED:
 			fprintf(stderr, "Resource allocation failed.\n");
 		break;
 
@@ -324,7 +323,7 @@ void printCurandErrorString( curandStatus_t curand_status )
 		break;
 
 		default:
-			fprintf(stderr, "Unknown CURAND error code (value: %x).\n", cublas_status );
+			fprintf(stderr, "Unknown CURAND error code (value: %x).\n", curand_status );
 		break;
 	}
 
@@ -384,7 +383,7 @@ int check_cuda_status_st( cudaError_t cuda_status )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int check_cuda_status()
+int check_cuda_status( void )
 {
 
 	cudaError_t cuda_status = cudaDeviceSynchronize();
@@ -424,8 +423,8 @@ int init_GPU( index_t dev_id, size_t *__restrict__ const mem_size )
 
 	// Device flags
 	unsigned int const flags =
-				// Yields its thread until device completes ops.
-				cudaDeviceScheduleYield	|
+				// // Yields its thread until device completes ops.
+				// cudaDeviceScheduleYield	|
 
 				// Blocks CPU thread on sync. primitives (e.g., cudaDeviceSynchronize, cudaStreamSynchronize).
 				cudaDeviceScheduleBlockingSync;
@@ -603,7 +602,7 @@ int init_GPU( index_t dev_id, size_t *__restrict__ const mem_size )
 	// Shows some GPU properties
 
 	#if NMFGPU_VERBOSE || NMFGPU_DEBUG || NMFGPU_FORCE_BLOCKS \
-		|| NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+		|| NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
 		// CUDA version
 		int runtime_version = 0;
@@ -702,7 +701,7 @@ index_t get_padding( index_t dim )
  *
  * Returns EXIT_SUCCESS, or EXIT_FAILURE if Kp > maxThreadsPerBlock.
  */
-int static set_threadsPerBlock_pitch()
+int static set_threadsPerBlock_pitch( void )
 {
 
 	index_t const pitch = Kp;
@@ -783,7 +782,6 @@ static void max_bounds( index_t *__restrict__ maxDimension, index_t *__restrict_
 		index_t block_width = ( K / IDX_MAX__ITEMS_PER_THREAD );
 		block_width = PREV_POWER_2( (block_width << 1) );	// PREV_POWER_2( x*2 ) == next_power_2( x )
 		block_width = MIN( block_width, memory_alignment );	// Note that memory_alignment is also a power of 2.
-		index_t const block_height = threadsPerBlock_pitch / block_width;
 		size_t const maxDim_idxMax = (threadsPerBlock / block_width) * ((1 << 24) - 1);
 		size_t const maxDim_minKp_idxMax = maxBlockHeight_minKp * ((1 << 24) - 1);
 
@@ -814,7 +812,7 @@ static void max_bounds( index_t *__restrict__ maxDimension, index_t *__restrict_
 
 	*maxDimension =  maxDim;
 	*maxDimension_minKp = maxDim_minKp;
-	*maxMatrixSize = maxSize;
+	*max_MatrixSize = maxSize;
 
 } // max_bounds
 
@@ -847,9 +845,9 @@ static void max_bounds( index_t *__restrict__ maxDimension, index_t *__restrict_
  *	full_matrix is set to 'false'.
  *	Computes BLN, BLM and BLMp for d_WH, d_Vr and d_Vc.
  *
- * need_conv: Set to 'true' if need to perform convergence test.
+ * do_classf: Set to 'true' if classification vector will be computed.
  */
-static int get_BLs( size_t mem_size, index_t num_devices, bool need_conv, index_t *__restrict__ const BLN, index_t *__restrict__ const BLM,
+static int get_BLs( size_t mem_size, index_t num_devices, bool do_classf, index_t *__restrict__ const BLN, index_t *__restrict__ const BLM,
 		index_t *__restrict__ const BLMp, bool *__restrict__ const full_matrix )
 {
 
@@ -871,11 +869,11 @@ static int get_BLs( size_t mem_size, index_t num_devices, bool need_conv, index_
 		lBLN = (NnP/2) + (NnP % 2);
 
 		if ( MnPp > memory_alignment ) {
-			lBLMp = GET_PADDING( MnPp/2 );	// MnPp is a multiple of memory_alignment and 2.
+			lBLMp = get_padding( MnPp/2 );	// MnPp is a multiple of memory_alignment and 2.
 			lBLM = MIN( lBLMp, MnP );
 		} else {
 			lBLM = (MnP + 1) / 2;	// = Ceil( MnP/2 )
-			lBLMp = GET_PADDING( lBLM );
+			lBLMp = get_padding( lBLM );
 		}
 
 		l_full_matrix = false;
@@ -905,13 +903,13 @@ static int get_BLs( size_t mem_size, index_t num_devices, bool need_conv, index_
 	 */
 	size_t data_matrices = Kp * (N + M + MAX(N,M)) + Kp + 2;
 
-	// Memory used in the convergence test (<Mp> integers) must be scaled since sizeof(index_t) <= sizeof(real)
-	if ( need_conv ) {
-		size_t const conv_data = (Mp * sizeof(index_t)) / sizeof(real);
-		data_matrices += conv_data;
+	// Memory used by classification vector (<Mp> integers) must be scaled since sizeof(index_t) <= sizeof(real)
+	if ( do_classf ) {
+		size_t const classf_data = (Mp * sizeof(index_t)) / sizeof(real);
+		data_matrices += classf_data;
 	}
 
-	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		printf("\n[GPU%" PRI_IDX "] Total device memory required (approx.): %0.3f MB. (required by output & auxiliary data: %0.3f MB)\n",
 			device_id, (float) (required_mem + data_matrices) * (sizeof(real) / 1048576.0f),
 			(float) data_matrices * (sizeof(real) / 1048576.0f) );
@@ -963,7 +961,7 @@ static int get_BLs( size_t mem_size, index_t num_devices, bool need_conv, index_
 		size_t rows;		// d_Vrow: lBLN * Mp;
 
 		// Initial values for dBLM == 2
-		lBLMp = GET_PADDING( (MnPp / 2) );	// Multiple of memory_alignment
+		lBLMp = get_padding( (MnPp / 2) );	// Multiple of memory_alignment
 		size_t cols = N * lBLMp;		// (d_Vcol)
 		lBLM = MIN( lBLMp, MnP );
 
@@ -973,19 +971,19 @@ static int get_BLs( size_t mem_size, index_t num_devices, bool need_conv, index_
 
 		do {
 
-			if ( dim ) {	// Adjusts BLN
+			if ( dimN ) {	// Adjusts BLN
 				lBLN = ( NnP + dBLN - 1 ) / dBLN;	// (NnP / dBLN) + ( NnP % dBLN )
 				rows = lBLN * Mp;
 				dBLN++;		// Denominator in next loop with dim=1.
 			} else {	// Adjusts BLM
-				lBLMp = GET_PADDING( ((MnP + dBLM - 1) / dBLM) );	// Multiple of memory_alignment
+				lBLMp = get_padding( ((MnP + dBLM - 1) / dBLM) );	// Multiple of memory_alignment
 				lBLM = MIN( lBLMp, MnP );
 				cols = N * lBLMp;
 				dBLM++;		// Denominator in next loop with dim=0.
 			}
 
 			// Changes dimension for next loop.
-			dim = ( ! dim );
+			dimN = ( ! dimN );
 
 			// Required memory:
 			// size(d_Vr) = BLN * Mp	// (i.e., BLN rows)
@@ -1049,7 +1047,7 @@ static int get_BLs( size_t mem_size, index_t num_devices, bool need_conv, index_
 			if ( (lBLN < 1) + (lBLM < 1) ) {	// (lBLN < 1) || (lBLM < 1)
 				// Minimum required: lBLN=1 && lBLMp=memory_alignment.
 				cols = N * memory_alignment;		// i.e., N*BLMp
-				required_mem = MAX( Mp, cols ) + Mp + cols;	// d_WH + d_Vrow + d_Vcol
+				required_mem = MAX( ((size_t) Mp), cols ) + Mp + cols;	// d_WH + d_Vrow + d_Vcol
 				fflush(stdout);
 				fprintf(stderr,"\n[GPU%" PRI_IDX "] Not enough memory. Minimum required: %0.3f MB.\n", device_id,
 						(float) ((required_mem + data_matrices) * sizeof(real))/1048576.0f);
@@ -1060,8 +1058,7 @@ static int get_BLs( size_t mem_size, index_t num_devices, bool need_conv, index_
 	} // if ( required_mem > free_mem )
 
 
-	#if NMFGPU_VERBOSE || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS \
-		|| NMFGPU_PROFILING_CONV
+	#if NMFGPU_VERBOSE || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		printf("\n[GPU%" PRI_IDX "] Resulting values: BLN=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
 			" (approx. %0.3f MB), full_matrix=%i\n", device_id, lBLN, lBLM, lBLMp,
 			(float) (required_mem + data_matrices) * (sizeof(real) / 1048576.0f), l_full_matrix );
@@ -1107,9 +1104,9 @@ static void init_block_conf( index_t D, index_t BLD, index_t BLDp, block_t *__re
 
 			// Padding for this block (if any).
 			if ( BLDp )
-				block_D->BLp[1] = GET_PADDING(divResult.rem);
+				block_D->BLp[1] = get_padding(divResult.rem);
 				/* WARNING:
-				 * If (<Total width of previous blocks> + this_padding) > GET_PADDING( D ):
+				 * If (<Total width of previous blocks> + this_padding) > get_padding( D ):
 				 *	GPU: It doesn't matter since pitch_Vcol >= this_padding
 				 *	CPU: *PLEASE TAKE CARE* to not go out-of-bounds when transfering data.
 				 */
@@ -1122,7 +1119,7 @@ static void init_block_conf( index_t D, index_t BLD, index_t BLDp, block_t *__re
 
 			block_D->BLp[1] = BLDp;
 				/* WARNING:
-				 * If (<Total width of previous blocks> + <this padding>) > GET_PADDING( D ):
+				 * If (<Total width of previous blocks> + <this padding>) > get_padding( D ):
 				 *	GPU: It doesn't matter since pitch_Vcol >= <this padding>
 				 *	CPU: *PLEASE TAKE CARE* to not go out-of-bounds when transferring data.
 				 */
@@ -1140,7 +1137,7 @@ static void init_block_conf( index_t D, index_t BLD, index_t BLDp, block_t *__re
 	} // if (D > BLD)
 
 	// Prints block configuration
-	#if NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		printf("\t[GPU%" PRI_IDX "] %" PRI_IDX " block(s) of length %" PRI_IDX " (padding=%" PRI_IDX ")\n", device_id,
 			block_D->num_steps[0], BLD, BLDp);
 		if ( block_D->num_steps[1] )
@@ -1158,16 +1155,16 @@ static void init_block_conf( index_t D, index_t BLD, index_t BLDp, block_t *__re
  * single_matrix_V: 'True' if input matrix V is small enough to be fully loaded into the GPU memory.
  *		In this case, d_Vrow = d_Vcol.
  *
- * need_conv: 'True' if test of convergence will be performed.
+ * do_classf: Set to 'true' if classification vector will be computed.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static int allocate_dev_mem( index_t BLN, index_t BLMp, bool single_matrix_V, bool need_conv )
+static int allocate_dev_mem( index_t BLN, index_t BLMp, bool single_matrix_V, bool do_classf )
 {
 
 	#if NMFGPU_VERBOSE_2
 		printf("\n[GPU%" PRI_IDX "] Allocating device memory (BLN=%" PRI_IDX ", BLMp=%" PRI_IDX
-			", single_matrix_V: %i, need_conv: %i)...\n", device_id, BLN, BLMp, single_matrix_V, need_conv );
+			", single_matrix_V: %i, do_classf: %i)...\n", device_id, BLN, BLMp, single_matrix_V, do_classf );
 	#endif
 
 	cudaError_t cuda_status = cudaSuccess;
@@ -1253,12 +1250,12 @@ static int allocate_dev_mem( index_t BLN, index_t BLMp, bool single_matrix_V, bo
 	// ---------------------------------
 
 	// Classification vector (if necessary)
-	if ( need_conv ) {
+	if ( do_classf ) {
 		cuda_status = cudaMalloc((void **)&d_classification, Mp * sizeof(index_t) );
 		if ( cuda_status != cudaSuccess ) {
 			fflush(stdout);
 			fprintf( stderr, "\n[GPU%" PRI_IDX "] Device memory allocation error (classification): %s\n",
-				device_id cudaGetErrorString(cuda_status) );
+				device_id, cudaGetErrorString(cuda_status) );
 			cudaFree(d_Aux); cudaFree(d_H); cudaFree(d_W); cudaFree(d_WH);
 			if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
 			return EXIT_FAILURE;
@@ -1273,7 +1270,7 @@ static int allocate_dev_mem( index_t BLN, index_t BLMp, bool single_matrix_V, bo
 		fflush(stdout);
 		fprintf(stderr, "\n[GPU%" PRI_IDX "] Device memory allocation error (d_accum): %s\n",
 			device_id, cudaGetErrorString(cuda_status) );
-		if ( need_conv ){ cudaFree(d_classification); }
+		if ( do_classf ){ cudaFree(d_classification); }
 		cudaFree(d_Aux); cudaFree(d_H); cudaFree(d_W); cudaFree(d_WH);
 		if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
 		return EXIT_FAILURE;
@@ -1288,7 +1285,7 @@ static int allocate_dev_mem( index_t BLN, index_t BLMp, bool single_matrix_V, bo
 		fprintf(stderr, "\n[GPU%" PRI_IDX "] Device memory allocation error (d_scalar): %s\n",
 			device_id, cudaGetErrorString(cuda_status) );
 		cudaFree(d_accum);
-		if ( need_conv ){ cudaFree(d_classification); }
+		if ( do_classf ){ cudaFree(d_classification); }
 		cudaFree(d_Aux); cudaFree(d_H); cudaFree(d_W); cudaFree(d_WH);
 		if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
 		return EXIT_FAILURE;
@@ -1427,7 +1424,7 @@ static int init_GPU_data( bool single_matrix_V )
 
 
 	// Main-flow streams
-	NMF_streams = malloc( num_NMF_streams * sizeof(cudaStream_t) );
+	NMF_streams = (cudaStream_t *) malloc( num_NMF_streams * sizeof(cudaStream_t) );
 	if( ! NMF_streams ) {
 		int const err = errno; fflush(stdout); errno = err;
 		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error allocating HOST memory for CUDA streams (Main flow, length=%" PRI_IDX
@@ -1456,19 +1453,13 @@ static int init_GPU_data( bool single_matrix_V )
 
 	// -----------------------------------
 
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
 		/* Timers for matrix operations */
 
-		#if NMFGPU_PROFILING_KERNELS
-			init_kernel_timers();
-		#endif
-		#if NMFGPU_PROFILING_TRANSF
-			init_transfer_timers();
-		#endif
-		#if NMFGPU_PROFILING_CONV
-			init_conv_timer();
-		#endif
+		init_kernel_timers();
+
+		init_transfer_timers();
 
 		/* CUDA Events for timing */
 		if ( init_timing_events( device_id ) != EXIT_SUCCESS ) {
@@ -1500,7 +1491,7 @@ static int init_GPU_data( bool single_matrix_V )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static int init_scalars()
+static int init_scalars( void )
 {
 
 	// Scalars to upload.
@@ -1519,7 +1510,238 @@ static int init_scalars()
 
 } // init_scalars
 
+////////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Destroys associated GPU data, such as CUDA Streams and/or CUDA Events.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
+ */
+static int finalize_GPU_data( void )
+{
+
+	#if NMFGPU_VERBOSE_2
+		printf( "\n[GPU%" PRI_IDX "] Finalizing GPU data (single matrix=%i, num_NMF_streams=%" PRI_IDX ")...\n", device_id,
+			num_NMF_streams );
+	#endif
+
+	int status = EXIT_SUCCESS;	// Return status.
+
+	cudaError_t cuda_status = cudaSuccess;
+
+	// ------------------------------
+
+	/* CUDA Events for timing */
+	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
+		status = destroy_timing_events( device_id );
+	#endif
+
+	// ------------------------------
+
+	/* CUDA Streams for synchronization */
+
+	// Main-flow streams
+	for ( index_t st=0; st<num_NMF_streams; st++ ) {
+		cuda_status = cudaStreamDestroy( NMF_streams[ st ] );
+		if ( cuda_status != cudaSuccess ) {
+			fflush(stdout);
+			fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying stream object %" PRI_IDX "/%" PRI_IDX
+					" for synchronization on main flow: %s\n", device_id, st, num_NMF_streams,
+					cudaGetErrorString(cuda_status) );
+			status = EXIT_FAILURE;
+		}
+	}
+	free( (void *) NMF_streams );
+
+
+	// Synchronization stream for matrix reductions, data transfers and other operations on d_W and d_H.
+	cuda_status = cudaStreamDestroy( matrix_stream );
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf( stderr,"\n[GPU%" PRI_IDX "] Error destroying stream object for synchronization of some operations on d_W and d_H: %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+
+	// Stream for Vcol (i.e., set of columns from matrix V)
+	if ( Vcol_stream != Vrow_stream ) {
+		cuda_status = cudaStreamDestroy( Vcol_stream );
+		if ( cuda_status != cudaSuccess ) {
+			fflush(stdout);
+			fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying stream object for Vcol: %s\n", device_id,
+				cudaGetErrorString(cuda_status) );
+			status = EXIT_FAILURE;
+		}
+	} // if ( Vcol_streams != Vrow_streams )
+
+
+	// Stream for Vrow (i.e., set of rows from matrix V)
+
+	cuda_status = cudaStreamDestroy( Vrow_stream );
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying stream object for Vrow: %s\n", device_id,
+			cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	// ----------------------------------
+
+	/* CUDA Events for synchronization. */
+
+	// Synchronization event for data transfers to/from d_W and d_H.
+	cuda_status = cudaEventDestroy( transfer_event );
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying event object for data transfers to/from d_W and d_H: %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+
+	// Synchronization event for data transfers and reductions on d_W and d_H.
+	cuda_status = cudaEventDestroy( matrix_event );
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying event object for synchronization of some operations on d_W and d_H: %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+
+	// Event for Vcol (i.e., set of columns from matrix V)
+	if ( Vcol_event != Vrow_event ) {
+		cuda_status = cudaEventDestroy( Vcol_event );
+		if ( cuda_status != cudaSuccess ) {
+			fflush(stdout);
+			fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying event object for Vcol: %s\n", device_id,
+				cudaGetErrorString(cuda_status) );
+			status = EXIT_FAILURE;
+		}
+	} // if ( Vcol_events != Vrow_events )
+
+
+	// Event for Vrow (i.e., set of rows from matrix V)
+	cuda_status = cudaEventDestroy( Vrow_event );
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying event object for Vrow: %s\n", device_id,
+			cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	// ---------------------------------
+
+	#if NMFGPU_VERBOSE_2
+		printf( "\n[GPU%" PRI_IDX "] Finalizing GPU data (single matrix=%i, num_NMF_streams=%" PRI_IDX ")... Done.\n",
+			device_id, num_NMF_streams );
+	#endif
+
+	return status;
+
+} // finalize_GPU_data
+
 // =======================================================================
+
+/*
+ * Frees all allocated device memory.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
+ */
+static int free_dev_mem( void )
+{
+
+	#if NMFGPU_VERBOSE_2
+		printf("\n[GPU%" PRI_IDX "] Device memory clean-up...\n", device_id );
+	#endif
+
+	int status = EXIT_SUCCESS;	// Return status
+	cudaError_t cuda_status = cudaSuccess;
+
+	// -----------------------------------
+
+	cuda_status = cudaFree( (void *) d_scalar);
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_scalar): %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	cuda_status = cudaFree( (void *) d_accum);
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_accum): %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	if ( d_classification && ( (cuda_status=cudaFree( (void *) d_classification)) != cudaSuccess ) ) {
+		fflush(stdout);
+		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_classification): %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	cuda_status = cudaFree( (void *) d_Aux);
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_Aux): %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	cuda_status = cudaFree( (void *) d_W);
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_W): %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	cuda_status = cudaFree( (void *) d_H);
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_H): %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	cuda_status = cudaFree( (void *) d_WH);
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_WH): %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	if ( (d_Vrow != d_Vcol) && ( (cuda_status=cudaFree( (void *) d_Vcol)) != cudaSuccess ) ) {
+		fflush(stdout);
+		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_Vcol): %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	cuda_status = cudaFree( (void *) d_Vrow);
+	if ( cuda_status != cudaSuccess ) {
+		fflush(stdout);
+		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_Vrow): %s\n",
+			device_id, cudaGetErrorString(cuda_status) );
+		status = EXIT_FAILURE;
+	}
+
+	// -----------------------------
+
+	#if NMFGPU_VERBOSE_2
+		printf("\n[GPU%" PRI_IDX "] Device memory clean-up... done\n", device_id );
+	#endif
+
+	return status;
+
+} // free_dev_mem
+
+////////////////////////////////////////////////////////////////////////////////
 
 /*
  * Initializes the GPU device.
@@ -1527,9 +1749,11 @@ static int init_scalars()
  * Initializes CUDA, CUBLAS and data structures.
  * Computes the required amount of memory and allocates memory for data matrices.
  *
+ * do_classf: Set to 'true' if classification vector will be computed.
+ *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_GPUdevice( index_t num_devices, size_t mem_size, bool need_conv )
+int init_GPUdevice( index_t num_devices, size_t mem_size, bool do_classf )
 {
 
 	/* Sets the following GLOBAL variables:
@@ -1601,13 +1825,13 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool need_conv )
 	 *	full_matrix is set to 0.
 	 *	Computes BLN, BLM and BLMp for d_WH, d_Vr and d_Vc.
 	 *
-	 * need_conv: Set to 'true' if need to perform convergence test.
+	 * do_classf: Set to 'true' if classification vector will be computed.
 	 */
 
 	index_t BLN=0, BLM=0, BLMp=0;
 	bool full_matrix = 0;
 
-	if ( get_BLs( freeMem, num_devices, need_conv, &BLN, &BLM, &BLMp, &full_matrix ) == EXIT_FAILURE )
+	if ( get_BLs( mem_size, num_devices, do_classf, &BLN, &BLM, &BLMp, &full_matrix ) == EXIT_FAILURE )
 		return EXIT_FAILURE;
 
 	// -------------------------------------
@@ -1619,9 +1843,10 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool need_conv )
 
 		if ( maxSize_GPU > MIN( sizeVr, sizeVc ) ) {
 			fflush(stdout);
-			if ( ! device_id ) {
-				fprintf( stderr, "\nError: matrix size exceed the limits for this GPU device.\n
+			if ( ! device_id )
+				fprintf( stderr, "\nError: matrix size exceed the limits for this GPU device.\n"
 						"Current limit is set to %" PRI_IDX " items (not bytes).\n", maxSize_GPU );
+			return EXIT_FAILURE;
 		}
 	}
 
@@ -1630,14 +1855,14 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool need_conv )
 	// Initializes block information structures.
 
 	// block_N
-	#if NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		printf("\n[GPU%" PRI_IDX "] For dimension \"NnP\" = %" PRI_IDX " (N=%" PRI_IDX ", %" PRI_IDX " devices):\n",
 			device_id, NnP, N, num_devices);
 	#endif
 	init_block_conf( NnP, BLN, 0, &block_N );
 
 	// block_M
-	#if NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
+	#if NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		printf("\n[GPU%" PRI_IDX "] For dimension \"MnP\" = %" PRI_IDX " (%" PRI_IDX " with padding ; M=%" PRI_IDX ", %" PRI_IDX
 			" devices):\n", device_id, MnP, MnPp, M, num_devices );
 	#endif
@@ -1660,7 +1885,7 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool need_conv )
 	// if (full_matrix == true) && (num_devices == 1)
 	bool const single_matrix_V = ( full_matrix * (num_devices == 1) );
 
-	if ( allocate_dev_mem( BLN, BLMp, single_matrix_V, need_conv ) == EXIT_FAILURE )
+	if ( allocate_dev_mem( BLN, BLMp, single_matrix_V, do_classf ) == EXIT_FAILURE )
 		return EXIT_FAILURE;
 
 	// -----------------------------------
@@ -1689,7 +1914,7 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool need_conv )
 	// Finally, checks if everything was successfully initialized.
 
 	if ( check_cuda_status() == EXIT_FAILURE ) {
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error setting-up GPU data.\n" );
+		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error setting-up GPU data.\n", device_id );
 		finalize_GPU_data();
 		free_dev_mem();
 		return EXIT_FAILURE;
@@ -1704,245 +1929,11 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool need_conv )
 ////////////////////////////////////////////////////////////////////////////////
 
 /*
- * Destroys associated GPU data, such as CUDA Streams and/or CUDA Events.
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE
- */
-static int finalize_GPU_data()
-{
-
-	#if NMFGPU_VERBOSE_2
-		printf( "\n[GPU%" PRI_IDX "] Finalizing GPU data (single matrix=%i, num_NMF_streams=%" PRI_IDX ")...\n", device_id,
-			num_NMF_streams );
-	#endif
-
-	int status = EXIT_SUCCESS;	// Return status.
-
-	cudaError_t cuda_status = cudaSuccess;
-
-	// ------------------------------
-
-	/* CUDA Events for timing */
-	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_CONV
-		status = destroy_timing_events( device_id );
-	#endif
-
-	// ------------------------------
-
-	/* CUDA Streams for synchronization */
-
-	// Main-flow streams
-	for ( index_t st=0; st<num_NMF_streams; st++ ) {
-		cuda_status = cudaStreamDestroy( streams[ st ] );
-		if ( cuda_status != cudaSuccess ) {
-			fflush(stdout);
-			fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying stream object %" PRI_IDX "/%" PRI_IDX
-					" for synchronization on main flow: %s\n", device_id, st, num_NMF_streams,
-					cudaGetErrorString(cuda_status) );
-			status = EXIT_FAILURE;
-		}
-	}
-	free( (void *) NMF_streams );
-
-
-	// Synchronization stream for matrix reductions, data transfers and other operations on d_W and d_H.
-	cuda_status = cudaStreamDestroy( matrix_stream );
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf( stderr,"\n[GPU%" PRI_IDX "] Error destroying stream object for synchronization of some operations on d_W and d_H: %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-
-	// Stream for Vcol (i.e., set of columns from matrix V)
-	if ( Vcol_stream != Vrow_stream ) {
-		cuda_status = cudaStreamDestroy( Vcol_stream );
-		if ( cuda_status != cudaSuccess ) {
-			fflush(stdout);
-			fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying stream object for Vcol: %s\n", device_id,
-				cudaGetErrorString(cuda_status) );
-			status = EXIT_FAILURE;
-		}
-	} // if ( Vcol_streams != Vrow_streams )
-
-
-	// Stream for Vrow (i.e., set of rows from matrix V)
-
-	cuda_status = cudaStreamDestroy( Vrow_stream );
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying stream object for Vrow: %s\n", device_id,
-			cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-
-	// ----------------------------------
-
-
-	/* CUDA Events for synchronization. */
-
-
-	// Synchronization event for data transfers to/from d_W and d_H.
-	cuda_status = cudaEventDestroy( transfer_event );
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying event object for data transfers to/from d_W and d_H: %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-
-	// Synchronization event for data transfers and reductions on d_W and d_H.
-	cuda_status = cudaEventDestroy( matrix_event );
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying event object for synchronization of some operations on d_W and d_H: %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-
-	// Event for Vcol (i.e., set of columns from matrix V)
-	if ( Vcol_events != Vrow_events ) {
-		cuda_status = cudaEventDestroy( Vcol_event );
-		if ( cuda_status != cudaSuccess ) {
-			fflush(stdout);
-			fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying event object for Vcol: %s\n", device_id,
-				cudaGetErrorString(cuda_status) );
-			status = EXIT_FAILURE;
-		}
-	} // if ( Vcol_events != Vrow_events )
-
-
-	// Event for Vrow (i.e., set of rows from matrix V)
-	cuda_status = cudaEventDestroy( Vrow_event );
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error destroying event object for Vrow: %s\n", device_id,
-			cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	// ---------------------------------
-
-	#if NMFGPU_VERBOSE_2
-		printf( "\n[GPU%" PRI_IDX "] Finalizing GPU data (single matrix=%i, num_NMF_streams=%" PRI_IDX ")... Done.\n",
-			device_id, num_NMF_streams );
-	#endif
-
-	return status;
-
-} // finalize_GPU_data
-
-// =======================================================================
-
-/*
- * Frees all allocated device memory.
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE
- */
-static int free_dev_mem()
-{
-
-	#if NMFGPU_VERBOSE_2
-		printf("\n[GPU%" PRI_IDX "] Device memory clean-up...\n", device_id );
-	#endif
-
-	int status = EXIT_SUCCESS;	// Return status
-	cudaError_t cuda_status = cudaSuccess;
-
-	// -----------------------------------
-
-	cuda_status = cudaFree(d_scalar);
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_scalar): %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	cuda_status = cudaFree(d_accum);
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_accum): %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	if ( d_classification && ( (cuda_status=cudaFree(d_classification)) != cudaSuccess ) ){
-		fflush(stdout);
-		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_classification): %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	cuda_status = cudaFree(d_Aux);
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_Aux): %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	cuda_status = cudaFree(d_W);
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_W): %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	cuda_status = cudaFree(d_H);
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_H): %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	cuda_status = cudaFree(d_WH);
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_WH): %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	if ( (d_Vrow != d_Vcol) && ( (cuda_status=cudaFree(d_Vcol)) != cudaSuccess ) ) {
-		fflush(stdout);
-		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_Vcol): %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	cuda_status = cudaFree(d_Vrow);
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf(stderr, "\n[GPU%" PRI_IDX "] Error detected while freeing device memory (d_Vrow): %s\n",
-			device_id, cudaGetErrorString(cuda_status) );
-		status = EXIT_FAILURE;
-	}
-
-	// -----------------------------
-
-	#if NMFGPU_VERBOSE_2
-		printf("\n[GPU%" PRI_IDX "] Device memory clean-up... done\n", device_id );
-	#endif
-
-	return status;
-
-} // free_dev_mem
-
-////////////////////////////////////////////////////////////////////////////////
-
-/*
  * Shuts-down current CUBLAS/CUDA context.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int finalize_GPU()
+int finalize_GPU( void )
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1988,7 +1979,7 @@ int finalize_GPU()
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int finalize_GPUdevice()
+int finalize_GPUdevice( void )
 {
 
 	#if NMFGPU_VERBOSE
@@ -2063,7 +2054,7 @@ void *getHostMemory( size_t size, bool wc )
 	cudaError_t const cuda_status = cudaHostAlloc( (void**) &pHost, size, flags );
 	if ( cuda_status != cudaSuccess ) {
 		fflush(stdout);
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] getHostMemory: cudaHostAlloc(size=%zu bytes): %s\n", device_id,
+		fprintf( stderr, "\n[GPU%" PRI_IDX "] getHostMemory: cudaHostAlloc(size=%zu bytes): %s\n", device_id, size,
 			cudaGetErrorString(cuda_status) );
 		return NULL;
 	}
@@ -2104,7 +2095,7 @@ int freeHostMemory( void *__restrict__ pHost )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_randomGenerator()
+int init_randomGenerator( void )
 {
 
 	#if NMFGPU_VERBOSE
@@ -2228,7 +2219,7 @@ int set_randomGenerator_seed( unsigned long long seed )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int finalize_randomGenerator()
+int finalize_randomGenerator( void )
 {
 
 	#if NMFGPU_VERBOSE_2

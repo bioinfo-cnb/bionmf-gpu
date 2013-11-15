@@ -41,12 +41,12 @@
 
 // =======================================================================
 
-#if __CUDA_ARCH__ >= 110	/* Compute Capability >= 1.1 */
+#if (! __CUDA_ARCH__) || (__CUDA_ARCH__ >= 120)	/* Compute Capability >= 1.2 */
 
 	/* Global variable used in kernel_reduce_to_row().
 	 *	Please see the threadfenceReduction example in CUDA SDK for details.
 	 */
-	__device__ unsigned int retirement_count = 0;
+	__device__ unsigned int retirement_counter = 0;
 #endif
 
 // =======================================================================
@@ -87,7 +87,7 @@
  *
  * Returns the sum of the corresponding column. That is, sum(d_A[...][tx]).
  */
-template < bool ext_grid = false, bool single_Blk = false, index_t items_per_thread = REDUCE_TO_ROW__ITEMS_PER_THREAD >
+template < bool ext_grid, bool single_Blk, index_t items_per_thread>
 __device__ static real reduce_gmem_to_row( real const *__restrict__ d_A, index_t matrix_size, index_t bs, index_t offset )
 {
 
@@ -252,7 +252,7 @@ __device__ static real reduce_gmem_to_row( real const *__restrict__ d_A, index_t
  *
  * Returns the sum of the corresponding column. That is, sums[ty...(bdy-1)][tx]
  */
-template < index_t block_width = 0, index_t block_height = 0 >
+template < index_t block_width, index_t block_height >
 __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
 {
 
@@ -507,8 +507,7 @@ __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
  *		On Compute Capability 1.x:
  *			(block_width * block_height) > 512
  */
-template < bool ext_grid = false, bool single_Blk = false, index_t block_width = 0, index_t block_height = 0,
-	index_t items_per_thread = REDUCE_TO_ROW__ITEMS_PER_THREAD >
+template < bool ext_grid, bool single_Blk, index_t block_width, index_t block_height, index_t items_per_thread >
 __global__ static void kernel_reduce_to_row(real const *__restrict__ d_A,index_t matrix_size,real *__restrict__ d_Tmp,real *__restrict__ d_C)
 {
 
@@ -653,7 +652,7 @@ __global__ static void kernel_reduce_to_row(real const *__restrict__ d_A,index_t
 				// Thread (0,0) from each block takes a ticket.
 				if ( t0 ) {
 
-					unsigned int const ticket = atomicInc( &retirement_count, num_blocks );
+					unsigned int const ticket = atomicInc( &retirement_counter, num_blocks );
 
 					// If the ticket ID is equal to the number of blocks, then this is the last block.
 					*p_isLastBlock = ( ticket == ( num_blocks - 1 ) );
@@ -682,7 +681,7 @@ __global__ static void kernel_reduce_to_row(real const *__restrict__ d_A,index_t
 						d_C[ tx ] = sum_val;			//	d_C[0][tx] = shmem[0][tx]
 
 						// In addition, any of threads reset the counter (do not care which).
-						retirement_count = 0;
+						retirement_counter = 0;
 					}
 
 				} // if last_block
@@ -987,7 +986,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
  *				Since (maxGridSizeX == INT_MAX), then (IDX_MAX / maxGridSizeX) <= 2
  *				Therefore, (gridDim.x * bs) > IDX_MAX, and there is no need to set gridDim.y > 1.
  */
-template < bool grid_extension = false, index_t items_per_thread = DIV_SUB__ITEMS_PER_THREAD, bool div_operand = false >
+template < bool grid_extension, index_t items_per_thread, bool div_operand >
 __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index_t matrix_size )
 {
 
@@ -1237,7 +1236,7 @@ __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, ind
  *				Since (maxGridSizeX == INT_MAX), then (IDX_MAX / maxGridSizeX) <= 2
  *				Therefore, (gridDim.x * bs) > IDX_MAX, and there is no need to set gridDim.y > 1.
  */
-template <bool grid_extension = false, bool single_row = false, index_t items_per_thread = MUL_DIV__ITEMS_PER_THREAD >
+template <bool grid_extension, bool single_row, index_t items_per_thread >
 __global__ static void kernel_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, real const *__restrict__ d_accum_b,
 					index_t matrix_size )
 {
@@ -1516,7 +1515,7 @@ __host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, r
  *				Since (maxGridSizeX == INT_MAX), then (IDX_MAX / maxGridSizeX) <= 2
  *				Therefore, (gridDim.x * bs) > IDX_MAX, and there is no need to set gridDim.y > 1.
  */
-template < bool grid_extension = false, index_t items_per_thread = ADJUST__ITEMS_PER_THREAD >
+template < bool grid_extension, index_t items_per_thread >
 __global__ static void kernel_adjust( real *__restrict__ d_A, index_t matrix_size )
 {
 
@@ -1747,7 +1746,7 @@ __host__ void adjust( real *__restrict__ d_A, index_t pitch, index_t matrix_size
  *		On Compute Capabilities 2.0 - 3.5:
  *			block_width == 16 (used on Compute Capability 1.x only).
  */
-template < bool grid_extension = false, index_t block_width = IDX_MAX, index_t items_per_thread = IDX_MAX__ITEMS_PER_THREAD >
+template < bool grid_extension, index_t block_width, index_t items_per_thread >
 __device__ static void idx_max_gmem( real const *__restrict__ d_A, index_t width, index_t pitch, index_t matrix_size,
 					real *__restrict__ max_val, index_t *__restrict__ max_val_idx )
 {
@@ -1916,7 +1915,7 @@ __device__ static void idx_max_gmem( real const *__restrict__ d_A, index_t width
  *
  * TODO: Replace shared memory with warp-vote functions for Compute Capability >= 3.5.
  */
-template < index_t block_width = IDX_MAX >
+template < index_t block_width >
 __device__ static void idx_max_shmem( real *__restrict__ max_val, index_t *__restrict__ max_val_idx )
 {
 
@@ -2185,7 +2184,7 @@ __device__ static void idx_max_shmem( real *__restrict__ max_val, index_t *__res
  *			block_width == 16 (used on Compute Capability 1.x only).
  *
  */
-template < bool grid_extension = false, index_t block_width = IDX_MAX, index_t items_per_thread = IDX_MAX__ITEMS_PER_THREAD >
+template < bool grid_extension, index_t block_width, index_t items_per_thread >
 __global__ static void kernel_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch, index_t matrix_size,
 					index_t *__restrict__ d_Idx )
 {

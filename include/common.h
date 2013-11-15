@@ -35,21 +35,8 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
- *	Additional information:
- *		NMFGPU_VERBOSE: Shows some messages concerning the progress of the program, as well as some configuration parameters.
- *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
- *
- *	Timing:
- *		NMFGPU_PROFILING_CONV: Compute timing of convergence test. Shows additional information.
- *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
- *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
- *
  *	Debug / Testing:
- *		NMFGPU_FIXED_INIT: Initializes matrices W and H with fixed random values.
- *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
- *		NMFGPU_FORCE_BLOCKS: Forces the processing of the input matrix as four blocks.
- *		NMFGPU_FORCE_DIMENSIONS: Overrides matrix dimensions.
- *		NMFGPU_TEST_BLOCKS: Just shows block information structure. No GPU memory is allocated.
+ *		NMFGPU_FIXED_INIT: Uses "random" values generated from the fixed seed: FIXED_SEED.
  *
  **********************************************************
  **********************************************************
@@ -114,18 +101,23 @@
 
 ///////////////////////////////////////////////////////
 
+/* Always process this header as C code, not C++. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+//////////////////////////////////////////////////
+
 #include <stdbool.h>
 
 #include "index_type.h"
-#include "real_type.h"
 
 // ---------------------------------------------
 // ---------------------------------------------
 
 /* Constants */
 
-/* Default values for some parameters. */
-
+// Default values for some parameters.
 #ifndef DEFAULT_K
 	#define DEFAULT_K 2
 #endif
@@ -144,6 +136,12 @@
 
 #ifndef DEFAULT_GPU_DEVICE
 	#define DEFAULT_GPU_DEVICE 0
+#endif
+
+
+// Fixed seed for the random-values generator.
+#ifndef FIXED_SEED
+	#define FIXED_SEED 3
 #endif
 
 // ---------------------------------------------
@@ -165,41 +163,67 @@
 /* Structure for arguments */
 
 struct input_arguments {
-	char *filename;			// Input filename.
-	bool is_bin;			// File is (non-"native") binary.
-	bool numeric_hdrs;		// Has numeric columns headers.
-	bool numeric_lbls;		// Has numeric row labels.
+	char const *restrict filename;
+	bool numeric_hdrs;		// Input matrix has numeric columns headers (ignored for binary files).
+	bool numeric_lbls;		// Input matrix has numeric row labels (ignored for binary files).
+
+	index_t is_bin;			// Input file is binary.
+					// == 1 for non-native format (i.e., double-precision data, and "unsigned int" for dimensions).
+					// > 1 for native format (i.e., the compiled types for matrix data and dimensions).
+
+	index_t save_bin;		// Saves output matrices to binary files.
+					// == 1 for non-native format (i.e., double-precision data, and "unsigned int" for dimensions).
+					// > 1 for native format (i.e., the compiled types for matrix data and dimensions).
+
 	index_t k;			// Starting factorization rank.
 	index_t nIters;			// Maximum number of iterations per run.
 	index_t niter_test_conv;	// Number of iterations before testing convergence.
 	index_t stop_threshold;		// Stopping criterion.
-	index_t gpu_device;		// GPU device ID.
-	#if NMFGPU_FORCE_DIMENSIONS
-	index_t N, M;			// Matrix dimensions
-	#endif
+
+	index_t gpu_device;		// GPU device ID (NMF_[m]GPU only).
+
+	index_t idx_other_args;		// Index in argv[] with additional executable-specific arguments.
+
 };
 
 //////////////////////////////////////////////////
 //////////////////////////////////////////////////
 
-/* Always process this header as C code, not C++. */
-#ifdef __cplusplus
-extern "C" {
-#endif
+/*
+ * Prints to the specified file all arguments regarding
+ * the input matrix (e.g., matrix dimensions and format).
+ */
+void help_matrix( FILE *restrict file );
 
-//////////////////////////////////////////////////
+// -------------------------------------
+
+/*
+ * Prints to the specified file all arguments regarding
+ * the NMF algorithm (e.g., factorization rank, number of iterations, etc).
+ */
+void help_nmf( FILE *restrict file );
+
+// -------------------------------------
+
+/*
+ * Prints to the specified file all arguments regarding
+ * bioNMF-mGPU main program (single or multi-GPU version).
+ */
+void print_nmf_gpu_help( char const *restrict const execname, FILE *restrict file );
+
+// -------------------------------------
 
 /*
  * Checks all arguments.
  *
  * If verbose_error is 'true', shows error messages.
  *
- * Sets 'help' to 'true' if help message was requested ('-h', '-H', '--help' and '--HELP' options).
+ * Sets 'help' to 'true' if help message was requested ('-h' or '-H' options).
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int check_arguments( int argc, char *RESTRICT const *RESTRICT argv, bool verbose_error, bool *RESTRICT help,
-			struct input_arguments *RESTRICT arguments );
+int check_arguments( int argc, char const *restrict *restrict argv, bool verbose_error, bool *restrict help,
+			struct input_arguments *restrict arguments );
 
 // -------------------------------------
 
@@ -208,17 +232,24 @@ int check_arguments( int argc, char *RESTRICT const *RESTRICT argv, bool verbose
  */
 index_t get_difference( index_t const *restrict classification, index_t const *restrict last_classification, index_t m );
 
+// -------------------------------------
+
+/*
+ * Retrieves a "random" value that can be used as seed.
+ */
+index_t get_seed( void );
+
+///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
+
+#undef RESTRICT	/* To select the appropriate "restrict" keyword. */
+
 ///////////////////////////////////////////////////////
 
 /* Always process this header as C code, not C++. */
 #ifdef __cplusplus
 }
 #endif
-
-///////////////////////////////////////////////////////
-///////////////////////////////////////////////////////
-
-#undef RESTRICT	/* To select the appropriate "restrict" keyword. */
 
 ///////////////////////////////////////////////////////
 

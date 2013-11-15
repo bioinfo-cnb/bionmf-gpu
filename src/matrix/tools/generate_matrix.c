@@ -32,6 +32,20 @@
  * generate_matrix.c
  *	Program to generate a matrix with random values and save it to a file.
  *
+ * NOTE: The following macro constants can be defined to modify the
+ *	behavior of routines, as well as some constant and data-type definitions.
+ *
+ *	Additional information:
+ *		NMFGPU_VERBOSE: Shows some messages concerning the progress of the program, as well as some configuration parameters.
+ *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
+ *
+ *	Timing:
+ *		NMFGPU_PROFILING_GLOBAL: Compute total elapsed time.
+ *
+ *	Debug / Testing:
+ *		NMFGPU_FIXED_INIT: Uses "random" values generated from a fixed seed (defined in common.h).
+ *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
+ *
  * WARNING:
  *	- Requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
  *
@@ -42,28 +56,31 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-#include <getopt.h>
 #include <inttypes.h>	/* strtoumax */
-#include <math.h>	/* isless */
+#include <math.h>	/* isless, isgreater, isfinite */
+#if NMFGPU_PROFILING_GLOBAL
+	#include <sys/time.h>
+#endif
 
 #include "index_type.h"
 #include "real_type.h"
-#include "matrix_io/matrix_io_routines.h"
-#include "matrix_io/matrix_io.h"
+#include "matrix/matrix_io_routines.h"
+#include "matrix/matrix_io.h"
+#include "common.h"
 
-// -----------------------------------------------
+// ---------------------------------------------
+// ---------------------------------------------
 
-/* Structure for arguments */
+/* Constants */
 
-struct input_arguments {
-	char const *restrict filename;	// Output filename.
-	index_t nrows;			// Number of rows.
-	index_t ncols;			// Number of columns.
-	bool save_bin;			// Binary output file.
-	bool save_non_native;		// Non-"native" binary format (i.e., double-precision data).
-	real max_value;			// Maximum value.
-};
+/* Default values for some parameters. */
 
+#ifndef DEFAULT_MAXRAND
+	#define DEFAULT_MAXRAND ( REAL_C( 1.0 ) )
+#endif
+
+
+//////////////////////////////////////////////////
 //////////////////////////////////////////////////
 
 /*
@@ -84,291 +101,104 @@ static void print_generate_matrix_help( char const *restrict execname, FILE *res
 	// ---------------------------
 
 	fprintf( file,	"\nTool to generate (in CPU) a matrix with random values\n\n"
-			"Usage:\n\t%s <filename> <rows> <columns> [ -m <max_value> ] [ -bs ]\n\t%s [ -h | --help ]\n\n",
-			execname, execname );
+			"Usage:\n\t%s <filename> <rows> <columns> [ -e <native_format> ] [ <max_value> ]\n"
+			"\t%s -h\n\n", execname, execname );
 
-	fprintf( file,	"<filename>\tOutput filename (mandatory if 'help' is not requested).\n\n");
-	fprintf( file,	"<rows> <columns>\tOutput matrix dimensions (both mandatory if 'help' is not requested).\n"
-			"Note that <rows> x <columns> must be less than, or equal to, %" PRI_IDX ".\n\n", IDX_MAX);
+	help_matrix( file );
 
-	fprintf( file,	"-B,-b\tBinary output file (ASCII-text file by default).\n\n" );
-	fprintf( file,	"-M,-m <max_value>\n\tSets the range of random values to [0..<max_value>]. The default is 1.0. "
-			"Valid values are between %g and %g.\n\n", R_MIN, R_MAX);
-	fprintf( file,	"-S,-s\t(Non-\"native\") Binary format (i.e., double-precision data and unsigned int's). It implies the '-B' option.\n"
-			"\tThe default is to use the machine's \"native\" format (i.e., with the compiled types for matrix data "
-			"and dimensions).\n\n");
+	fprintf( file,	"Note: Some of the previous options are read for compatibility reasons, but they are ignored by the program.\n\n" );
 
-	fprintf( file,	"-h,-H,--help,--HELP\tPrints this help message.\n\n" );
+	fprintf( file,	"<rows> <columns>\n\tOutput matrix dimensions (both mandatory if 'help' is not requested).\n"
+			"\tNote that <rows> x <columns> must be less than, or equal to, %" PRI_IDX ".\n\n", IDX_MAX);
+
+	fprintf( file,	"<max_value>\n\tRange for random values: [0..<max_value>]. "
+			"Valid values are between %g and %g. The default is %g\n\n", R_MIN, R_MAX, DEFAULT_MAXRAND);
+
+	fprintf( file, "-h,-H\tPrints this help message.\n\n" );
 
 } // print_generate_matrix_help
 
 //////////////////////////////////////////////////
 
 /*
- * Checks all arguments.
+ * Checks additional arguments
+ * If verbose_error is 'true', shows error messages.
  *
- * Sets 'help' to 'true' if help message was requested ('-h', '-H', '--help' and '--HELP' options).
+ * Sets "help" to 'true' if not enough arguments.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static int check_generate_matrix_arguments( int argc, char *restrict const *restrict argv, bool *restrict help,
-					struct input_arguments *restrict arguments )
+static int check_additional_arguments( int argc, char const *restrict const *restrict argv, bool verbose_error, index_t idx_other_args,
+					index_t *restrict nrows, index_t *restrict ncols, real *restrict max_value, bool *restrict help )
 {
-
 	// Checks for NULL parameters
-	if ( ! ( (size_t) argv * (size_t) arguments * (size_t) help ) ) {
+	if ( ! ( ( argc > 0 ) * (size_t) argv * (size_t) nrows * (size_t) ncols * (size_t) max_value ) ) {
 		fflush( stdout );
 		errno = EFAULT;
-		if ( ! argv )	perror("\ncheck_generate_matrix_arguments( argv )");
-		if ( ! help )	perror("\ncheck_generate_matrix_arguments( help )");
-		if ( ! arguments ) perror("\ncheck_generate_matrix_arguments( arguments )");
+		if ( ! argv )	perror("\ncheck_additional_arguments( argv )");
+		if ( ! nrows )	perror("\ncheck_additional_arguments( nrows )");
+		if ( ! ncols )	perror("\ncheck_additional_arguments( ncols )");
+		if ( ! max_value ) perror("\ncheck_additional_arguments( max_value )");
 		return EXIT_FAILURE;
 	}
 
 	// ---------------------------
 
 	// Default values
-	char const *l_filename = NULL;		// Output filename
-	index_t l_nrows = 0;			// Number of rows.
-	index_t l_ncols = 0;			// Number of columns.
-	bool l_save_bin = false;		// Binary output file.
-	bool l_save_non_native = false;		// Non-"native" binary format (i.e., double-precision data).
-	real l_max_value = REAL_C( 1.0 );	// Maximum random value.
+	index_t l_nrows = 0, l_ncols = 0;	// Matrix dimensions
+	real l_max_value = DEFAULT_MAXRAND;	// Maximum value
+	*help = false;
 
-	int opt = 0;	// Selected option
-	opterr = 0;	// Disables error messages.
+	// ---------------------------
 
-	// Long options: Help
-	struct option const longopt[3] = { { "help", no_argument, NULL, 'h' }, { "HELP", no_argument, NULL, 'H' }, { NULL, 0, NULL, 0 } };
-
-	/*
-	 * Reads option arguments:
-	 *
-	 *	-b ("native"-binary input file)
-	 *	-m <max_value> (maximum random value)
-	 *	-s (Non-"native"-binary format)
-	 */
-
-	// NOTE: First colon (':') indicates to return ':' instead of '?' in case of a missing option argument.
-	while ( (opt = getopt_long( argc, (char *const *restrict) argv, ":BbHhM:m:Ss", longopt, NULL) ) != -1 ) {
-
-		switch( opt ) {
-
-			// Binary file format.
-			case 'B':
-			case 'b':
-				l_save_bin = true;
-			break;
-
-
-			// Prints a help message.
-			case 'H':
-			case 'h':
-				*help = true;		// Help is printed on return of this function.
-				return EXIT_SUCCESS;
-			// break;	// Unreachable statement
-
-
-			// Maximum random value
-			case 'M':
-			case 'm':
-				errno = 0;
-				char *endptr = NULL;
-				l_max_value = STRTOREAL( optarg, &endptr );
-				if ( (errno + (*endptr != '\0')) || (! isfinite(l_max_value)) ||
-					isless( l_max_value, R_MIN ) || isgreater( l_max_value, R_MAX ) ) {
-					fflush(stdout);
-					fprintf(stderr,"\nError: invalid maximum value: '%s'\nValid values are between %g and %g.\n",
-						optarg, R_MIN, R_MAX );
-					return EXIT_FAILURE;
-				}
-			break;
-
-
-			// Non-"native" binary file.
-			case 'S':
-			case 's':
-				l_save_non_native = true;
-				l_save_bin = true;		// Implies "binary format".
-			break;
-
-
-			// Missing argument
-			case ':':
-				fflush(stdout);
-				fprintf( stderr, "\nError: option -%c requires an argument.\n", optopt );
-				*help = true;		// Help is printed on return of this function.
-				return EXIT_FAILURE;
-			// break;	// Unreachable statement
-
-
-			// Invalid option
-			case '?':
-				fflush(stdout);
-				if ( optopt ) {
-					if ( isprint( optopt ) )
-						fprintf( stderr, "\nError: invalid option: '-%c'.\n", optopt );
-					else
-						fprintf( stderr, "\nError: invalid option character: '\\x%x'.\n", optopt );
-				}
-				else
-					fprintf( stderr, "\nError: invalid option: '%s'.\n", argv[optind-1] );
-				*help = true;		// Help is printed on return of this function.
-				return EXIT_FAILURE;
-			// break;	// Unreachable statement
-
-		} // switch( opt )
-
-	} // while there are options to read.
-
-	// -----------------------------
-
-	// Checks non-option argument(s)
-
-	if ( optind >= (argc-3) ) {
+	// Fails if no more arguments
+	if ( idx_other_args >= (argc-1) ) {
 		fflush(stdout);
-		fprintf( stderr, "\nError: Not enough arguments.\n" );
+		if ( verbose_error )
+			fprintf( stderr, "\nError: No matrix dimensions. Not enough arguments.\n" );
 		*help = true;		// Help is printed on return of this function.
 		return EXIT_FAILURE;
 	}
 
-	// Output filename
-	l_filename = argv[optind];
-	optind++;
+	// ---------------------------
 
 	// Number of rows
 	{
 		errno = 0;
 		char *endptr = NULL;
-		uintmax_t val = strtoumax( argv[optind], &endptr, 10 );
+		uintmax_t val = strtoumax( argv[idx_other_args], &endptr, 10 );
 		if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
 			fflush(stdout);
-			fprintf( stderr, "\nError. Invalid number of rows: '%s'.\n", optarg );
+			fprintf( stderr, "\nError. Invalid number of rows: '%s'.\n", argv[idx_other_args] );
 			if ( val > IDX_MAX )
 				fprintf( stderr, "It must be less than or equal to %" PRI_IDX ".\n", IDX_MAX );
 			return EXIT_FAILURE;
 		}
 		l_nrows = (index_t) val;
 	}
-	optind++;
+	idx_other_args++;
 
 	// Number of columns
 	{
 		errno = 0;
 		char *endptr = NULL;
-		uintmax_t val = strtoumax( argv[optind], &endptr, 10 );
+		uintmax_t val = strtoumax( argv[idx_other_args], &endptr, 10 );
 		if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
 			fflush(stdout);
-			fprintf( stderr, "\nError. Invalid number of columns: '%s'.\n", optarg );
+			fprintf( stderr, "\nError. Invalid number of columns: '%s'.\n", argv[idx_other_args] );
 			if ( val > IDX_MAX )
 				fprintf( stderr, "It must be less than or equal to %" PRI_IDX ".\n", IDX_MAX );
 			return EXIT_FAILURE;
 		}
 		l_ncols = (index_t) val;
 	}
-	// optind++;	// Not necessary
+	idx_other_args++;
 
-	// -----------------------------
-
-	// Resets extern variables.
-	optarg = NULL;
-	optind = opterr = optopt = 0;
-
-	// --------------------
-
-	// Sets output values.
-
-	struct input_arguments l_arguments;
-
-	l_arguments.filename = l_filename;
-	l_arguments.nrows = l_nrows;
-	l_arguments.ncols = l_ncols;
-
-	l_arguments.save_bin = l_save_bin;
-	l_arguments.save_non_native = l_save_non_native;
-	l_arguments.max_value = l_max_value;
-
-	*arguments = l_arguments;
-
-	return EXIT_SUCCESS;
-
-} // check_generate_matrix_arguments
-
-//////////////////////////////////////////////////
-
-/*
- * Initializes the random generator.
- */
-static void init_random()
-{
-
-	// Sets the seed.
-	unsigned int seed = 0;
-
-	// Reads the seed from the special file /dev/urandom
-	FILE *restrict file = fopen("/dev/urandom", "r");
-
-	if ( ! file ) || ( ! fread( &seed, sizeof(unsigned int), 1, file ) ) {
-
-		if ( file )
-			fclose(file);
-
-		// Failed to read: Sets the seed from the clock.
-
-		struct timeval tv;
-		gettimeofday(&tv, NULL);
-		time_t usec = tv.tv_usec;
-		seed = (unsigned int) usec;
-
-	}
-
-	// Initializes the random generator.
-	srandom( seed );
-
-} // init_random
-
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
-
-int main( int argc, char *restrict const *restrict argv )
-{
-
-	/* Reads all parameters and performs error-checking. */
-
-	bool help = false;	// Help message requested
-
-	struct input_arguments arguments;
-
-	// Checks all arguments (shows error messages).
-	if ( check_generate_matrix_arguments( argc, argv, &help, &arguments ) == EXIT_FAILURE ) {
-		if ( help ) {
-			fprintf(stderr, "\n==========\n");
-			print_generate_matrix_help( *argv, stderr );
-		}
-		fflush(NULL);
-		return EXIT_FAILURE;
-	}
-
-	// If help was requested, just prints a help message and returns.
-	if ( help ) {
-		print_generate_matrix_help( *argv, stdout );
-		fflush(NULL);
-		return EXIT_SUCCESS;
-	}
-
-	char const *restrict const filename = arguments.filename;	// Output filename
-	index_t const nrows = arguments.nrows;				// Number of rows.
-	index_t const ncols = arguments.ncols;				// Number of columns.
-	bool const save_bin = arguments.save_bin;			// Binary output file.
-	bool const save_non_native = arguments.save_non_native;		// Non-"native" binary format (i.e., double-precision data).
-	real const max_value = arguments.max_value;			// Maximum value.
-
-	// ----------------------------------------
 
 	// Checks number of items.
 	{
-		uintmax_t nitems = nrows * ncols;
-		if ( nitems > IDX_MAX ) {
+		uintmax_t const nitems = ((uintmax_t) l_nrows * (uintmax_t) l_ncols);
+		if ( nitems > (uintmax_t) IDX_MAX ) {
 			fflush(stdout);
 			fprintf( stderr, "\nError: output matrix too large. The number of items must be less than, or equal to, %"
 					PRI_IDX ".\n", IDX_MAX );
@@ -376,13 +206,113 @@ int main( int argc, char *restrict const *restrict argv )
 		}
 	}
 
-	// -----------------------------------
+	// ---------------------------
+
+	// Maximum random value (optional)
+	if ( idx_other_args < argc ) {
+		errno = 0;
+		char *endptr = NULL;
+		l_max_value = STRTOREAL( argv[idx_other_args], &endptr );
+		if ( (errno + (*endptr != '\0')) || (! isfinite(l_max_value)) ||
+			isless( l_max_value, R_MIN ) || isgreater( l_max_value, R_MAX ) ) {
+			fflush(stdout);
+			fprintf(stderr,"\nError: invalid maximum value: '%s'\nValid values are between %g and %g.\n",
+				argv[idx_other_args], R_MIN, R_MAX );
+			return EXIT_FAILURE;
+		}
+		// idx_other_args++; // Not necessary
+	}
+
+	// ---------------------------
+
+	*nrows = l_nrows;
+	*ncols = l_ncols;
+	*max_value = l_max_value;
+
+	return EXIT_SUCCESS;
+
+} // check_additional_arguments
+
+//////////////////////////////////////////////////
+//////////////////////////////////////////////////
+
+int main( int argc, char const *restrict *restrict argv )
+{
+
+	#if NMFGPU_PROFILING_GLOBAL
+		// Elapsed time
+		struct timeval t_tv;
+	#endif
+
+	// ----------------------------------------
+
+	/* Reads all parameters and performs error-checking. */
+
+	bool help = false;			// Help message requested
+
+	struct input_arguments arguments;	// Input arguments
+
+	// Checks all arguments (shows error messages).
+	if ( check_arguments( argc, argv, true, &help, &arguments ) == EXIT_FAILURE ) {
+		if ( help ) {
+			fprintf(stderr, "\n==========\n");
+			print_generate_matrix_help( argv[0], stderr );
+		}
+		fflush(NULL);
+		return EXIT_FAILURE;
+	}
+
+	// If help was requested, just prints a help message and returns.
+	if ( help ) {
+		print_generate_matrix_help( argv[0], stdout );
+		fflush(NULL);
+		return EXIT_SUCCESS;
+	}
+
+	char const *restrict const filename = arguments.filename;	// Output filename
+	index_t const save_bin = arguments.save_bin;			// Output file is binary (native or non-native format).
+	index_t const idx_other_args = arguments.idx_other_args;	// Index in argv[] with additional arguments.
+
+	// ----------------------------------------
+
+	// Additional arguments.
+
+	index_t nrows = 0, ncols = 0;
+	real max_value = DEFAULT_MAXRAND;
+
+	if ( check_additional_arguments( argc, argv, true, idx_other_args, &nrows, &ncols, &max_value, &help ) == EXIT_FAILURE ) {
+		if ( help ) {
+			fprintf(stderr, "\n==========\n");
+			print_generate_matrix_help( argv[0], stderr );
+		}
+		fflush(NULL);
+		return EXIT_FAILURE;
+	}
+
+	// ----------------------------------------
+
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_READ_MATRIX || NMFGPU_DEBUG_READ_MATRIX2 \
+		|| NMFGPU_DEBUG_READ_FILE || NMFGPU_DEBUG_READ_FILE2
+		// Removes the buffer associated to 'stdout' in order to prevent losing messages if the program crashes.
+		setbuf( stdout, NULL );
+	#endif
+
+	// ----------------------------------------
 
 	// Generates the output matrix
 	index_t nitems = nrows * ncols;
 
 	printf( "\nGenerating a %" PRI_IDX "-by-%" PRI_IDX " data matrix (%" PRI_IDX " items, with random values in range [0..%g])...\n",
 		nrows, ncols, nitems, max_value );
+
+	// ----------------------------------------
+
+	#if NMFGPU_PROFILING_GLOBAL
+		// Elapsed time
+		gettimeofday( &t_tv, NULL );
+	#endif
+
+	// ----------------------------------------
 
 	real *restrict matrix = malloc( nitems * sizeof(real) );
 	if ( ! matrix ) {
@@ -392,47 +322,50 @@ int main( int argc, char *restrict const *restrict argv )
 		return EXIT_FAILURE;
 	}
 
-	init_random();	// Initializes the random seed.
+	// Seed for the random generator.
+	index_t seed = get_seed();
+
+	srandom( (unsigned int) seed );	// Initializes the random generator.
 
 	for ( index_t i=0 ; i < nitems ; i++ ) {
 		real val = ( ((real) random() ) / ((real) RAND_MAX) ) * max_value;	// Value in range [0..<max_value>]
 		matrix[ i ] = val;
 	}
 
-	// -----------------------------------
+	// ----------------------------------------
 
 	// Saves the output matrix.
 
 	struct matrix_labels ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
-	int status = EXIT_SUCCESS;
 
-	printf("Saving output file in ");
-
-	if ( save_bin ) {	// Binary format
-
-		if ( save_non_native ) {
-			printf("(non-\"native\") binary format (i.e., with double-precision data, and unsigned int's as matrix dimensions)...\n");
-			status = matrix_save_binary( filename, matrix, nrows, ncols, false, &ml, ncols );
-		} else {
-			printf("\"native\" binary format (i.e., with the compiled types for matrix data and dimensions)...\n");
-			status = matrix_save_binary_native( filename, matrix, nrows, ncols, &ml );
-		}
-
-	// ASCII text
-	} else {
-		printf("ASCII-text format...\n");
-		status = matrix_save_ascii( filename, matrix, nrows, ncols, false, false, &ml, ncols );
+	int status = matrix_save( filename, save_bin, matrix, nrows, ncols, false, &ml, ncols );
+	if ( status == EXIT_FAILURE ) {
+		free( matrix );
+		fflush(NULL);
+		return EXIT_FAILURE;
 	}
 
-	// -----------------------------------
+	// ----------------------------------------
 
-	if ( status == EXIT_SUCCESS )
-		printf("Done.\n");
+	#if NMFGPU_PROFILING_GLOBAL
+		// Elapsed time
+		{
+			struct timeval t_ftv, t_etv;
+			gettimeofday( &t_ftv, NULL );
+			timersub( &t_ftv, &t_tv, &t_etv );	// etv = ftv - tv
+			double const total_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06 );
+			printf( "\nDone in %g seconds.\n", total_time );
+		}
+	#endif
+
+	// ----------------------------------------
 
 	free( matrix );
 
 	fflush(NULL);
 
-	return status;
+	return EXIT_SUCCESS;
 
 } // main
+
+//////////////////////////////////////////////////

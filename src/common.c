@@ -35,21 +35,8 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
- *	Additional information:
- *		NMFGPU_VERBOSE: Shows some messages concerning the progress of the program, as well as some configuration parameters.
- *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
- *
- *	Timing:
- *		NMFGPU_PROFILING_CONV: Compute timing of convergence test. Shows additional information.
- *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
- *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
- *
  *	Debug / Testing:
- *		NMFGPU_FIXED_INIT: Initializes matrices W and H with fixed random values.
- *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
- *		NMFGPU_FORCE_BLOCKS: Forces the processing of the input matrix as four blocks.
- *		NMFGPU_FORCE_DIMENSIONS: Overrides matrix dimensions.
- *		NMFGPU_TEST_BLOCKS: Just shows block information structure. No GPU memory is allocated.
+ *		NMFGPU_FIXED_INIT: Uses "random" values generated from a fixed seed (defined in common.h).
  *
  **********************************************************
  **********************************************************
@@ -114,54 +101,127 @@
 #include <errno.h>
 #include <string.h>
 #include <inttypes.h>	/* strtoumax */
-#include <getopt.h>
+#include <unistd.h>	/* getopt */
+#include <ctype.h>	/* isprint */
+#if ! NMFGPU_FIXED_INIT
+	#include <sys/time.h>	/* gettimeofday */
+#endif
 
 #include "common.h"
 
 ///////////////////////////////////////////////////////
+///////////////////////////////////////////////////////
 
 /*
- * Prints all arguments to the specified file.
+ * Prints to the specified file all arguments regarding
+ * the input matrix (e.g., matrix dimensions and format).
  */
-void print_help( char const *restrict const execname, FILE *restrict file )
+void help_matrix( FILE *restrict file )
+{
+
+	// Checks for NULL parameters
+	if ( ! file ) {
+		fflush( stdout );
+		errno = EFAULT;
+		perror("\nhelp_matrix( file=NULL )");
+		return;
+	}
+
+	// ---------------------------
+
+	fprintf( file, "<filename>\n\tInput data matrix (mandatory if 'help' is not requested).\n\n");
+
+	fprintf( file, "-B,-b <native>\n\tBinary input file in \"native\" ('-b 1') or \"non-native\" format ('-b 0').\n"
+			"\tIn NON-native format, the file is read assuming it was written using double-precision data, and unsigned "
+			"integers for matrix\n\tdimensions, regardless how the program was compiled.\n"
+			"\tOtherwise, in \"native\" format, the file is read using the data types specified at compilation "
+			"(e.g., floats and signed int).\n\tPlease note that native mode skips most error-checking and information messages.\n"
+			"\tThe default (if '-b' is not specified) is to read input data from an ASCII-text file.\n\n" );
+
+	fprintf( file, "-C,-c\tInput text file has numeric column headers (disabled by default, ignored for binary files).\n\n");
+
+	fprintf( file, "-R,-r\tInput text file has numeric row labels (disabled by default, ignored for binary files).\n\n");
+
+	fprintf( file, "-E,-e <native>\n\tWrite output files as \"native\" ('-e 1') or \"non-native\" binary format ('-e 0').\n"
+			"\tIn NON-native format, the file is written using double-precision data, and unsigned integers for matrix dimensions, "
+			"regardless\n\thow the program was compiled.\n"
+			"\tOtherwise, in \"native\" or raw format, the file is written using the data types specified at compilation "
+			"(e.g., floats and signed int).\n\tPlease note that native mode skips error checking, information messages, and "
+			"data transformation (e.g., matrix transposing).\n"
+			"\tThe default (if '-e' is not specified) is to write output data to an ASCII-text file.\n\n" );
+
+} // help_matrix
+
+///////////////////////////////////////////////////////
+
+/*
+ * Prints to the specified file all arguments regarding
+ * the NMF algorithm (e.g., factorization rank, number of iterations, etc).
+ */
+void help_nmf( FILE *restrict file )
+{
+
+	if ( ! file ) {
+		fflush( stdout );
+		errno = EFAULT;
+		perror("\nhelp_nmf( file=NULL )");
+		return;
+	}
+
+	// ---------------------------
+
+	fprintf( file, "-K,-k <factorization_rank>\n\tFactorization Rank (default: K=%" PRI_IDX ").\n\n", DEFAULT_K );
+
+	fprintf( file, "-I,-i <nIters>\n\tMaximum number of iterations (%" PRI_IDX " by default).\n\n", DEFAULT_NITERS );
+
+	fprintf( file, "-J,-j <niter_test_conv>\n\tPerform a convergence test each <niter_test_conv> iterations (default: %" PRI_IDX ").\n"
+			"\tIf this value is greater than <nIters> (see '-i' option), no test is performed\n\n", DEFAULT_NITER_CONV );
+
+	fprintf( file, "-T,-t <stop_threshold>\n\tStopping threshold (default: %" PRI_IDX ").\n"
+			"\tWhen matrix H has not changed on the last <stop_threshold> times that the convergence test\n\thas been performed, "
+			"it is considered that the algorithm has converged to a solution and stops it.\n\n", DEFAULT_STOP_THRESHOLD );
+
+} // help_nmf
+
+///////////////////////////////////////////////////////
+
+/*
+ * Prints to the specified file all arguments regarding
+ * bioNMF-mGPU main program (single or multi-GPU version).
+ */
+void print_nmf_gpu_help( char const *restrict const execname, FILE *restrict file )
 {
 
 	// Checks for NULL parameters
 	if ( ! ( (size_t) execname * (size_t) file ) ) {
 		fflush( stdout );
 		errno = EFAULT;
-		if ( ! execname ) perror("\nprint_file_converter_help( execname )");
-		if ( ! file )	perror("\nprint_file_converter_help( file )");
+		if ( ! execname ) perror("\nprint_nmf_gpu_help( execname )");
+		if ( ! file )	perror("\nprint_nmf_gpu_help( file )");
 		return;
 	}
 
 	// ---------------------------
 
 	fprintf( file, "\n\t<< bioNMF-mGPU: Non-negative Matrix Factorization on GPU for Biology >>\n\n"
-			"Usage:\n\t%s <filename> [ -bcr ] [ -k <factorization_rank> ] [ -i <nIters> ] "
-			"[ -j <niter_test_conv> ] [ -t <stop_threshold> ]\n\t%s [ -h | --help ]\n\n", execname, execname );
+			"Usage:\n\t%s <filename> [ -b native_format ] [ -cr ] [ -k <factorization_rank> ] [ -i <nIters> ] "
+			"[ -j <niter_test_conv> ] [ -t <stop_threshold> ] [ -e native_format ] [ -z device_ID ]\n\t%s -h\n\n",
+			execname, execname );
 
-	fprintf( file, "<filename>\n\tInput data matrix (mandatory if 'help' is not requested).\n\n");
+	fprintf( file, "---------------\n\nData matrix options:\n\n" );
+	help_matrix( file );
 
-	fprintf( file, "-B,-b\tInput file is in (non-\"native\") binary format (i.e., double-precision data and unsigned int's).\n"
-			"\tOtherwise, (the default) input file is an ASCII-text file.\n\n" );
-	fprintf( file, "-C,-c\tInput text file has numeric column headers (disabled by default).\n\n");
-	fprintf( file, "-R,-r\tInput text file has numeric row labels (disabled by default).\n\n");
+	fprintf( file, "---------------\n\nNMF options:\n\n" );
+	help_nmf( file );
 
-	fprintf( file, "-K,-k <factorization_rank>\n\tFactorization Rank (default: K=%" PRI_IDX ").\n\n", DEFAULT_K );
-	fprintf( file, "-I,-i <nIters>\n\tNumber of iterations (%" PRI_IDX " by default).\n\n", DEFAULT_NITERS );
-	fprintf( file, "-J,-j <niter_test_conv>\n\tPerform a convergence test each <niter_test_conv> iterations (default: %" PRI_IDX ").\n"
-			"\tIf this value is greater than <nIters> (see '-i' option), no convergence test is performed\n\n", DEFAULT_NITER_CONV );
-	fprintf( file, "-T,-t <stop_threshold>\n\tStopping threshold (default: %" PRI_IDX ").\n"
-			"\tWhen matrix H has not changed on the last <stop_threshold> times that the convergence test\n\thas been performed, "
-			"it is considered that the algorithm has converged to a solution and stops it.\n\n", DEFAULT_STOP_THRESHOLD );
-
-	fprintf( file, "-h,-H,--help,--HELP\n\tPrints this help message.\n\n" );
+	fprintf( file, "---------------\n\nOther options:\n\n" );
 
 	fprintf( file, "-Z,-z <GPU device>\n\tGPU device ID to attach on (default: %i).\n\t"
-			"On multi-GPU systems, devices will be selected from this value.\n\n", DEFAULT_GPU_DEVICE );
+			"On the multi-GPU version, devices will be selected from this value.\n\n", DEFAULT_GPU_DEVICE );
 
-} // print_help
+	fprintf( file, "-h,-H\tPrints this help message.\n\n" );
+
+} // print_nmf_gpu_help
 
 ///////////////////////////////////////////////////////
 
@@ -170,16 +230,16 @@ void print_help( char const *restrict const execname, FILE *restrict file )
  *
  * If verbose_error is 'true', shows error messages.
  *
- * Sets 'help' to 'true' if help message was requested ('-h', '-H', '--help' and '--HELP' options).
+ * Sets 'help' to 'true' if help message was requested ('-h' or '-H' options).
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int check_arguments( int argc, char *restrict const *restrict argv, bool verbose_error, bool *restrict help,
+int check_arguments( int argc, char const *restrict *restrict argv, bool verbose_error, bool *restrict help,
 			struct input_arguments *restrict arguments )
 {
 
-	// Checks for NULL parameters
-	if ( ! ( (size_t) argv * (size_t) arguments * (size_t) help ) ) {
+	// Checks for invalid parameters
+	if ( ! ( (argc > 0) * (size_t) argv * (size_t) arguments * (size_t) help ) ) {
 		fflush( stdout );
 		errno = EFAULT;
 		if ( ! argv )	perror("\ncheck_arguments( argv )");
@@ -191,45 +251,70 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 	// ---------------------------
 
 	// Default values
-	char *l_filename = NULL;				// Input filename
-	bool l_is_bin =	0;					// File is (non-"native") binary.
-	bool l_numeric_hdrs = 0;				// Has numeric columns headers.
-	bool l_numeric_lbls = 0;				// Has numeric row labels.
+	char const *l_filename = NULL;
+	bool l_numeric_hdrs = false;	// Has numeric columns headers.
+	bool l_numeric_lbls = false;	// Has numeric row labels.
+
+	index_t l_is_bin = 0;		// Input file is binary.
+					// == 0 for ASCII-text format.
+					// == 1 for non-native binary format (i.e., double-precision data, and "unsigned int" for dimensions).
+					// > 1 for native binary format (i.e., the compiled types for matrix data and dimensions).
+
+	index_t l_save_bin = 0;		// Saves output matrices to binary files.
+					// == 0 for ASCII-text format.
+					// == 1 for non-native format (i.e., double-precision data, and "unsigned int" for dimensions).
+					// > 1 for native format (i.e., the compiled types for matrix data and dimensions).
+
 	index_t l_k = DEFAULT_K;				// Factorization rank.
 	index_t l_nIters = DEFAULT_NITERS;			// Maximum number of iterations per run.
 	index_t l_niter_test_conv = DEFAULT_NITER_CONV;		// Number of iterations before testing convergence.
 	index_t l_stop_threshold = DEFAULT_STOP_THRESHOLD;	// Stopping criterion.
-	index_t l_gpu_device = DEFAULT_GPU_DEVICE;		// Device ID.
+	index_t l_gpu_device = DEFAULT_GPU_DEVICE;		// Device ID (NMF_[m]GPU only).
 
-	int opt = 0;	// Selected option
+	index_t l_idx_other_args = 0;	// Index in argv[] with additional executable-specific arguments.
+
+	// ---------------------------
+
+	// Resets getopt(3) variables.
+	optind = 0;
 	opterr = 0;	// Disables error messages.
 
-	// Long options: Help
-	struct option const longopt[3] = { { "help", no_argument, NULL, 'h' }, { "HELP", no_argument, NULL, 'H' }, { NULL, 0, NULL, 0 } };
+	int opt = 0;	// Selected option
 
 	/* Reads option arguments:
 	 *
-	 *	-b (binary input file)
-	 *	-c (input file has numeric column headers)
-	 *	-h | -H | --help | --HELP
+	 *	-b native
+	 *	-c
+	 *	-e native
+	 *	-h
 	 *	-i nIters
 	 *	-j niter_test_conv
 	 *	-k kStart
-	 *	-r (input file has numeric row labels)
+	 *	-r
 	 *	-t stop_threshold
 	 *	-z gpu_device
 	 */
 
 	// NOTE: First colon (':') indicates to return ':' instead of '?' in case of a missing option argument.
-	while ( (opt = getopt_long( argc, argv, ":BbCcHhI:i:J:j:K:k:RrT:t:Z:z:", longopt, NULL) ) != -1 ) {
+	while ( (opt = getopt( argc, (char *const *) argv, ":B:b:CcE:e:HhI:i:J:j:K:k:RrT:t:Z:z:" ) ) != -1 ) {
 
 		switch( opt ) {
 
-			// Input file is (non-"native") binary.
+			// Input file is binary.
 			case 'B':
-			case 'b':
-				l_is_bin = true;
-			break;
+			case 'b': {
+				errno = 0;
+				char *endptr = NULL;
+				uintmax_t val = strtoumax( optarg, &endptr, 10 );
+				if ( (*endptr != '\0') + errno ) {
+					fflush(stdout);
+					if ( verbose_error )
+						fprintf( stderr, "\nError. Invalid binary mode for input file: '%s'. It must be a "
+								"non-negative integer value.\n", optarg );
+					return EXIT_FAILURE;
+				}
+				l_is_bin = (index_t) ( val ? 2 : 1 );
+			} break;
 
 
 			// Input file has numeric column headers
@@ -237,6 +322,23 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 			case 'c':
 				l_numeric_hdrs = true;
 			break;
+
+
+			// Saves as a binary file.
+			case 'E':
+			case 'e': {
+				errno = 0;
+				char *endptr = NULL;
+				uintmax_t val = strtoumax( optarg, &endptr, 10 );
+				if ( (*endptr != '\0') + errno ) {
+					fflush(stdout);
+					if ( verbose_error )
+						fprintf( stderr, "\nError. Invalid binary mode for output file(s): '%s'. It must be a "
+								"non-negative integer value.\n", optarg );
+					return EXIT_FAILURE;
+				}
+				l_save_bin = (index_t) ( val ? 2 : 1 );
+			} break;
 
 
 			// Prints a help message.
@@ -252,7 +354,7 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 			case 'i': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( argv[optind], &endptr, 10 );
+				uintmax_t val = strtoumax( optarg, &endptr, 10 );
 				if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
 					fflush(stdout);
 					if ( verbose_error )
@@ -270,7 +372,7 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 			case 'j': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( argv[optind], &endptr, 10 );
+				uintmax_t val = strtoumax( optarg, &endptr, 10 );
 				if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
 					fflush(stdout);
 					if ( verbose_error )
@@ -287,7 +389,7 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 			case 'k': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( argv[optind], &endptr, 10 );
+				uintmax_t val = strtoumax( optarg, &endptr, 10 );
 				if ( (*endptr != '\0') + errno + (val < 2) + (val > IDX_MAX) ) {
 					fflush(stdout);
 					if ( verbose_error )
@@ -311,7 +413,7 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 			case 't': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( argv[optind], &endptr, 10 );
+				uintmax_t val = strtoumax( optarg, &endptr, 10 );
 				if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
 					fflush(stdout);
 					if ( verbose_error )
@@ -333,8 +435,8 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 				if ( (*endptr != '\0') + errno + (val > INT_MAX) ) {
 					fflush(stdout);
 					if ( verbose_error )
-						fprintf( stderr, "\nError: invalid device ID number '%s'. "
-								"It must be a positive integer value less than or equal to %" PRI_IDX "\n",
+						fprintf( stderr, "\nError: invalid basis device ID number '%s'. "
+								"It must be a non-negative integer value less than or equal to %" PRI_IDX "\n",
 								optarg, INT_MAX );
 					return EXIT_FAILURE;
 				}
@@ -376,11 +478,11 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 
 	// Checks non-option argument(s)
 
-	// Input filename
+	// Filename
 	if ( optind >= argc ) {
 		fflush(stdout);
 		if ( verbose_error )
-			fprintf( stderr, "\nError: No input filename. Not enough arguments.\n" );
+			fprintf( stderr, "\nError: No filename. Not enough arguments.\n" );
 		*help = true;		// Help is printed on return of this function.
 		return EXIT_FAILURE;
 	}
@@ -389,24 +491,12 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 
 	// -----------------------------
 
-	#if NMFGPU_FORCE_DIMENSIONS
-	/* Uses optional arguments to force matrix dimensions. */
-	index_t l_N = 0, l_M = 0;
-	if ( optind < (argc-1) ) {	// argc-1: At least two arguments.
-		l_N = atoi( argv[ optind++ ] );
-		l_M = atoi( argv[ optind++ ] );
-		if ( ( l_N <= 0 ) || ( l_M <= 0 ) ) {
-			fflush(stdout);
-			if ( verbose_error )
-				fprintf( stderr, "\nError: Invalid forced matrix dimensions: '%i' x '%i'\n", l_N, l_M );
-			return EXIT_FAILURE;
-		}
-	}
-	#endif
+	// Additional executable-specific arguments.
+	l_idx_other_args = optind;
 
 	// -----------------------------
 
-	// Resets extern variables.
+	// Resets getopt(3) variables.
 	optarg = NULL;
 	optind = opterr = optopt = 0;
 
@@ -417,10 +507,11 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 	struct input_arguments l_arguments;
 
 	l_arguments.filename = l_filename;
-
-	l_arguments.is_bin = l_is_bin;
 	l_arguments.numeric_hdrs = l_numeric_hdrs;
 	l_arguments.numeric_lbls = l_numeric_lbls;
+
+	l_arguments.is_bin = l_is_bin;
+	l_arguments.save_bin = l_save_bin;
 
 	l_arguments.k = l_k;
 	l_arguments.nIters = l_nIters;
@@ -429,10 +520,7 @@ int check_arguments( int argc, char *restrict const *restrict argv, bool verbose
 
 	l_arguments.gpu_device = l_gpu_device;
 
-	#if NMFGPU_FORCE_DIMENSIONS
-	l_arguments.N = l_N;
-	l_arguments.M = l_M;
-	#endif
+	l_arguments.idx_other_args = l_idx_other_args;
 
 	*arguments = l_arguments;
 
@@ -449,16 +537,53 @@ index_t get_difference( index_t const *restrict classification, index_t const *r
 {
 	index_t diff = 0;
 
-	for ( index_t i = 0 ; i < (m-1); i++ )
+	for ( index_t i = 0 ; i < (m-1); i++ ) {
 		for ( index_t j = (i+1) ; j < m ; j++ ) {
-			bool conn = (bool) ( classification[j] == classification[i] );
-			bool conn_last = (bool) ( last_classification[j] == last_classification[i] );
-			diff += (index_t) ( conn != conn_last );
+			index_t conn = ( classification[j] == classification[i] );
+			index_t conn_last = ( last_classification[j] == last_classification[i] );
+			diff += ( conn != conn_last );
 		}
 	}
 
 	return diff;
 
 } // get_difference
+
+///////////////////////////////////////////////////////
+
+/*
+ * Retrieves a "random" value that can be used as seed.
+ *
+ * If NMFGPU_FIXED_INIT is non-zero, returns FIXED_SEED.
+ */
+index_t get_seed( void )
+{
+
+	index_t seed = FIXED_SEED;
+
+	#if ! NMFGPU_FIXED_INIT
+
+		// Reads the seed from the special file /dev/urandom
+		FILE *restrict file = fopen("/dev/urandom", "r");
+
+		if ( ( ! file ) || ( ! fread( &seed, sizeof(index_t), 1, file ) ) ) {
+
+			if ( file )
+				fclose(file);
+
+			// Failed to read: Sets the seed from the clock.
+
+			struct timeval tv;
+			gettimeofday(&tv, NULL);
+			time_t usec = tv.tv_usec;
+			seed = (index_t) usec;
+
+		}
+
+	#endif /* NMFGPU_FIXED_INIT */
+
+	return seed;
+
+} // get_seed
 
 ///////////////////////////////////////////////////////

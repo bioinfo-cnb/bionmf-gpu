@@ -88,7 +88,7 @@ size_t read_line( FILE *restrict file, char *restrict *restrict str )
 		// Allocates (more) memory.
 		{
 			max_len_data *= 2;
-			char *const tmp = realloc(data, max_len_data * sizeof(char));
+			char *const tmp = (char *) realloc(data, max_len_data * sizeof(char));
 			if ( ! tmp ) {
 				int const err = errno; fflush(stdout); errno = err;
 				perror("\nrealloc(data)");
@@ -157,7 +157,7 @@ size_t read_line( FILE *restrict file, char *restrict *restrict str )
 	#endif
 
 	// Adjusts memory size.
-	*str = realloc( data, (len_data + 1) * sizeof(char) );	// +1: to keep the '\0'
+	*str = (char *) realloc( data, (len_data + 1) * sizeof(char) );	// +1: to keep the '\0'
 	if ( ! *str ) {
 		int const err = errno; fflush(stdout); errno = err;
 		perror("\nrealloc(data)");
@@ -210,7 +210,7 @@ size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict 
 		// Allocates (more) memory
 		{
 			max_len_data *= 2;
-			char *const tmp = realloc(data, max_len_data * sizeof(char));
+			char *const tmp = (char *) realloc(data, max_len_data * sizeof(char));
 			if ( ! tmp ) {
 				int const err = errno; fflush(stdout); errno = err;
 				perror("\nrealloc( data )");
@@ -311,7 +311,7 @@ size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict 
 	}
 
 	// Adjusts memory size.
-	*str = realloc( data, (len_data + 1) * sizeof(char) );	// +1 to keep the '\0'
+	*str = (char *) realloc( data, (len_data + 1) * sizeof(char) );	// +1 to keep the '\0'
 	if ( ! *str ) {
 		int const err = errno; fflush(stdout); errno = err;
 		perror("\nrealloc(data)");
@@ -354,7 +354,7 @@ size_t tokenize( char *restrict str, char **restrict *restrict pstr, int delimit
 	size_t max_len_pstr = 128;	// Initial size for 128 tokens
 
 	// Pointer to each token.
-	char **restrict l_pstr = malloc( max_len_pstr * sizeof(char *) );
+	char **restrict l_pstr = (char **restrict) malloc( max_len_pstr * sizeof(char *) );
 	if ( ! l_pstr ) {
 		int const err = errno; fflush(stdout); errno = err;
 		perror("\nmalloc(l_pstr)");
@@ -378,7 +378,7 @@ size_t tokenize( char *restrict str, char **restrict *restrict pstr, int delimit
 		// First, allocates more memory if necessary.
 		if ( num_tokens == max_len_pstr ) {
 			max_len_pstr *= 2;
-			char **const tmp = realloc( l_pstr, max_len_pstr * sizeof(char *) );
+			char **const tmp = (char **)realloc( l_pstr, max_len_pstr * sizeof(char *) );
 			if ( ! tmp ) {
 				int const err = errno; fflush(stdout); errno = err;
 				perror("\nrealloc(l_pstr)");
@@ -402,7 +402,7 @@ size_t tokenize( char *restrict str, char **restrict *restrict pstr, int delimit
 	// From here: (nt == NULL), and ct points to the last token.
 
 	// Adjusts memory size.
-	*pstr = realloc( l_pstr, num_tokens * sizeof(char *) );
+	*pstr = (char **) realloc( l_pstr, num_tokens * sizeof(char *) );
 	if ( ! (*pstr) ) {
 		int const err = errno; fflush(stdout); errno = err;
 		perror("\nrealloc(data)");
@@ -497,7 +497,7 @@ int generate_labels( char const *restrict tag_prefix, char const *restrict tag_s
 	}
 
 	// Labels.
-	char *restrict const tokens = malloc( max_len_tokens * sizeof(char) );	// Size will be adjusted later.
+	char *restrict const tokens = (char *restrict) malloc( max_len_tokens * sizeof(char) );	// Size will be adjusted later.
 	if ( ! tokens ) {
 		int const err = errno; fflush(stdout); errno = err;
 		perror("\nmalloc(tokens)");
@@ -508,7 +508,7 @@ int generate_labels( char const *restrict tag_prefix, char const *restrict tag_s
 	char *p_tokens = tokens;
 
 	// Array of pointers to 'tokens'.
-	char const **restrict const ptokens = malloc( num_tags * sizeof(char *) );
+	char const **restrict const ptokens = (char const **restrict) malloc( num_tags * sizeof(char *) );
 	if ( ! ptokens ) {
 		int const err = errno; fflush(stdout); errno = err;
 		perror("\nmalloc(ptokens)");
@@ -531,7 +531,7 @@ int generate_labels( char const *restrict tag_prefix, char const *restrict tag_s
 	} // for 0 <= i < num_tags.
 
 	// Adjusts memory used.
-	char const *const l_tokens = realloc( tokens, len_tokens * sizeof(char) );
+	char const *const l_tokens = (char *) realloc( tokens, len_tokens * sizeof(char) );
 	if ( ! l_tokens ) {
 		int const err = errno; fflush(stdout); errno = err;
 		perror("\nrealloc(tokens)");

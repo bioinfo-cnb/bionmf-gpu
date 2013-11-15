@@ -54,7 +54,7 @@
 
 #undef RESTRICT
 
-#if defined(__CUDACC__)			/* CUDA source code */
+#if __CUDACC__				/* CUDA source code */
 	#define RESTRICT __restrict__
 #else					/* C99 source code */
 	#define RESTRICT restrict
