@@ -44,6 +44,7 @@
  *		NMFGPU_VERBOSE_2: Shows the parameters on some routine calls.
  *
  *	Debug / Testing:
+ *		NMFGPU_CPU_RANDOM: Uses the CPU (host) random generator (not the CURAND library).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_DEBUG_TRANSF: Shows the result of each data transfer.
  *		NMFGPU_DEBUG_REDUCT: Shows partial results of the reduction operation.
@@ -141,15 +142,15 @@ int show_device_matrix_int( index_t const *RESTRICT dMatrix, index_t nrows, inde
  * If NMFGPU_DEBUG || NMFGPU_VERBOSE_2:
  *	transpose: 'True' if matrix is matrix is transposed.
  *
- * Operation performed with stream "matrix_stream".
+ * If 'event_A' is non-NULL, the operation is recorded as an event.
  *
  * WARNING: Requires the CURAND Library properly initialized.
  */
-void matrix_random( real *RESTRICT d_A, index_t height, index_t width,
-		#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-			bool transpose, char const *RESTRICT const matrix_name,
-		#endif
-		index_t padding );
+void matrix_random( real *RESTRICT d_A, index_t height, index_t width, index_t padding,
+			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+				bool transpose, char const *RESTRICT const matrix_name,
+			#endif
+			cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
 
 // -----------------------------------
 
@@ -164,6 +165,8 @@ void matrix_random( real *RESTRICT d_A, index_t height, index_t width,
  *
  * 'pitch' must be a multiple of 'memory_alignment', and <= maxThreadsPerBlock.
  *
+ * The operation is recorded with "event_reduction".
+ *
  * WARNING:
  *	- On Compute Capability 1.x:
  *		height < PREV_POWER_2(maxBlockHeight_pitch) * REDUCE_TO_ROW__ITEMS_PER_THREAD * (2**24)
@@ -173,7 +176,7 @@ void matrix_to_row( real const *RESTRICT d_A, index_t height, index_t pitch,
 		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
 		index_t width, char const *RESTRICT const matrix_name,
 		#endif
-		real *RESTRICT d_Tmp, real *RESTRICT d_accum_A );
+		real *RESTRICT d_Tmp, real *RESTRICT d_accum_A, cudaStream_t stream_AccA );
 
 // -----------------------------------------
 
@@ -185,7 +188,7 @@ void matrix_to_row( real const *RESTRICT d_A, index_t height, index_t pitch,
  * div_operand: 'True' if operation to perform is a floating-point division.
  *		Otherwise, a subtraction is performed.
  *
- * If 'event_B' is non-NULL, kernel launch is delayed upon event completion.
+ * Kernel launch is delayed upon event "event_B" completes.
  * Then, the operation is registered using the same event object.
  *
  * 'pitch' must be a multiple of 'memory_alignment'.
@@ -196,14 +199,15 @@ void matrix_to_row( real const *RESTRICT d_A, index_t height, index_t pitch,
  *		('DIV_SUB__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h")
  */
 void matrix_div_sub( real *RESTRICT d_A, real const *RESTRICT d_B, index_t height, index_t pitch,
-		#if NMFGPU_DEBUG
-			index_t width, char const *RESTRICT const matrix_name_A, char const *RESTRICT const matrix_name_B,
-		#endif
-		bool div_operand, cudaStream_t stream_A, cudaEvent_t *RESTRICT event_B
-		#if NMFGPU_PROFILING_KERNELS
-			, timing_data_t *RESTRICT td
-		#endif
-		);
+			#if NMFGPU_DEBUG
+				index_t width, char const *RESTRICT const matrix_name_A,
+				char const *RESTRICT const matrix_name_B,
+			#endif
+			bool div_operand,
+			#if NMFGPU_PROFILING_KERNELS
+				timing_data_t *RESTRICT td,
+			#endif
+			cudaStream_t stream_A, cudaEvent_t event_B );
 
 // -----------------------------------------
 
@@ -211,6 +215,9 @@ void matrix_div_sub( real *RESTRICT d_A, real const *RESTRICT d_B, index_t heigh
  * d_A[i][j] = d_A[i][j] .* d_Aux[i][j] ./ d_accum_B[j]
  *
  * length(d_accum_B) >= pitch
+ *
+ * Kernel launch is delayed upon event "event_accB" completes.
+ * Then, the operation is registered using the same event object.
  *
  * 'pitch' must be a multiple of 'memory_alignment', and <= maxThreadsPerBlock.
  *
@@ -233,6 +240,9 @@ void matrix_mul_div( real *RESTRICT d_A, real const *RESTRICT d_Aux, real const 
  *
  * 'pitch' must be a multiple of 'memory_alignment', and <= maxThreadsPerBlock.
  *
+ * If 'event_A' is non-NULL, delays the operation until such events completes.
+ * Then, the operation is recorded using the same event object.
+ *
  * WARNING:
  *	- On Compute Capability 1.x:
  *		height < maxBlockHeight_pitch * ADJUST__ITEMS_PER_THREAD * (2**24)
@@ -242,7 +252,7 @@ void matrix_adjust( real *RESTRICT d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
 				index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
 			#endif
-			cudaStream_t stream_A );
+			cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
 
 // -----------------------------------------
 
@@ -261,7 +271,8 @@ void matrix_adjust( real *RESTRICT d_A, index_t height, index_t pitch,
  */
 void matrix_idx_max( real const *RESTRICT d_A, index_t width, index_t pitch, index_t height,
 			#if NMFGPU_DEBUG
-				char const *RESTRICT const matrix_name_A, char const *RESTRICT const matrix_name_Idx,
+				bool transpose, char const *RESTRICT const matrix_name_A,
+				char const *RESTRICT const matrix_name_Idx,
 			#endif
 			cudaStream_t stream_A, index_t *RESTRICT d_Idx );
 
@@ -272,36 +283,17 @@ void matrix_idx_max( real const *RESTRICT d_A, index_t width, index_t pitch, ind
  *
  * d_A[1..height][1..pitch] <--- A[1..height][1..pitch],
  *
- * The transfer is performed with stream "matrix_stream". No event is recorded.
+ * If 'event_A' is non-NULL, the operation is recorded as an event.
  */
-void upload_matrix( real const *RESTRICT A, index_t height, index_t pitch, real *RESTRICT d_A
+void upload_matrix( real const *RESTRICT A, index_t height, index_t pitch, real *RESTRICT d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				, index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
-				char const *RESTRICT const matrix_name_dA
+				index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
+				char const *RESTRICT const matrix_name_dA,
 			#endif
 			#if NMFGPU_PROFILING_TRANSF
-				, timing_data_t *RESTRICT const upload_timing
+				timing_data_t *RESTRICT const upload_timing,
 			#endif
-		);
-
-// -----------------------------------------
-
-/*
- * Transfers a matrix from the HOST (CPU) to the DEVICE (GPU) as a row vector.
- *
- * d_A[1..height][1..pitch] <--- A[1..height][1..pitch],
- *
- * The transfer is performed with stream "matrix_stream", and is recorded as event "transfer_event".
- */
-void upload_matrix_event( real const *RESTRICT A, index_t height, index_t pitch, real *RESTRICT d_A
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					, index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
-					char const *RESTRICT const matrix_name_dA
-				#endif
-				#if NMFGPU_PROFILING_TRANSF
-					, timing_data_t *RESTRICT const upload_timing
-				#endif
-			);
+			cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
 
 // -----------------------------------------
 
@@ -342,18 +334,16 @@ void upload_matrix_partial( real const *RESTRICT p_A, index_t height, index_t pi
  * Transfers a matrix from the DEVICE (GPU) to HOST (CPU), as a row vector.
  *
  * A[1..height][1..pitch] <--- d_A[1..height][1..pitch],
- *
- * The transfer is performed with stream "matrix_stream". No event is recorded.
  */
-void download_matrix( real *RESTRICT A, index_t height, index_t pitch, real const *RESTRICT d_A
+void download_matrix( real *RESTRICT A, index_t height, index_t pitch, real const *RESTRICT d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				, index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
-				char const *RESTRICT const matrix_name_dA
+				index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
+				char const *RESTRICT const matrix_name_dA,
 			#endif
 			#if NMFGPU_PROFILING_TRANSF
-				, timing_data_t *RESTRICT const download_timing
+				timing_data_t *RESTRICT const download_timing,
 			#endif
-		);
+			cudaStream_t stream_A );
 
 // -----------------------------------------
 
@@ -361,18 +351,16 @@ void download_matrix( real *RESTRICT A, index_t height, index_t pitch, real cons
  * Transfers an INTEGER matrix from the DEVICE (GPU) to HOST (CPU), as a row vector.
  *
  * A[1..height][1..pitch] <--- d_A[1..height][1..pitch],
- *
- * The transfer is performed with stream "matrix_stream". No event is recorded.
  */
-void download_matrix_int( index_t *RESTRICT A, index_t height, index_t pitch, index_t const *RESTRICT d_A
+void download_matrix_int( index_t *RESTRICT A, index_t height, index_t pitch, index_t const *RESTRICT d_A,
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					, index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
-					char const *RESTRICT const matrix_name_dA
+					index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
+					char const *RESTRICT const matrix_name_dA,
 				#endif
 				#if NMFGPU_PROFILING_TRANSF
-					, timing_data_t *RESTRICT const download_timing
+					timing_data_t *RESTRICT const download_timing,
 				#endif
-			);
+				cudaStream_t stream_A );
 
 ///////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////

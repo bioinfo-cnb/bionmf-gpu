@@ -50,10 +50,8 @@
 	#define __STDC_FORMAT_MACROS
 #endif
 #include <inttypes.h> /* PRIuMAX */
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-	#include <math.h> /* isless */
-#endif
 
+#include "real_type.h"
 #include "timing.cuh"
 
 // --------------------------------------
@@ -385,7 +383,7 @@ float stop_cuda_timer_ev( cudaEvent_t start_timing_event )
 /*
  * Stops the CUDA timer started using the timing_events[ START_EVENT ] CUDA event.
  *
- * It is equivalent to: stop_cuda_timer_ev( timing_events[ START_EVENT ], device_id );
+ * It is equivalent to: stop_cuda_timer_ev( timing_events[ START_EVENT ] );
  *
  * Returns the elapsed time (in ms) or a negative value on error.
  */
@@ -421,9 +419,8 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__res
 
 	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
-
 		float elapsed_time = stop_cuda_timer_ev( start_timing_event );
-		if ( isless( elapsed_time, 0.0f ) )
+		if ( elapsed_time < 0.0f )
 			return EXIT_FAILURE;
 
 		if ( td ) {
@@ -453,15 +450,15 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__res
 int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, index_t nitems, index_t counter )
 {
 
+	int status = EXIT_SUCCESS;
+
 	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
-		int status = stop_cuda_timer_cnt( timing_events[ START_EVENT ], td, nitems, counter );
-		if ( status == EXIT_FAILURE )
-			return EXIT_FAILURE;
+		status = stop_cuda_timer_cnt_ev( timing_events[ START_EVENT ], td, nitems, counter );
 
-	#endif	/* if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS */
+	#endif
 
-	return EXIT_SUCCESS;
+	return status;
 
 } // stop_cuda_timer_cnt
 
@@ -616,9 +613,11 @@ void show_transfer_times( void )
 		if ( upload_Vcol_timing.counter )
 			print_elapsed_time( "\t\tSend V (columns)", &upload_Vcol_timing, sizeof(real) );
 
-		print_elapsed_time( "\t\tSend W", &upload_W_timing, sizeof(real) );
+		if ( upload_W_timing.counter )
+			print_elapsed_time( "\t\tSend W", &upload_W_timing, sizeof(real) );
 
-		print_elapsed_time( "\t\tSend H", &upload_H_timing, sizeof(real) );
+		if ( upload_H_timing.counter )
+			print_elapsed_time( "\t\tSend H", &upload_H_timing, sizeof(real) );
 
 		print_elapsed_time( "\t\tGet W", &download_W_timing, sizeof(real) );
 

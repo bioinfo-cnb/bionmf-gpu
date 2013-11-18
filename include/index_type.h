@@ -134,22 +134,6 @@
 	#define MAX(a,b) ( ( (a) >= (b) ) ? (a) : (b) )
 #endif
 
-/*
- * Computes the highest power of 2 <= x.
- * Returns the same value (x) if it is already a power of 2, or is zero.
- */
-#ifndef PREV_POWER_2
-	#define PREV_POWER_2(x) \
-		( ( (x) & ((x)-1) ) ? \
-			({ \
-				index_t i = (x); \
-				for ( index_t n = 0, b = 1 ; n <= (index_t) sizeof(index_t) ; n++, b <<= 1 ) { i |= ( i >> b ); } \
-				i -= (i >> 1); \
-			}) : \
-			(x) \
-		)
-#endif
-
 // ---------------------------------------------
 
 /* CUDA DEVICE Functions */

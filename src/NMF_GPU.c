@@ -45,6 +45,7 @@
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
  *
  *	Debug / Testing:
+ *		NMFGPU_CPU_RANDOM: Uses the CPU (host) random generator (not the CURAND library).
  *		NMFGPU_FIXED_INIT: Initializes W and H with "random" values generated from a fixed seed (defined in common.h).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_FORCE_BLOCKS: Forces the processing of the input matrix as four blocks.
@@ -269,33 +270,34 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 	// Initializes matrices W and H with random values.
 	{
-		status = init_randomGenerator();
+
+		index_t const seed = get_seed();
+
+		status = init_random( seed );
 		if ( status == EXIT_FAILURE )
 			return EXIT_FAILURE;
 
-		index_t seed = get_seed();
-
-		status = set_randomGenerator_seed( seed );
-		if ( status == EXIT_FAILURE ) {
-			finalize_randomGenerator();
-			return EXIT_FAILURE;
-		}
+		// H
+		set_random_values( H, d_H, M, K, Kp,
+					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+						true, "H", "d_H",
+					#endif
+					#if (! NMFGPU_CPU_RANDOM) && NMFGPU_PROFILING_TRANSF
+						upload_H_timing,
+					#endif
+					streams_NMF[ psNMF_N ], NULL );
 
 		// W
-		matrix_random( d_W, N, K,
-				#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-					false, "d_W",
-				#endif
-				Kp );
+		set_random_values( W, d_W, N, K, Kp,
+					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+						false, "W", "d_W",
+					#endif
+					#if (! NMFGPU_CPU_RANDOM) && NMFGPU_PROFILING_TRANSF
+						upload_W_timing,
+					#endif
+					stream_W, &event_W );
 
-		// H
-		matrix_random( d_H, M, K,
-				#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-					true, "d_H",
-				#endif
-				Kp );
-
-		finalize_randomGenerator();
+		destroy_random();
 	}
 
 	// ----------------------------
@@ -310,24 +312,24 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 		// d_Vcol
 		if ( d_Vcol != d_Vrow )
 			upload_matrix_partial( pVcol, N, MnPp, offset_Vcol,
-							#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-								BLM, "Vcol", "d_Vcol",
-							#endif
-							BLMp, d_Vcol, Vcol_stream, Vcol_event
-							#if NMFGPU_PROFILING_TRANSF
-								, &upload_Vcol_timing
-							#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							BLM, "Vcol", "d_Vcol",
+						#endif
+						BLMp, d_Vcol, stream_Vcol, event_Vcol
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vcol_timing
+						#endif
 						);
 
 		// d_Vrow
 		upload_matrix_partial( pVrow, BLN, Mp, 0,
-						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-							M, "Vrow", "d_Vrow",
-						#endif
-						Mp, d_Vrow, Vrow_stream, Vrow_event
-						#if NMFGPU_PROFILING_TRANSF
-							, &upload_Vrow_timing
-						#endif
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+						M, "Vrow", "d_Vrow",
+					#endif
+					Mp, d_Vrow, stream_Vrow, event_Vrow
+					#if NMFGPU_PROFILING_TRANSF
+						, &upload_Vrow_timing
+					#endif
 					);
 	}
 
@@ -367,13 +369,6 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			/////////////////////////////
 			#endif
 
-			// Reduces d_W to a row.
-			matrix_to_row( d_W, block_N.BL[ pBLN ], Kp,
-					#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-						K, "d_W",
-					#endif
-					d_Aux, d_accum );
-
 			/*
 			 * WH(N,BLMp) = W * pH(BLM,Kp)
 			 * WH(N,BLMp) = Vcol(N,BLMp) ./ WH(N,BLMp)
@@ -387,13 +382,6 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			printf("\n------------ iter=%i, loop %i (niter_test_conv) Matrix W: ------------\n",iter,i);
 			/////////////////////////////
 			#endif
-
-			// Reduces d_H to a row.
-			matrix_to_row( d_H, block_M.BL[ pBLM ], Kp,
-					#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-						K, "d_H",
-					#endif
-					d_Aux, d_accum );
 
 			/*
 			 * WH(BLN,Mp) = W(BLN,Kp) * H
@@ -409,17 +397,17 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 		// Adjusts matrices W and H.
 
-		adjust_matrix( d_H, block_M.BL[ pBLM ],
+		matrix_adjust( d_H, block_M.BL[ pBLM ], Kp,
 				#if NMFGPU_DEBUG
-					true, "d_H",
+					K, true, "d_H",
 				#endif
-				matrix_stream, matrix_event );
+				stream_H, NULL );
 
-		adjust_matrix( d_W, block_N.BL[ pBLN ],
+		matrix_adjust( d_W, block_N.BL[ pBLN ], Kp,
 				#if NMFGPU_DEBUG
-					false, "d_W",
+					K, false, "d_W",
 				#endif
-				NMF_streams[ psNMF_N ], matrix_event );
+				stream_W, &event_W );
 
 		// -------------------------------------
 
@@ -480,13 +468,6 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			/////////////////////////////
 			#endif
 
-			// Reduces d_W to a row.
-			matrix_to_row( d_W, block_N.BL[ pBLN ], Kp,
-					#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-						K, "d_W",
-					#endif
-					d_Aux, d_accum );
-
 			/*
 			 * WH(N,BLMp) = W * pH(BLM,Kp)
 			 * WH(N,BLMp) = Vcol(N,BLMp) ./ WH(N,BLMp)
@@ -500,13 +481,6 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			printf("\n------------ Matrix W (loop=%" PRI_IDX ",remaining): ------------\n",i);
 			/////////////////////////////
 			#endif
-
-			// Reduces d_H to a row.
-			matrix_to_row( d_H, block_M.BL[ pBLM ], Kp,
-					#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-						K, "d_H",
-					#endif
-					d_Aux, d_accum );
 
 			/*
 			 * WH(BLN,Mp) = W(BLN,Kp) * H
@@ -541,24 +515,24 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	// Downloads output matrices
 
 	// d_H
-	download_matrix( H, M, Kp, d_H
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					, M, true, "H", "d_H"
-				#endif
-				#if NMFGPU_PROFILING_TRANSF
-					, &download_H_timing
-				#endif
-			);
+	download_matrix( H, M, Kp, d_H,
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+				K, true, "H", "d_H",
+			#endif
+			#if NMFGPU_PROFILING_TRANSF
+				&download_H_timing,
+			#endif
+			stream_H );
 
 	// d_W
-	download_matrix( W, N, Kp, d_W
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					, N, false, "W", "d_W"
-				#endif
-				#if NMFGPU_PROFILING_TRANSF
-					, &download_W_timing
-				#endif
-			);
+	download_matrix( W, N, Kp, d_W,
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+				K, false, "W", "d_W",
+			#endif
+			#if NMFGPU_PROFILING_TRANSF
+				&download_W_timing,
+			#endif
+			stream_W );
 
 	// --------------------------------
 
@@ -592,7 +566,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			gettimeofday( &gpu_ftv, NULL );
 			timersub( &gpu_ftv, &gpu_tv, &gpu_etv );	// etv = ftv - tv
 			double const total_gpu_time = gpu_etv.tv_sec + ( gpu_etv.tv_usec * 1e-06 );
-			printf( "\nTotal GPU time: %g seconds.\n", total_gpu_time );
+			printf( "\nGPU + classification + check_result time: %g seconds.\n", total_gpu_time );
 		}
 	#endif
 
@@ -701,6 +675,20 @@ int main( int argc, char const *restrict *restrict argv )
 
 	int status = EXIT_SUCCESS;
 
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_READ_MATRIX || NMFGPU_DEBUG_READ_MATRIX2 \
+		|| NMFGPU_DEBUG_READ_FILE || NMFGPU_DEBUG_READ_FILE2 || NMFGPU_VERBOSE_2
+		// Removes the buffer associated to 'stdout' in order to prevent losing messages if the program crashes.
+		fflush( NULL );
+		errno = 0;
+		if ( setvbuf( stdout, NULL, _IONBF, 0 ) ) {
+			int err=errno; fflush(stdout); errno=err;
+			fprintf( stderr, "\nWarning: could not unload buffer for stdout " );
+			if ( errno )
+				fprintf( stderr, ": %s", strerror(errno) );
+			fprintf( stderr, ". Not all messages might be shown if program crashes.\n" );
+		}
+	#endif
+
 	// ----------------------------------------
 
 	/* Reads all parameters and performs error-checking. */
@@ -760,12 +748,6 @@ int main( int argc, char const *restrict *restrict argv )
 		}
 	#endif
 
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_READ_MATRIX || NMFGPU_DEBUG_READ_MATRIX2 \
-		|| NMFGPU_DEBUG_READ_FILE || NMFGPU_DEBUG_READ_FILE2 || NMFGPU_VERBOSE_2
-		// Removes the buffer associated to 'stdout' in order to prevent losing messages if the program crashes.
-		setbuf( stdout, NULL );
-	#endif
-
 	// ----------------------------------------
 
 	#if NMFGPU_PROFILING_GLOBAL
@@ -791,8 +773,11 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// ----------------------------------------
 
-	// Initializes other CUDA structures
-	status = init_GPUdevice( 1, mem_size, do_classf );
+	// Reads input matrix
+
+	struct matrix_labels ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
+
+	status = init_V( filename, numeric_hdrs, numeric_lbls, is_bin, &ml );
 	if ( status == EXIT_FAILURE ) {
 		finalize_GPU();
 		fflush(NULL);
@@ -801,13 +786,11 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// ----------------------------------------
 
-	// Reads input matrix
-
-	struct matrix_labels ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
-
-	status = init_V( filename, numeric_hdrs, numeric_lbls, is_bin, &ml );
+	// Initializes other CUDA structures
+	status = init_GPUdevice( 1, mem_size, do_classf );
 	if ( status == EXIT_FAILURE ) {
-		finalize_GPUdevice();
+		freeHostMemory( V ); clean_matrix_labels( ml );
+		finalize_GPU();
 		fflush(NULL);
 		return EXIT_FAILURE;
 	}

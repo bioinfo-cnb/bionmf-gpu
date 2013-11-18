@@ -44,6 +44,7 @@
  *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
  *
  *	Debug / Testing:
+ *		NMFGPU_CPU_RANDOM: Uses the CPU (host) random generator (not the CURAND library).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_DEBUG_TRANSF: Shows the result of each data transfer.
  *		NMFGPU_DEBUG_REDUCT: Shows partial results of the reduction operation.
@@ -97,6 +98,8 @@ int show_device_matrix( real const *__restrict__ dMatrix, index_t nrows, index_t
 			struct matrix_labels const *__restrict__ ml )
 {
 
+	int status = EXIT_SUCCESS;
+
 	// Downloads the device matrix to a temporary array and shows its content.
 	real *__restrict__ const buffer = (real *) malloc( nrows * pitch * sizeof(real) );
 	if ( ! buffer ) {
@@ -119,7 +122,10 @@ int show_device_matrix( real const *__restrict__ dMatrix, index_t nrows, index_t
 	 *	cublasStatus_t cublas_status = cublasGetVector( nrows * pitch, sizeof(real), dMatrix, 1, buffer, 1 );
 	 */
 
-	int const status = matrix_show( buffer, nrows, ncols, pitch, transpose, ml );
+	if ( transpose )
+		status = matrix_show( buffer, ncols, nrows, pitch, true, ml );
+	else
+		status = matrix_show( buffer, nrows, ncols, pitch, false, ml );
 
 	free( buffer );
 
@@ -146,6 +152,8 @@ int show_device_matrix_int( index_t const *__restrict__ dMatrix, index_t nrows, 
 			struct matrix_labels const *__restrict__ ml )
 {
 
+	int status = EXIT_SUCCESS;
+
 	// Downloads the device matrix to a temporary array and shows its content.
 	index_t *__restrict__ const buffer = (index_t *) malloc( nrows * pitch * sizeof(index_t) );
 	if ( ! buffer ) {
@@ -169,7 +177,10 @@ int show_device_matrix_int( index_t const *__restrict__ dMatrix, index_t nrows, 
 	 *	cublasStatus_t cublas_status = cublasGetVector( nrows * pitch, sizeof(index_t), dMatrix, 1, buffer, 1 );
 	 */
 
-	int const status = matrix_int_show( buffer, nrows, ncols, pitch, transpose, ml );
+	if ( transpose )
+		status = matrix_int_show( buffer, ncols, nrows, pitch, true, ml );
+	else
+		status = matrix_int_show( buffer, nrows, ncols, pitch, false, ml );
 
 	free( buffer );
 
@@ -187,85 +198,108 @@ int show_device_matrix_int( index_t const *__restrict__ dMatrix, index_t nrows, 
  * If NMFGPU_DEBUG || NMFGPU_VERBOSE_2:
  *	transpose: 'True' if matrix is matrix is transposed.
  *
- * Operation performed with stream "matrix_stream".
+ * If 'event_A' is non-NULL, the operation is recorded as an event.
  *
  * WARNING: Requires the CURAND Library properly initialized.
  */
-void matrix_random( real *__restrict__ d_A, index_t height, index_t width,
+void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index_t padding,
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
 				bool transpose, char const *__restrict__ const matrix_name,
 			#endif
-			index_t padding )
+			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
 {
 
-	#if NMFGPU_VERBOSE_2
+	#if ! NMFGPU_CPU_RANDOM
+
+		#if NMFGPU_VERBOSE_2
+			if (! device_id)
+				printf("\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
+					", transpose=%i)\n", matrix_name, height, width, padding, transpose );
+		#endif
+
+		#if NMFGPU_DEBUG
+			curandStatus_t curand_status = CURAND_STATUS_SUCCESS;
+		#endif
+
+		// ----------------------------------
+
+		// Sets the stream
+
+		#if NMFGPU_DEBUG
+			curand_status =
+		#endif
+
+			curandSetStream( curand_generator, stream_A );
+
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( curand_status != CURAND_STATUS_SUCCESS ) {
+				fflush(stdout);
+				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error setting stream for CURAND kernel launches (matrix %s): ",
+					device_id, matrix_name );
+				printCurandErrorString( curand_status );
+			}
+		#endif
+		///////////////////////////////
+
+		// ----------------------------------
+
+		// Generates random values.
+
+		size_t const size = height * padding;
+
+		#if NMFGPU_DEBUG
+			curand_status =
+		#endif
+
+			CURAND_GENERATE_UNIFORM_REAL( curand_generator, d_A, size );
+
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( curand_status != CURAND_STATUS_SUCCESS ) {
+				fflush(stdout);
+				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error generating random values for matrix %s: ", device_id, matrix_name );
+				printCurandErrorString( curand_status );
+			}
+			printf( "\n--- [GPU%" PRI_IDX "] Random values on matrix %s (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%"
+				PRI_IDX ", transpose=%i): ---\n", device_id, matrix_name, height, width, padding, transpose );
+			check_cuda_status();
+			show_device_matrix( d_A, height, width, padding, transpose, NULL );
+		#endif
+		/////////////////////////////
+
+		// ----------------------------------
+
+		// Records the previous operation on stream_A as 'event_A'
+		if ( event_A ) {
+			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+				cudaError_t cuda_status =
+			#endif
+
+				cudaEventRecord( *event_A, stream_A );
+
+				///////////////////////////////
+				#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+					if ( cuda_status != cudaSuccess ) {
+						fflush(stdout);
+						fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in "
+							"matrix_random(%s,height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
+							", transpose=%i).\n", device_id, cudaGetErrorString(cuda_status),height, width,
+							padding, transpose );
+					}
+				#endif
+				///////////////////////////////
+		}
+
+		// ----------------------------------
+
+		#if NMFGPU_VERBOSE_2
 		if (! device_id)
 			printf("\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
-				", transpose=%i)\n", matrix_name, height, width, padding, transpose );
-	#endif
+				", transpose=%i)... Done.\n", matrix_name, height, width, padding, transpose );
+		#endif
 
-	// Stream for this operation
-	cudaStream_t stream_A = matrix_stream;
-
-	#if NMFGPU_DEBUG
-		curandStatus_t curand_status = CURAND_STATUS_SUCCESS;
-	#endif
-
-	// ----------------------------------
-
-	// Sets the stream
-
-	#if NMFGPU_DEBUG
-		curand_status =
-	#endif
-
-		curandSetStream( curand_generator, stream_A );
-
-	///////////////////////////////
-	#if NMFGPU_DEBUG
-		if ( curand_status != CURAND_STATUS_SUCCESS ) {
-			fflush(stdout);
-			fprintf(stderr,"\n[GPU%" PRI_IDX "] Error setting stream for CURAND kernel launches (matrix %s): ",
-				device_id, matrix_name );
-			printCurandErrorString( curand_status );
-		}
-	#endif
-	///////////////////////////////
-
-	// ----------------------------------
-
-	// Generates random values.
-
-	size_t const size = height * padding;
-
-	#if NMFGPU_DEBUG
-		curand_status =
-	#endif
-
-		CURAND_GENERATE_UNIFORM_REAL( curand_generator, d_A, size );
-
-	///////////////////////////////
-	#if NMFGPU_DEBUG
-		if ( curand_status != CURAND_STATUS_SUCCESS ) {
-			fflush(stdout);
-			fprintf(stderr,"\n[GPU%" PRI_IDX "] Error generating random values for matrix %s: ", device_id, matrix_name );
-			printCurandErrorString( curand_status );
-		}
-		printf( "\n--- [GPU%" PRI_IDX "] Random values on matrix %s (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
-			", transpose=%i): ---\n", device_id, matrix_name, height, width, padding, transpose );
-		check_cuda_status_st( cuda_status );
-		show_device_matrix( d_A, height, width, padding, transpose, NULL );
-	#endif
-	/////////////////////////////
-
-	// ----------------------------------
-
-	#if NMFGPU_VERBOSE_2
-	if (! device_id)
-		printf("\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
-			", transpose=%i)... Done.\n", matrix_name, height, width, padding, transpose );
-	#endif
-
+	#endif /* NMFGPU_CPU_RANDOM */
 
 } //matrix_random
 
@@ -282,16 +316,18 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width,
  *
  * 'pitch' must be a multiple of 'memory_alignment', and <= maxThreadsPerBlock.
  *
+ * The operation is recorded with "event_reduction".
+ *
  * WARNING:
  *	- On Compute Capability 1.x:
- *		height < PREV_POWER_2(maxBlockHeight_pitch) * REDUCE_TO_ROW__ITEMS_PER_THREAD * (2**24)
+ *		height < prev_power_2(maxBlockHeight_pitch) * REDUCE_TO_ROW__ITEMS_PER_THREAD * (2**24)
  *		('REDUCE_TO_ROW__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
  */
 void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
 		index_t width, char const *__restrict__ const matrix_name,
 		#endif
-		real *__restrict__ d_Tmp, real *__restrict__ d_accum_A )
+		real *__restrict__ d_Tmp, real *__restrict__ d_accum_A, cudaStream_t stream_AccA )
 {
 
 	///////////////////////////////
@@ -304,9 +340,8 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 	// ----------------------------------------
 
-	// Event and Stream for this operation.
-	cudaEvent_t event_AccA = matrix_event;
-	cudaStream_t stream_AccA = matrix_stream;
+	// Event for this operation.
+	cudaEvent_t event_AccA = event_reduction;
 
 	// ----------------------------------------
 
@@ -326,7 +361,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 		 *	Please, see the reduction example in CUDA SDK for details.
 		 */
 
-		index_t block_height = PREV_POWER_2( maxBlockHeight_pitch );		// A power of two.
+		index_t block_height = prev_power_2( maxBlockHeight_pitch );		// A power of two.
 
 		index_t const abh = block_height * REDUCE_TO_ROW__ITEMS_PER_THREAD;	// "Active" block height.
 
@@ -368,7 +403,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 				index_t const max_block_height2 = maxThreadsPerBlock / pitch;
 
-				block_height = PREV_POWER_2( MIN( max_block_height1, max_block_height2 ) );	// A power of 2
+				block_height = prev_power_2( MIN( max_block_height1, max_block_height2 ) );	// A power of 2
 
 				grid_length = 1;
 
@@ -420,7 +455,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 		// ---------------------------
 
 		#if NMFGPU_PROFILING_KERNELS
-			start_cuda_timer( device_id );
+			start_cuda_timer();
 		#endif
 
 			/* d_A[ height ][ pitch ] is reduced using a grid of (grid_extension * grid_length) blocks.
@@ -437,7 +472,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			///////////////////////////////
 
 		#if NMFGPU_PROFILING_KERNELS
-			stop_cuda_timer_cnt( &reduce_timing[ timing_index ], matrix_size, 1, device_id );
+			stop_cuda_timer_cnt( &reduce_timing[ timing_index ], matrix_size, 1 );
 		#endif
 
 		// ---------------------------
@@ -464,7 +499,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			// ---------------------------
 
 			#if NMFGPU_PROFILING_KERNELS
-				start_cuda_timer( device_id );
+				start_cuda_timer();
 			#endif
 
 				/* d_Tmp[ grid_extension*grid_length ][ pitch ] is reduced with a single block.
@@ -481,7 +516,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 				///////////////////////////////
 
 			#if NMFGPU_PROFILING_KERNELS
-				stop_cuda_timer_cnt( &reduce_timing[2], matrix_size, 1, device_id );
+				stop_cuda_timer_cnt( &reduce_timing[2], matrix_size, 1 );
 			#endif
 
 		} // If a second call is required.
@@ -491,7 +526,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 		/* Just copies d_A[] to d_accum_A[]. */
 
 		#if NMFGPU_PROFILING_KERNELS
-			start_cuda_timer( device_id );
+			start_cuda_timer();
 		#endif
 
 			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
@@ -512,7 +547,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			///////////////////////////////
 
 		#if NMFGPU_PROFILING_KERNELS
-			stop_cuda_timer_cnt( &reduce_timing[3], pitch, 1, device_id );
+			stop_cuda_timer_cnt( &reduce_timing[3], pitch, 1 );
 		#endif
 
 	} // if ( height > 1 )
@@ -530,22 +565,24 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 	// ------------------------------------
 
 	// Records the previous operation on stream_AccA as 'event_AccA'
-
-	#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-		cudaError_t cuda_status =
-	#endif
-
-		cudaEventRecord( event_AccA, stream_AccA );
-
-		///////////////////////////////
+	{
 		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in matrix2row(%s, width=%" PRI_IDX
-					", pitch=%" PRI_IDX ").\n", device_id, cudaGetErrorString(cuda_status), matrix_name, width, pitch );
-			}
+			cudaError_t cuda_status =
 		#endif
-		///////////////////////////////
+
+			cudaEventRecord( event_AccA, stream_AccA );
+
+			///////////////////////////////
+			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+				if ( cuda_status != cudaSuccess ) {
+					fflush(stdout);
+					fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in matrix2row(%s, width=%"
+						PRI_IDX ", pitch=%" PRI_IDX ").\n", device_id, cudaGetErrorString(cuda_status),
+						matrix_name, width, pitch );
+				}
+			#endif
+			///////////////////////////////
+	}
 
 } // matrix_to_row
 
@@ -559,7 +596,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
  * div_operand: 'True' if operation to perform is a floating-point division.
  *		Otherwise, a subtraction is performed.
  *
- * If 'event_B' is non-NULL, kernel launch is delayed upon event completion.
+ * Kernel launch is delayed upon event "event_B" completes.
  * Then, the operation is registered using the same event object.
  *
  * 'pitch' must be a multiple of 'memory_alignment'.
@@ -570,15 +607,15 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
  *		('DIV_SUB__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h")
  */
 void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index_t height, index_t pitch,
-		#if NMFGPU_DEBUG
-			index_t width, char const *__restrict__ const matrix_name_A, char const *__restrict__ const matrix_name_B,
-		#endif
-		bool div_operand, cudaStream_t stream_A, cudaEvent_t *__restrict__ event_B
-		#if NMFGPU_PROFILING_KERNELS
-			, timing_data_t *__restrict__ td
-		#endif
-		)
-
+			#if NMFGPU_DEBUG
+				index_t width, char const *__restrict__ const matrix_name_A,
+				char const *__restrict__ const matrix_name_B,
+			#endif
+			bool div_operand,
+			#if NMFGPU_PROFILING_KERNELS
+				timing_data_t *__restrict__ td,
+			#endif
+			cudaStream_t stream_A, cudaEvent_t event_B )
 {
 
 	#if NMFGPU_PROFILING_KERNELS
@@ -669,13 +706,13 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 
 	// Delays kernel launch until d_B[] is ready.
 
-	if ( event_B ) {
+	{
 
 		#if NMFGPU_DEBUG
 			cudaError_t cuda_status =
 		#endif
 
-			cudaStreamWaitEvent( stream_A, *event_B, 0 );
+			cudaStreamWaitEvent( stream_A, event_B, 0 );
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
@@ -694,7 +731,7 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 	// Launches the kernel.
 
 	#if NMFGPU_PROFILING_KERNELS
-		start_cuda_timer( device_id );
+		start_cuda_timer();
 	#endif
 
 		div_sub( d_A, d_B, matrix_size, block_size, grid_extension, grid_length, div_operand, stream_A );
@@ -711,19 +748,19 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 		///////////////////////////////
 
 	#if NMFGPU_PROFILING_KERNELS
-		stop_cuda_timer_cnt( &td[ timing_index ], matrix_size, 1, device_id );
+		stop_cuda_timer_cnt( &td[ timing_index ], matrix_size, 1 );
 	#endif
 
 	// ------------------------------------------
 
 	// Records the operations as an event (reuses the event object).
-	if ( event_B ) {
+	{
 
 		#if NMFGPU_DEBUG
 			cudaError_t cuda_status =
 		#endif
 
-			cudaEventRecord( *event_B, stream_A );
+			cudaEventRecord( event_B, stream_A );
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
@@ -746,6 +783,9 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
  * d_A[i][j] = d_A[i][j] .* d_Aux[i][j] ./ d_accum_B[j]
  *
  * length(d_accum_B) >= pitch
+ *
+ * Kernel launch is delayed upon event "event_accB" completes.
+ * Then, the operation is registered using the same event object.
  *
  * 'pitch' must be a multiple of 'memory_alignment', and <= maxThreadsPerBlock.
  *
@@ -852,10 +892,35 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
 
 	} // If grid extension is required
 
-	// ---------------------------
+	// ------------------------------------------
+
+	// Delays kernel launch until d_accum_B[] is ready.
+	{
+
+		#if NMFGPU_DEBUG
+			cudaError_t cuda_status =
+		#endif
+
+			cudaStreamWaitEvent( stream_A, event_reduction, 0 );
+
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess ) {
+				fflush(stdout);
+				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error: could not delay operations until %s is ready: %s\n"
+					"Error in matrix_mul_div(%s, %s, %s, height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
+					",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX ", transpose=%i\n",
+					device_id, matrix_name_accB, cudaGetErrorString(cuda_status), matrix_name_A, matrix_name_Aux,
+					matrix_name_accB, height, width, pitch, maxBlockHeight_pitch, grid_extension, grid_length, transpose );
+			}
+		#endif
+		///////////////////////////////
+	}
+
+	// ------------------------------------------
 
 	#if NMFGPU_PROFILING_KERNELS
-		start_cuda_timer( device_id );
+		start_cuda_timer();
 	#endif
 
 		mul_div( d_A, d_Aux, d_accum_B, pitch, matrix_size, maxBlockHeight_pitch, grid_extension, grid_length, stream_A );
@@ -864,15 +929,15 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
 			#if NMFGPU_DEBUG
 				printf("\n--- [GPU%" PRI_IDX "] Resulting %s = %s .* %s ./ %s (height=%" PRI_IDX ",width=%" PRI_IDX
 					", pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-					", transpose=%i ): ---\n", device_id, matrix_name_A, matrix_name_Aux, matrix_name_accB,
-					height, pitch, maxBlockHeight_pitch, grid_extension, grid_length, transpose );
+					", transpose=%i ): ---\n", device_id, matrix_name_A, matrix_name_A, matrix_name_Aux, matrix_name_accB,
+					height, width, pitch, maxBlockHeight_pitch, grid_extension, grid_length, transpose );
 				check_cuda_status();
 				show_device_matrix( d_A, height, width, pitch, transpose, NULL );
 			#endif
 			///////////////////////////////
 
 	#if NMFGPU_PROFILING_KERNELS
-		stop_cuda_timer_cnt( &mul_div_timing[ timing_index ], matrix_size, 1, device_id );
+		stop_cuda_timer_cnt( &mul_div_timing[ timing_index ], matrix_size, 1 );
 	#endif
 
 } // matrix_mul_div
@@ -884,6 +949,9 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
  *
  * 'pitch' must be a multiple of 'memory_alignment', and <= maxThreadsPerBlock.
  *
+ * If 'event_A' is non-NULL, delays the kernel launch until such event completes.
+ * Then, the operation is recorded using the same event object.
+ *
  * WARNING:
  *	- On Compute Capability 1.x:
  *		height < maxBlockHeight_pitch * ADJUST__ITEMS_PER_THREAD * (2**24)
@@ -893,7 +961,7 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
 				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
 			#endif
-			cudaStream_t stream_A )
+			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
 {
 
 	#if NMFGPU_PROFILING_KERNELS
@@ -980,8 +1048,33 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 
 	// ---------------------------
 
+	// Delays kernel launch until d_A[] is ready.
+	if ( event_A ) {
+
+		#if NMFGPU_DEBUG
+			cudaError_t cuda_status =
+		#endif
+
+			cudaStreamWaitEvent( stream_A, *event_A, 0 );
+
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess ) {
+				fflush(stdout);
+				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error: could not delay operations until %s is ready: %s\n"
+					"Error in matrix_adjust(height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
+					",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
+					", transpose=%i ): ---\n", device_id, matrix_name_A, cudaGetErrorString(cuda_status),
+					height, width, pitch, maxBlockHeight_pitch, grid_extension, grid_length , transpose );
+			}
+		#endif
+		///////////////////////////////
+	}
+
+	// ---------------------------
+
 	#if NMFGPU_PROFILING_KERNELS
-		start_cuda_timer( device_id );
+		start_cuda_timer();
 	#endif
 
 		adjust( d_A, pitch, matrix_size, maxBlockHeight_pitch, grid_extension, grid_length, stream_A );
@@ -990,16 +1083,41 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
 				printf("\n--- [GPU%" PRI_IDX "] Resulting %s = MAX( %s, R_MIN ), (height=%" PRI_IDX ",width=%" PRI_IDX
 					", pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-					", transpose=%i ): ---\n", device_id, matrix_name_A, matrix_name_A, height, pitch, maxBlockHeight_pitch,
-					grid_extension, grid_length , transpose );
+					", transpose=%i ): ---\n", device_id, matrix_name_A, matrix_name_A, height, width, pitch,
+					maxBlockHeight_pitch, grid_extension, grid_length , transpose );
 				check_cuda_status();
 				show_device_matrix( d_A, height, width, pitch, transpose, NULL );
 			#endif
 			///////////////////////////////
 
 	#if NMFGPU_PROFILING_KERNELS
-		stop_cuda_timer_cnt( &adjust_timing[ timing_index ], matrix_size, 1, device_id );
+		stop_cuda_timer_cnt( &adjust_timing[ timing_index ], matrix_size, 1 );
 	#endif
+
+	// ---------------------------
+
+	// Delays kernel launch until d_A[] is ready.
+	if ( event_A ) {
+
+		#if NMFGPU_DEBUG
+			cudaError_t cuda_status =
+		#endif
+
+			cudaEventRecord( *event_A, stream_A );
+
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess ) {
+				fflush(stdout);
+				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\n"
+					"Error in matrix_adjust(%s, height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
+					",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
+					", transpose=%i ): ---\n", device_id, cudaGetErrorString(cuda_status), matrix_name_A,
+					height, width, pitch, maxBlockHeight_pitch, grid_extension, grid_length , transpose );
+			}
+		#endif
+		///////////////////////////////
+	}
 
 } // matrix_adjust
 
@@ -1020,7 +1138,8 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
  */
 void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch, index_t height,
 			#if NMFGPU_DEBUG
-				char const *__restrict__ const matrix_name_A, char const *__restrict__ const matrix_name_Idx,
+				bool transpose, char const *__restrict__ const matrix_name_A,
+				char const *__restrict__ const matrix_name_Idx,
 			#endif
 			cudaStream_t stream_A, index_t *__restrict__ d_Idx )
 {
@@ -1043,11 +1162,17 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
 
 	// block_width = Next_power_2( width / IDX_MAX__ITEMS_PER_THREAD ) >= memory_alignment
 
-	index_t block_width = ( width / IDX_MAX__ITEMS_PER_THREAD );
-	block_width = PREV_POWER_2( (block_width << 1) );	// PREV_POWER_2( x*2 ) == next_power_2( x )
-	block_width = MIN( block_width, memory_alignment );	// Note that memory_alignment is also a power of 2.
+	index_t block_width = memory_alignment;
+	index_t block_height = maxBlockHeight_pitch;	// If width <= memory_alignment, then pitch == memory_alignment
 
-	index_t const block_height = threadsPerBlock_pitch / block_width;
+	if ( width > memory_alignment ) {
+
+		block_width = ( width / IDX_MAX__ITEMS_PER_THREAD );
+		block_width = prev_power_2( (block_width << 1) );	// prev_power_2( x*2 ) == next_power_2( x )
+		block_width = MIN( block_width, memory_alignment );	// Note that memory_alignment is also a power of 2.
+
+		block_height = threadsPerBlock_pitch / block_width;
+	}
 
 
 	// Grid dimensions
@@ -1119,7 +1244,7 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
 	// ---------------------------
 
 	#if NMFGPU_PROFILING_KERNELS
-		start_cuda_timer( device_id );
+		start_cuda_timer();
 	#endif
 
 		idx_max( d_A, width, pitch, matrix_size, block_width, block_height, grid_extension, grid_length, stream_A, d_Idx );
@@ -1128,15 +1253,15 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
 			#if NMFGPU_DEBUG
 				printf("\n--- [GPU%" PRI_IDX "] Resulting %s[i] = max(%s[i][..]) (height=%" PRI_IDX ",width=%" PRI_IDX
 					", pitch=%" PRI_IDX ",block_width=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX
-					",grid_length=%" PRI_IDX "): ---\n", device_id, matrix_name_Idx, matrix_name_A, height, width, pitch,
-					block_width, block_height, grid_extension, grid_length, transpose );
+					",grid_length=%" PRI_IDX ",transpose=%i): ---\n", device_id, matrix_name_Idx, matrix_name_A, height,
+					width, pitch, block_width, block_height, grid_extension, grid_length, transpose );
 				check_cuda_status();
 				show_device_matrix( d_A, height, width, pitch, true, NULL );
 			#endif
 			///////////////////////////////
 
 	#if NMFGPU_PROFILING_KERNELS
-		stop_cuda_timer_cnt( &idx_max_timing[ timing_index ], matrix_size, 1, device_id );
+		stop_cuda_timer_cnt( &idx_max_timing[ timing_index ], matrix_size, 1 );
 	#endif
 
 } // matrix_idx_max
@@ -1148,29 +1273,27 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
  *
  * d_A[1..height][1..pitch] <--- A[1..height][1..pitch],
  *
- * The transfer is performed with stream "matrix_stream". No event is recorded.
+ * If 'event_A' is non-NULL, the operation is recorded as an event.
  */
-void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A
+void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				, index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
-				char const *__restrict__ const matrix_name_dA
+				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+				char const *__restrict__ const matrix_name_dA,
 			#endif
 			#if NMFGPU_PROFILING_TRANSF
-				, timing_data_t *__restrict__ const upload_timing
+				timing_data_t *__restrict__ const upload_timing,
 			#endif
-		)
+			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
 {
 
 	#if NMFGPU_VERBOSE_2
 		if ( ! device_id )
-			printf("\nUploading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i)\n", matrix_name_A, matrix_name_dA, height, width, pitch, transpose );
+			printf("\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+				",transpose: %i, event %s)\n", matrix_name_A, matrix_name_dA, height, width, pitch, transpose,
+				( event_A ? "provided" : "NOT provided"));
 	#endif
 
 	// ----------------------------------
-
-	// Stream for this operation.
-	cudaStream_t stream_A = matrix_stream;
 
 	#if NMFGPU_SYNC_TRANSF
 		// Synchronous data transfer: Waits until all previous operations have finished.
@@ -1184,9 +1307,9 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 	size_t const nitems = height * pitch;
 
 	#if NMFGPU_PROFILING_TRANSF
-	start_cuda_timer( device_id );
+		start_cuda_timer();
 	#endif
-
+	{
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
 		cudaError_t cuda_status =
 		#endif
@@ -1200,120 +1323,33 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-				printf("\n--- [GPU%" PRI_IDX "] Uploaded matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX
-					",pitch=%" PRI_IDX ",transpose: %i): ---\n", matrix_name_A, matrix_name_dA, height, width, pitch,
-					transpose);
+				printf("\n--- [GPU%" PRI_IDX "] Uploaded matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%"
+					PRI_IDX ",transpose: %i, event %s): ---\n", device_id, matrix_name_A, matrix_name_dA, height, width,
+					pitch, transpose, ( event_A ? "provided" : "NOT provided") );
 				check_cuda_status_st( cuda_status );
 				show_device_matrix( d_A, height, width, pitch, transpose, NULL );
 			#elif NMFGPU_SYNC_TRANSF
 				check_cuda_status_st( cuda_status );
 			#endif
 			/////////////////////////////
-
+	}
 	#if NMFGPU_PROFILING_TRANSF
-		stop_cuda_timer_cnt( upload_timing, nitems, 1, device_id );
+		stop_cuda_timer_cnt( upload_timing, nitems, 1 );
 	#endif
 
 	// ----------------------------------
 
-	#if NMFGPU_VERBOSE_2
-		if ( ! device_id )
-			printf("\nUploading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i)... Done\n", matrix_name_A, matrix_name_dA, height, width, pitch, transpose );
-	#endif
+	// If 'event_A' is non-NULL, the operation is recorded as an event.
+	if ( event_A ) {
 
-} // upload_matrix
-
-/////////////////////////////////////////////////////////////////////
-
-/*
- * Transfers a matrix from the HOST (CPU) to the DEVICE (GPU) as a row vector.
- *
- * d_A[1..height][1..pitch] <--- A[1..height][1..pitch],
- *
- * The transfer is performed with stream "matrix_stream", and is recorded as event "transfer_event".
- */
-void upload_matrix_event( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					, index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
-					char const *__restrict__ const matrix_name_dA
-				#endif
-				#if NMFGPU_PROFILING_TRANSF
-					, timing_data_t *__restrict__ const upload_timing
-				#endif
-			)
-{
-
-	#if NMFGPU_VERBOSE_2
-		if ( ! device_id )
-			printf("\nUploading Matrix %s to %s (with event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i)\n", matrix_name_A, matrix_name_dA, height, width, pitch, transpose );
-	#endif
-
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-		cudaError_t cuda_status = cudaSuccess;
-	#endif
-
-	// ----------------------------------
-
-	// Event and stream used for this operation.
-	cudaEvent_t event_A = transfer_event;
-	cudaStream_t stream_A = matrix_stream;
-
-	#if NMFGPU_SYNC_TRANSF
-		// Synchronous data transfer: Waits until all previous operations have finished.
-		check_cuda_status();
-	#endif
-
-	// ----------------------------------
-
-	// Performs the transfer...
-
-	size_t const nitems = height * pitch;
-
-	#if NMFGPU_PROFILING_TRANSF
-	start_cuda_timer( device_id );
-	#endif
-
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-			cuda_status =
+		#if NMFGPU_DEBUG
+			cudaError_t cuda_status =
 		#endif
 
-			cudaMemcpyAsync( d_A, A, nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
-
-			/* Same code using CUBLAS:
-			 *	cublasStatus cublas_status =
-			 *		cublasSetVectorAsync( nitems, sizeof(real), A, 1, d_A, 1, stream_A );
-			 */
-
-			///////////////////////////////
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-				printf("\n--- [GPU%" PRI_IDX "] Uploaded matrix %s to %s (with event, height=%" PRI_IDX ",width=%" PRI_IDX
-					",pitch=%" PRI_IDX ",transpose: %i): ---\n", matrix_name_A, matrix_name_dA, height, width, pitch,
-					transpose);
-				check_cuda_status_st( cuda_status );
-				show_device_matrix( d_A, height, width, pitch, transpose, NULL );
-			#elif NMFGPU_SYNC_TRANSF
-				check_cuda_status_st( cuda_status );
-			#endif
-			/////////////////////////////
-
-	#if NMFGPU_PROFILING_TRANSF
-		stop_cuda_timer_cnt( upload_timing, nitems, 1, device_id );
-	#endif
-
-	// ----------------------------------
-
-	// Records the previous operation on stream_A as 'event_A'
-
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-		cuda_status =
-	#endif
-
-		cudaEventRecord( event_A, stream_A );
+			cudaEventRecord( *event_A, stream_A );
 
 		///////////////////////////////
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+		#if NMFGPU_DEBUG
 			if ( cuda_status != cudaSuccess ) {
 				fflush(stdout);
 				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in upload_matrix_event(%s to %s, "
@@ -1324,15 +1360,18 @@ void upload_matrix_event( real const *__restrict__ A, index_t height, index_t pi
 		#endif
 		///////////////////////////////
 
+	} // Records the operation as an event.
+
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
 		if ( ! device_id )
-			printf("\nUploading Matrix %s to %s (with event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i)...Done.\n", matrix_name_A, matrix_name_dA, height, width, pitch, transpose );
+			printf("\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+				",transpose: %i, event %s).. Done\n", matrix_name_A, matrix_name_dA, height, width, pitch,
+				transpose, ( event_A ? "provided" : "NOT provided") );
 	#endif
 
-} // upload_matrix_event
+} // upload_matrix
 
 /////////////////////////////////////////////////////////////////////
 
@@ -1415,7 +1454,7 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 	// Starts the transfer...
 
 	#if NMFGPU_PROFILING_TRANSF
-	start_cuda_timer( device_id );
+	start_cuda_timer();
 	#endif
 
 	if ( ( block_pitch < pitch ) + ( offset > 0 ) ) {
@@ -1452,7 +1491,7 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 		size_t const nitems = height * pitch;
 
 		#if NMFGPU_PROFILING_TRANSF
-		start_cuda_timer( device_id );
+		start_cuda_timer();
 		#endif
 
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
@@ -1484,7 +1523,7 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 
 
 	#if NMFGPU_PROFILING_TRANSF
-	stop_cuda_timer_cnt( upload_timing, nitems, 1, device_id );
+	stop_cuda_timer_cnt( upload_timing, nitems, 1 );
 	#endif
 
 
@@ -1529,18 +1568,16 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
  * Transfers a matrix from the DEVICE (GPU) to HOST (CPU), as a row vector.
  *
  * A[1..height][1..pitch] <--- d_A[1..height][1..pitch],
- *
- * The transfer is performed with stream "matrix_stream". No event is recorded.
  */
-void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real const *__restrict__ d_A
+void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real const *__restrict__ d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				, index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
-				char const *__restrict__ const matrix_name_dA
+				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+				char const *__restrict__ const matrix_name_dA,
 			#endif
 			#if NMFGPU_PROFILING_TRANSF
-				, timing_data_t *__restrict__ const download_timing
+				timing_data_t *__restrict__ const download_timing,
 			#endif
-		)
+			cudaStream_t stream_A )
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1550,9 +1587,6 @@ void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real 
 	#endif
 
 	// ----------------------------------
-
-	// Stream for this operation.
-	cudaStream_t stream_A = matrix_stream;
 
 	#if NMFGPU_SYNC_TRANSF
 		// Synchronous data transfer: Waits until all previous operations have finished.
@@ -1566,7 +1600,7 @@ void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real 
 	size_t const nitems = height * pitch;
 
 	#if NMFGPU_PROFILING_TRANSF
-	start_cuda_timer( device_id );
+	start_cuda_timer();
 	#endif
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
@@ -1582,18 +1616,21 @@ void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real 
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-				printf("\n--- [GPU%" PRI_IDX "] Downloaded matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX
-					",pitch=%" PRI_IDX ",transpose: %i): ---\n", matrix_name_dA, matrix_name_A, height, width, pitch,
-					transpose);
+				printf("\n--- [GPU%" PRI_IDX "] Downloaded matrix %s to %s (no event, height=%" PRI_IDX ",width=%"
+					PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i): ---\n", device_id, matrix_name_dA, matrix_name_A,
+					height, width, pitch, transpose);
 				check_cuda_status_st( cuda_status );
-				matrix_show( A, height, width, pitch, transpose, NULL );
+				if ( transpose )
+					matrix_show( A, width, height, pitch, true, NULL );
+				else
+					matrix_show( A, height, width, pitch, false, NULL );
 			#elif NMFGPU_SYNC_TRANSF
 				check_cuda_status_st( cuda_status );
 			#endif
 			/////////////////////////////
 
 	#if NMFGPU_PROFILING_TRANSF
-	stop_cuda_timer_cnt( download_timing, nitems, 1, device_id );
+	stop_cuda_timer_cnt( download_timing, nitems, 1 );
 	#endif
 
 	// ----------------------------------
@@ -1612,18 +1649,16 @@ void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real 
  * Transfers an INTEGER matrix from the DEVICE (GPU) to HOST (CPU), as a row vector.
  *
  * A[1..height][1..pitch] <--- d_A[1..height][1..pitch],
- *
- * The transfer is performed with stream "matrix_stream". No event is recorded.
  */
-void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch, index_t const *__restrict__ d_A
+void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch, index_t const *__restrict__ d_A,
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					, index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
-					char const *__restrict__ const matrix_name_dA
+					index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+					char const *__restrict__ const matrix_name_dA,
 				#endif
 				#if NMFGPU_PROFILING_TRANSF
-					, timing_data_t *__restrict__ const download_timing
+					timing_data_t *__restrict__ const download_timing,
 				#endif
-			)
+				cudaStream_t stream_A )
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1633,9 +1668,6 @@ void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch
 	#endif
 
 	// ----------------------------------
-
-	// Stream for this operation.
-	cudaStream_t stream_A = matrix_stream;
 
 	#if NMFGPU_SYNC_TRANSF
 		// Synchronous data transfer: Waits until all previous operations have finished.
@@ -1649,7 +1681,7 @@ void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch
 	size_t const nitems = height * pitch;
 
 	#if NMFGPU_PROFILING_TRANSF
-	start_cuda_timer( device_id );
+	start_cuda_timer();
 	#endif
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
@@ -1666,17 +1698,20 @@ void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch
 			///////////////////////////////
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 				printf("\n--- [GPU%" PRI_IDX "] Downloaded integer matrix %s to %s (no event, height=%" PRI_IDX ",width=%"
-					PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i): ---\n", matrix_name_dA, matrix_name_A, height, width,
-					pitch, transpose);
+					PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i): ---\n", device_id,  matrix_name_dA, matrix_name_A,
+					height, width, pitch, transpose);
 				check_cuda_status_st( cuda_status );
-				matrix_int_show( A, height, width, pitch, transpose, NULL );
+				if ( transpose )
+					matrix_int_show( d_A, width, height, pitch, true, NULL );
+				else
+					matrix_int_show( d_A, height, width, pitch, false, NULL );
 			#elif NMFGPU_SYNC_TRANSF
 				check_cuda_status_st( cuda_status );
 			#endif
 			/////////////////////////////
 
 	#if NMFGPU_PROFILING_TRANSF
-	stop_cuda_timer_cnt( download_timing, nitems, 1, device_id );
+	stop_cuda_timer_cnt( download_timing, nitems, 1 );
 	#endif
 
 	// ----------------------------------

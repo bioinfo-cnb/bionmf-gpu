@@ -41,7 +41,7 @@
 
 // =======================================================================
 
-#if (! __CUDA_ARCH__) || (__CUDA_ARCH__ >= 120)	/* Compute Capability >= 1.2 */
+#if (defined(__NVCC__) && ! defined(__CUDA_ARCH__)) || (__CUDA_ARCH__ >= 120)	/* NVCC host code or Compute Capability >= 1.2 */
 
 	/* Global variable used in kernel_reduce_to_row().
 	 *	Please see the threadfenceReduction example in CUDA SDK for details.
@@ -225,7 +225,7 @@ __device__ static real reduce_gmem_to_row( real const *__restrict__ d_A, index_t
  *
  * Reduces the shared-memory block to a row. That is, returns SUM( shmem[..][tx] )
  *
- * Size of shared-memory block: bs = blockDim.x * blockDim.y
+ * Size of shared-memory block: blockDim.x * blockDim.y
  *
  * block_width: Overrides blockDim.x
  *		On Compute Capability 1.x, it is denoted as "'half-warp-size' mode" when set to 16.
@@ -292,9 +292,6 @@ __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
 		index_t const bdx = ( block_width  ? block_width  : blockDim.x );	// == pitch
 		index_t const bdy = ( block_height ? block_height : blockDim.y );	// A power of 2.
 
-		// Block size.
-		index_t const bs = IMUL( bdx, bdy );
-
 		// Overrides offset from current block: threadIdx.y * blockDim.x + threadIdx.x
 		if ( block_width + (block_height == 1) )
 			offset = IMUL( ty, bdx ) + tx;
@@ -303,7 +300,7 @@ __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
 
 		// Shared memory for matrix reduction. Used in "multi-rows" mode.
 		extern __shared__ real smem[];
-		DECLARE_POINTER_SM_VAR( sums, , const, smem, 0, bs );
+		DECLARE_POINTER_SM_VAR( sums, , const, smem, 0, (IMUL( bdx, bdy )) );
 
 		/* On Compute Capability 1.x, no synchronization is required below the warp size.
 		 * Instead, a "volatile" pointer to shared memory is used.
@@ -348,8 +345,7 @@ __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
 
 				// half >= 32. It is never executed on Compute Capability <= 3.5
 				default: {
-					// for ( half=(bdy/2) ; half > 16 ; half /= 2 )
-					for ( index_t height = bdy, bound = (bs >> 1) ; height > 32 ; height >>= 1, bound >>= 1 ) {
+					for ( index_t half = (bdy >> 1), bound = IMUL( half, bdx ) ; half > 16 ; half >>= 1, bound >>= 1 ) {
 
 						__syncthreads();
 

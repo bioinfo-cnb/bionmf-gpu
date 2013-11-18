@@ -45,6 +45,7 @@
  *		NMFGPU_VERBOSE_2: Even more information.
  *
  *	Debug:
+ *		NMFGPU_CPU_RANDOM: Uses the CPU (host) random generator (not the CURAND library).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_DEBUG_TRANSF: Shows the result of each data transfer.
  *		NMFGPU_SYNC_TRANSF: Performs synchronous data transfers.
@@ -164,6 +165,47 @@ extern real *pd_H;	// Pointer to current column in d_H (actually, the current ro
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
+// -------------------------------------
+
+/*
+ * Initializes the GPU or the CPU random generator,
+ * with the given seed value
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int init_random( index_t seed );
+
+// -------------------------------------
+
+/*
+ * Finalizes the selected random generator.
+ */
+void destroy_random( void );
+
+// -------------------------------------
+
+/*
+ * Sets random values in d_A[] using the selected random generator and seed.
+ *
+ * If the CPU (host) random generator was selected, it first sets
+ * the random values on A[] and uploads its content to d_A[].
+ *
+ * If 'event_A' is non-NULL, the operation is recorded as an event.
+ *
+ * WARNING: Requires the random generator properly initialized, with a seed set.
+ */
+void set_random_values( real *RESTRICT A, real *RESTRICT d_A, index_t height, index_t width, index_t padding,
+				#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+					bool transpose, char const *RESTRICT const matrix_name_A,
+					char const *RESTRICT const matrix_name_dA,
+				#endif
+				#if (! NMFGPU_CPU_RANDOM) && NMFGPU_PROFILING_TRANSF
+					timing_data_t *RESTRICT const upload_timing,
+				#endif
+				cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
+
+// -----------------------------------
+
 /*
  * WH(N,BLMp) = W * pH(BLM,Kp)
  * WH(N,BLMp) = Vcol(N,BLMp) ./ WH(N,BLMp)
@@ -191,26 +233,6 @@ void update_H( void );
  * It also updates 'stepN' according to the processing direction (forward or backward).
  */
 void update_W( void );
-
-// -----------------------------------
-
-/*
- * d_A = MAX( d_A , R_MIN )
- *
- * Adjusts 'd_A' to avoid underflows.
- *
- *	- d_A is 'd_H' or 'd_W'.
- *	- BL: Number of rows (ie., BLN or BLM).
- *	- Padding is fixed to 'Kp'.
- *
- * NOTE: This is a portion of the Test of Convergence. Therefore,
- *	the elapsed time is added to the convergence-test time.
- */
-void adjust_matrix( real *RESTRICT d_A, index_t height,
-			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-				bool transpose, char const *RESTRICT const matrix_name_A,
-			#endif
-			cudaStream_t stream_A, cudaEvent_t event_A );
 
 // -----------------------------------
 

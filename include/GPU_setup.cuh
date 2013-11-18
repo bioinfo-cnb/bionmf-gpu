@@ -45,6 +45,7 @@
  *
  *	Debug / Testing:
  *		NMFGPU_FIXED_INIT: Uses "random" values generated from a fixed seed (defined in common.h).
+ *		NMFGPU_CPU_RANDOM: Uses the CPU (host) random generator (not the CURAND library).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_FORCE_BLOCKS: Forces the processing of the input matrix as four blocks.
  *		NMFGPU_TEST_BLOCKS: Just shows block information structure. No GPU memory is allocated.
@@ -191,17 +192,20 @@ extern index_t maxBlockHeight_pitch;		// <= (threadsPerBlock_pitch / pitch)
 extern block_t block_N, block_M;		// Information for blockwise processing on dimension N and M.
 
 // CUDA Events for synchronization:
-extern cudaEvent_t Vrow_event;			// d_Vrow
-extern cudaEvent_t Vcol_event;			// d_Vcol
-extern cudaEvent_t transfer_event;		// Data transfers to/from d_W and d_H.
-extern cudaEvent_t matrix_event;		// Matrix reductions and other operations on d_W and d_H.
+extern cudaEvent_t event_Vrow;			// d_Vrow
+extern cudaEvent_t event_Vcol;			// d_Vcol
+extern cudaEvent_t event_W;			// d_W
+extern cudaEvent_t event_H;			// d_H
+extern cudaEvent_t event_reduction;		// Event to register matrix reduction operations.
+
 
 // CUDA Streams for synchronization:
-extern cudaStream_t Vrow_stream;		// d_Vrow
-extern cudaStream_t Vcol_stream;		// d_Vcol
-extern cudaStream_t matrix_stream;		// Matrix reductions, data transfers and other operations on d_W and d_H.
-extern cudaStream_t *RESTRICT NMF_streams;	// Main-flow streams for blockwise processing.
-extern index_t num_NMF_streams;			// Number of main-flow streams: MAX( SUM(block_N.num_steps[i]), SUM(block_M.num_steps[i]) )
+extern cudaStream_t stream_Vrow;		// d_Vrow
+extern cudaStream_t stream_Vcol;		// d_Vcol
+extern cudaStream_t stream_W;			// d_W
+extern cudaStream_t stream_H;			// d_H
+extern cudaStream_t *RESTRICT streams_NMF;	// Main-flow streams for blockwise processing.
+extern index_t num_streams_NMF;			// Number of main-flow streams: MAX( SUM(block_N.num_steps[i]), SUM(block_M.num_steps[i]) )
 
 // Matrix dimensions (host side):
 extern index_t N;	// Number of rows of input matrix V.
@@ -306,6 +310,14 @@ index_t get_padding( index_t dim );
 // ------------------------------------------
 
 /*
+ * Computes the highest power of 2 <= x.
+ * Returns the same value (x) if it is already a power of 2, or is zero.
+ */
+index_t prev_power_2( index_t x );
+
+// ------------------------------------------
+
+/*
  * Initializes the GPU device.
  *
  * Initializes CUDA, CUBLAS and data structures.
@@ -397,6 +409,16 @@ int init_randomGenerator( void );
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int set_randomGenerator_seed( unsigned long long seed );
+
+// ------------------------------------------
+
+/*
+ * Creates a Random-number Generator using the CURAND Library.
+ * Sets the seed to the given parameter.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int init_GPU_random( unsigned long long seed );
 
 // ------------------------------------------
 
