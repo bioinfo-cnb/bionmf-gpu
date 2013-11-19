@@ -173,10 +173,10 @@ void matrix_random( real *RESTRICT d_A, index_t height, index_t width, index_t p
  *		('REDUCE_TO_ROW__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
  */
 void matrix_to_row( real const *RESTRICT d_A, index_t height, index_t pitch,
-		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-		index_t width, char const *RESTRICT const matrix_name,
-		#endif
-		real *RESTRICT d_Tmp, real *RESTRICT d_accum_A, cudaStream_t stream_AccA );
+			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+			index_t width, char const *RESTRICT const matrix_name,
+			#endif
+			real *RESTRICT d_Tmp, real *RESTRICT d_accum_A, cudaStream_t stream_AccA );
 
 // -----------------------------------------
 

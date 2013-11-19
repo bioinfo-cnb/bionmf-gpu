@@ -324,17 +324,18 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
  *		('REDUCE_TO_ROW__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
  */
 void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
-		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-		index_t width, char const *__restrict__ const matrix_name,
-		#endif
-		real *__restrict__ d_Tmp, real *__restrict__ d_accum_A, cudaStream_t stream_AccA )
+			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+				index_t width, char const *__restrict__ const matrix_name,
+			#endif
+			real *__restrict__ d_Tmp, real *__restrict__ d_accum_A, cudaStream_t stream_AccA )
 {
 
 	///////////////////////////////
 	#if NMFGPU_DEBUG_REDUCT
 		if ( ! device_id )
-			printf("\n--- Begin of matrix_to_row(computeCapability=%" PRI_IDX ", width=%" PRI_IDX ", pitch=%" PRI_IDX
-				", height=%" PRI_IDX ") on %s: ---\n", computeCapability, width, pitch, height, matrix_name);
+			printf("\n--- Begin of matrix_to_row(computeCapability=%" PRI_IDX ".%" PRI_IDX ", width=%" PRI_IDX ", pitch=%"
+				PRI_IDX ", height=%" PRI_IDX ") on %s: ---\n", computeCapability, computeCapability_minor, width, pitch,
+				height, matrix_name);
 	#endif
 	///////////////////////////////
 
@@ -452,6 +453,15 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 		} // If grid extension is required
 
+			///////////////////////////////
+			#if NMFGPU_DEBUG_REDUCT
+				if ( ! device_id )
+					printf("reduce_to_row(pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX
+						",grid_length=%" PRI_IDX ", matrix_size=%" PRI_IDX "), abh=%" PRI_IDX "...\n", pitch,
+						block_height, grid_extension, grid_length, matrix_size, abh );
+			#endif
+			///////////////////////////////
+
 		// ---------------------------
 
 		#if NMFGPU_PROFILING_KERNELS
@@ -505,7 +515,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 				/* d_Tmp[ grid_extension*grid_length ][ pitch ] is reduced with a single block.
 				 * No temporary storage is required.
 				 */
-				index_t const Tmp_size = grid_extension * grid_length;
+				index_t const Tmp_size = grid_extension * grid_length * pitch;
 				reduce_to_row( d_Tmp, pitch, NULL, block_height, 1, 1, Tmp_size, stream_AccA, d_accum_A );
 
 				///////////////////////////////

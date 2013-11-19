@@ -196,6 +196,7 @@ __device__ static real reduce_gmem_to_row( real const *__restrict__ d_A, index_t
 				for ( index_t i = 0 ; i < num_items ; i++ )
 					elemIdx[ i ] += act_bs;
 
+				// TODO: Parallel reduction
 				#pragma unroll
 				for ( index_t i = 0 ; i < num_items ; i++ )
 					sum_val += value[ i ];
@@ -253,7 +254,7 @@ __device__ static real reduce_gmem_to_row( real const *__restrict__ d_A, index_t
  * Returns the sum of the corresponding column. That is, sums[ty...(bdy-1)][tx]
  */
 template < index_t block_width, index_t block_height >
-__device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
+__device__ static void reduce_shmem_to_row( index_t offset, real *__restrict__ current_sum_val )
 {
 
 	#if __CUDA_ARCH__
@@ -275,6 +276,10 @@ __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
 
 		// ------------------------------------------------
 
+		// Resulting value.
+		real sum_val = *current_sum_val;
+
+
 		// Uses the "'half-warp-size' mode" on Compute Capability 1.x if block_width == 16 (i.e., warpSize/2)
 		#if __CUDA_ARCH__ < 200
 			bool const half_warpSize = ( block_width == 16 );
@@ -293,7 +298,7 @@ __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
 		index_t const bdy = ( block_height ? block_height : blockDim.y );	// A power of 2.
 
 		// Overrides offset from current block: threadIdx.y * blockDim.x + threadIdx.x
-		if ( block_width + (block_height == 1) )
+		if ( block_width || (block_height == 1) )
 			offset = IMUL( ty, bdx ) + tx;
 
 		// ------------------------------------------------
@@ -313,7 +318,7 @@ __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
 		 * which is then reduced to a single row.
 		 */
 
-		if ( half_warpSize && ((! block_height) || (block_height == 2)) ) {
+		if ( half_warpSize && (bdy == 2) ) {
 
 			// Uses the volatile pointer (no synchronization is necessary).
 			STORE_IN_SM( vsums, offset, sum_val );	// vsums[ty][tx]
@@ -400,10 +405,13 @@ __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
 				index_t const bound = ( bdx << 1 );	// bdx * 2
 				__syncthreads();
 				if ( offset < bound ) {
-					if ( half_warpSize )
+					if ( half_warpSize ) {
 						sum_val += LOAD_FROM_SM( vsums, (offset + bound) );
-					else
+						STORE_IN_SM( vsums, offset, sum_val );
+					} else {
 						sum_val += LOAD_FROM_SM(  sums, (offset + bound) );
+						STORE_IN_SM( sums, offset, sum_val );
+					}
 				}
 			}
 
@@ -424,11 +432,11 @@ __device__ static real reduce_shmem_to_row( index_t offset, real sum_val )
 
 		} // switch
 
+		*current_sum_val = sum_val;	// sums[ty][tx]
+
 	} // Skips instantiated code that actually is never executed.
 
 	#endif	/* __CUDA_ARCH__ */
-
-	return sum_val;	// sums[ty][tx]
 
 } // reduce_shmem_to_row
 
@@ -567,7 +575,7 @@ __global__ static void kernel_reduce_to_row(real const *__restrict__ d_A,index_t
 		 * The returned value correspond to: sums[ty...(bdy-1)][tx]
 		 */
 		if ( bdy > 1 )
-			sum_val = reduce_shmem_to_row< block_width, block_height >( offset, sum_val );
+			reduce_shmem_to_row< block_width, block_height >( offset, &sum_val );
 
 		// ------------------------------------------------
 
@@ -592,8 +600,8 @@ __global__ static void kernel_reduce_to_row(real const *__restrict__ d_A,index_t
 					idx = IMUL( idx, bdx );		// 24-bit product on Compute Capability 1.x. 32-bit op., otherwise.
 				idx += tx;
 
-				if ( (block_height == 1) || (offset < bdx) )	// if ( ty == 0 )
-					d_Tmp[ idx ] = sum_val;			//	d_Tmp[by*gdx+bx][tx] = shmem[0][tx]
+				if ( (bdy == 1) || (offset < bdx) )	// if ( ty == 0 )
+					d_Tmp[ idx ] = sum_val;		//	d_Tmp[by*gdx+bx][tx] = shmem[0][tx]
 			}
 
 			// ------------------------------------------------
@@ -670,11 +678,11 @@ __global__ static void kernel_reduce_to_row(real const *__restrict__ d_A,index_t
 					 * The returned value correspond to: sums[ty...(bdy-1)][tx]
 					 */
 					if ( bdy > 1 )
-						sum_val = reduce_shmem_to_row< block_width, block_height >( offset, sum_val );
+						reduce_shmem_to_row< block_width, block_height >( offset, &sum_val );
 
 					// The resulting value is stored in d_C[0][tx]
 					if ( (bdy == 1) || (offset < bdx) ) {		// if ( ty == 0 )
-						d_C[ tx ] = sum_val;			//	d_C[0][tx] = shmem[0][tx]
+						d_C[ offset ] = sum_val;		//	d_C[0][tx] = shmem[0][tx]
 
 						// In addition, any of threads reset the counter (do not care which).
 						retirement_counter = 0;
@@ -682,13 +690,13 @@ __global__ static void kernel_reduce_to_row(real const *__restrict__ d_A,index_t
 
 				} // if last_block
 
-			#endif /* __CUDA_ARCH__ >= 110 */
+			#endif /* __CUDA_ARCH__ >= 120 */
 
 		// "Single-block" mode
 		} else {
 			// The result is directly stored in d_C[0][tx].
 			if ( (bdy == 1) || (offset < bdx) )		// if ( ty == 0 )
-				d_C[ tx ] = sum_val;			//	d_C[0][tx] = shmem[0][tx]
+				d_C[ offset ] = sum_val;		//	d_C[0][tx] = shmem[0][tx]
 
 		} // if ( gdx > 1 )
 
@@ -741,7 +749,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
 		 *	built-in variable.
 		 */
 
-		if ( grid_length > 1 )	// multi-blocks grid.
+		if ( grid_length > 1 ) {	// multi-blocks grid.
 
 			switch ( block_height ) {
 
@@ -792,13 +800,15 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
 				 *	Otherwise (i.e., in "single-block mode"), no shared memory is used,
 				 */
 				case 1: {
+					dim3 const dimBlock( pitch, 1 );
+					size_t shmem_size = sizeof(bool);	// Size of shared-memory block, in bytes.
 					if ( grid_extension > 1 )
 						kernel_reduce_to_row< true, false, 0, 1, num_items >
-								<<< dimGrid, pitch, sizeof(bool), stream_AccA >>>
+								<<< dimGrid, dimBlock, shmem_size, stream_AccA >>>
 										( d_A, matrix_size, d_Tmp, d_accum_A );
 					else
 						kernel_reduce_to_row< false, false, 0, 1, num_items >
-								<<< dimGrid, pitch, sizeof(bool), stream_AccA >>>
+								<<< dimGrid, dimBlock, shmem_size, stream_AccA >>>
 										( d_A, matrix_size, d_Tmp, d_accum_A );
 				} break;
 
@@ -820,14 +830,16 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
 				} break;
 
 			} // switch( block_height )
+		}
 
 		// Just a single block
 		else {
 			dim3 const dimBlock( pitch, block_height );
+			dim3 const dimGrid_SB( 1, 1 );
 			size_t shmem_size = pitch * block_height * sizeof(real);	// Size of shared-memory block, in bytes.
 			kernel_reduce_to_row< false, true, 0, 0, num_items >
-					<<< 1, dimBlock, shmem_size, stream_AccA >>>
-							( d_A, matrix_size, d_Tmp, d_accum_A );
+					<<< dimGrid_SB, dimBlock, shmem_size, stream_AccA >>>
+							( d_A, matrix_size, NULL, d_accum_A );
 		}
 
 	} // pitch > 32
@@ -835,7 +847,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
 	// pitch == 32. On Compute Capability <= 3.5, it is equal to the warp size.
 	else if ( pitch == 32 ) {
 
-		if ( grid_length > 1 )	// multi-blocks grid.
+		if ( grid_length > 1 ) {	// multi-blocks grid.
 
 			switch ( block_height ) {
 
@@ -884,14 +896,16 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
 				} break;
 
 			} // switch( block_height )
+		}
 
 		// Just a single block
 		else {
 			dim3 const dimBlock( 32, block_height );
+			dim3 const dimGrid_SB( 1, 1 );
 			size_t const shmem_size = 32 * block_height * sizeof(real);	// Size of shared-memory block, in bytes.
 			kernel_reduce_to_row< false, true, 32, 0, num_items >
-					<<< 1, dimBlock, shmem_size, stream_AccA >>>
-							( d_A, matrix_size, d_Tmp, d_accum_A );
+					<<< dimGrid_SB, dimBlock, shmem_size, stream_AccA >>>
+							( d_A, matrix_size, NULL, d_accum_A );
 		}
 
 	} // pitch == 32
@@ -901,7 +915,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
 	 */
 	else {
 
-		if ( grid_length > 1 )	// multi-blocks grid.
+		if ( grid_length > 1 ){	// multi-blocks grid.
 
 			switch ( block_height ) {
 
@@ -936,13 +950,15 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
 				} break;
 
 			} // switch( block_height )
+		}
 
 		// Just a single block
 		else {
 			dim3 const dimBlock( 16, block_height );
+			dim3 const dimGrid_SB( 1, 1 );
 			size_t const shmem_size = 16 * block_height * sizeof(real); // Size of shared-memory block, in bytes.
 			kernel_reduce_to_row< false, true, 16, 0, num_items >
-					<<< 1, dimBlock, shmem_size, stream_AccA >>>
+					<<< dimGrid_SB, dimBlock, shmem_size, stream_AccA >>>
 							( d_A, matrix_size, NULL, d_accum_A );
 		}
 
