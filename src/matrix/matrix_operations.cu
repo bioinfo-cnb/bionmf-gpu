@@ -212,7 +212,7 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
 	#if ! NMFGPU_CPU_RANDOM
 
 		#if NMFGPU_VERBOSE_2
-			if (! device_id)
+			if ( (! device_id) + (num_devices == 1) )
 				printf("\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
 					", transpose=%i)\n", matrix_name, height, width, padding, transpose );
 		#endif
@@ -283,9 +283,9 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
 					if ( cuda_status != cudaSuccess ) {
 						fflush(stdout);
 						fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in "
-							"matrix_random(%s,height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
-							", transpose=%i).\n", device_id, cudaGetErrorString(cuda_status),height, width,
-							padding, transpose );
+							"matrix_random(%s, height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
+							", transpose=%i).\n", device_id, cudaGetErrorString(cuda_status), matrix_name,
+							height, width, padding, transpose );
 					}
 				#endif
 				///////////////////////////////
@@ -294,7 +294,7 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
 		// ----------------------------------
 
 		#if NMFGPU_VERBOSE_2
-		if (! device_id)
+		if ( (! device_id) + (num_devices == 1) )
 			printf("\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
 				", transpose=%i)... Done.\n", matrix_name, height, width, padding, transpose );
 		#endif
@@ -332,7 +332,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 	///////////////////////////////
 	#if NMFGPU_DEBUG_REDUCT
-		if ( ! device_id )
+		if ( (! device_id) + (num_devices == 1) )
 			printf("\n--- Begin of matrix_to_row(computeCapability=%" PRI_IDX ".%" PRI_IDX ", width=%" PRI_IDX ", pitch=%"
 				PRI_IDX ", height=%" PRI_IDX ") on %s: ---\n", computeCapability, computeCapability_minor, width, pitch,
 				height, matrix_name);
@@ -400,7 +400,8 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 				// Tries to use a block height as large as possible.
 
-				index_t const max_block_height1 = height / REDUCE_TO_ROW__ITEMS_PER_THREAD;
+				index_t max_block_height1 = height / REDUCE_TO_ROW__ITEMS_PER_THREAD;
+				max_block_height1 = MIN( 1, max_block_height1 );
 
 				index_t const max_block_height2 = maxThreadsPerBlock / pitch;
 
@@ -455,7 +456,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG_REDUCT
-				if ( ! device_id )
+				if ( (! device_id) + (num_devices == 1) )
 					printf("reduce_to_row(pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX
 						",grid_length=%" PRI_IDX ", matrix_size=%" PRI_IDX "), abh=%" PRI_IDX "...\n", pitch,
 						block_height, grid_extension, grid_length, matrix_size, abh );
@@ -476,7 +477,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG_REDUCT
-				if ( ! device_id )
+				if ( (! device_id) + (num_devices == 1) )
 					check_cuda_status();
 			#endif
 			///////////////////////////////
@@ -496,7 +497,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			///////////////////////////////
 			#if NMFGPU_DEBUG_REDUCT
 				// Resulting d_Tmp from previous stage:
-				if ( ! device_id ) {
+				if ( (! device_id) + (num_devices == 1) ) {
 					printf("\n---Resulting d_Tmp (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 						",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX "):---\n",
 						height, width, pitch, block_height, grid_extension, grid_length );
@@ -520,7 +521,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 				///////////////////////////////
 				#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-					if ( ! device_id )
+					if ( (! device_id) + (num_devices == 1) )
 						check_cuda_status();
 				#endif
 				///////////////////////////////
@@ -700,11 +701,11 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 
 		// Grid "extension"
 		index_t const gh = maxGridSizeX * act_bs;
-		grid_extension = ( height + gh - 1 ) / gh;	// << maxGridSizeY
+		grid_extension = ( matrix_size + gh - 1 ) / gh;	// << maxGridSizeY
 
 		// Grid "length"
 		index_t const gw = grid_extension * act_bs;
-		grid_length = ( height + gw - 1 ) / gw;		// <= maxGridSizeX
+		grid_length = ( matrix_size + gw - 1 ) / gw;	// <= maxGridSizeX
 
 		#if NMFGPU_PROFILING_KERNELS
 			timing_index = 1;
@@ -1266,7 +1267,7 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
 					",grid_length=%" PRI_IDX ",transpose=%i): ---\n", device_id, matrix_name_Idx, matrix_name_A, height,
 					width, pitch, block_width, block_height, grid_extension, grid_length, transpose );
 				check_cuda_status();
-				show_device_matrix( d_A, height, width, pitch, true, NULL );
+				show_device_matrix_int( d_Idx, 1, height, height, false, NULL );
 			#endif
 			///////////////////////////////
 
@@ -1297,7 +1298,7 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 {
 
 	#if NMFGPU_VERBOSE_2
-		if ( ! device_id )
+		if ( (! device_id) + (num_devices == 1) )
 			printf("\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i, event %s)\n", matrix_name_A, matrix_name_dA, height, width, pitch, transpose,
 				( event_A ? "provided" : "NOT provided"));
@@ -1375,7 +1376,7 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		if ( ! device_id )
+		if ( (! device_id) + (num_devices == 1) )
 			printf("\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i, event %s).. Done\n", matrix_name_A, matrix_name_dA, height, width, pitch,
 				transpose, ( event_A ? "provided" : "NOT provided") );
@@ -1388,24 +1389,25 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 /*
  * Transfers (a portion of) a matrix from the HOST (CPU) to the DEVICE (GPU).
  *
- * d_A[1..height][1..block_pitch] <--- p_A[1..height][1..block_pitch],
+ * d_A[1..height][1..block_pitch] <--- pA[1..height][1..block_pitch],
  * where:
- *	p_A[1..height][1..block_pitch] == &A[X..(X+height)][offset..(offset+block_pitch)]
+ *	pA[1..height][1..block_pitch] == &A[strow..(strow+height)][stcol..(stcol+block_pitch)]
  *
  * block_pitch: Matrix block pitch.
  * block_width <= block_pitch
- * offset: Starting COLUMN.
+ * strow: Starting row.
+ * stcol: Starting column.
  *
- * 0 <= offset < pitch.
+ * 0 <= stcol < pitch.
  * Matrix is ROW-wise (i.e., it is NOT transposed).
  *
  * The transfer is delayed until the event 'event_A' has completed all previous operations.
  * Then, the operation is recorded using the same event object.
  *
- * It also checks that (offset + block_pitch) <= pitch,
+ * It also checks that (stcol + block_pitch) <= pitch,
  * and adjusts the width of the block to be transferred, if necessary.
  */
-void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_t pitch, index_t offset,
+void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t pitch, index_t strow, index_t stcol,
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 					index_t block_width, char const *__restrict__ const matrix_name_A,
 					char const *__restrict__ const matrix_name_dA,
@@ -1418,16 +1420,18 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 {
 
 	#if NMFGPU_VERBOSE_2
-		if ( ! device_id )
-			printf("\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",offset=%" PRI_IDX ",block_width=%"
-				PRI_IDX ", block_pitch=%" PRI_IDX ")\n", matrix_name_A, matrix_name_dA, height, pitch, offset, block_width,
-				block_pitch);
+		if ( (! device_id) + (num_devices == 1) )
+			printf("\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",stcol=%" PRI_IDX ",strow=%"
+				PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ")\n", matrix_name_A, matrix_name_dA, height,
+				pitch, strow, stcol, block_width, block_pitch);
 	#endif
 
 
 	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
 		cudaError_t cuda_status = cudaSuccess;
 	#endif
+
+	index_t const nitems = height * pitch;
 
 	// ----------------------------------
 
@@ -1451,10 +1455,10 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 			if ( cuda_status != cudaSuccess ) {
 				fflush(stdout);
 				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error setting CUDA event to wait for (cudaStreamWaitEvent): %s\nError "
-						"in upload_matrix_partial(%s to %s, partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",offset=%"
-						PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ").\n", device_id,
-						cudaGetErrorString(cuda_status), matrix_name_A, matrix_name_dA, height, pitch, offset,
-						block_width, block_pitch);
+						"in upload_matrix_partial(%s to %s, partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%"
+						PRI_IDX ",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ").\n",
+						device_id, cudaGetErrorString(cuda_status), matrix_name_A, matrix_name_dA, height, pitch,
+						strow, stcol, block_width, block_pitch);
 			}
 		#endif
 		///////////////////////////////
@@ -1467,7 +1471,7 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 	start_cuda_timer();
 	#endif
 
-	if ( ( block_pitch < pitch ) + ( offset > 0 ) ) {
+	if ( (block_pitch < pitch) + (stcol > 0) ) {
 
 		/*
 		 * It must be transferred as a 2D matrix.
@@ -1476,29 +1480,28 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 		/* If necessary, adjusts the width to avoid an out-of-bound failure in CPU memory,
 		 * but then, such width will NOT be a multiple of 'memory_alignment', resulting in a slower transfer.
 		 */
-		index_t const width = ( ( (offset + block_pitch) <= pitch ) ? block_pitch : (pitch - (offset + block_pitch)) );
+		index_t const width = MIN( block_pitch, (pitch-stcol) );
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
 			cuda_status =
 		#endif
 
-			cudaMemcpy2DAsync( d_A, block_pitch * sizeof(real), p_A, pitch * sizeof(real),
+			cudaMemcpy2DAsync( d_A, block_pitch * sizeof(real), &A[ (strow * pitch) + stcol ], pitch * sizeof(real),
 						width * sizeof(real), height, cudaMemcpyHostToDevice, stream_A );
 
 			/* Same code using CUBLAS:
 			 *	cublasStatus cublas_status =
-			 *		cublasSetMatrixAsync( width, height, sizeof(real), p_A, pitch, d_A, block_pitch, stream_A );
+			 *		cublasSetMatrixAsync( width, height, sizeof(real), &A[ (strow * pitch) + stcol ], pitch,
+			 *					d_A, block_pitch, stream_A );
 			 */
 
 
-	// ( block_pitch == pitch ) && ( offset == 0 )
+	// ( block_pitch == pitch ) && ( stcol == 0 )
 	} else {
 
 		/*
 		 * It can be transferred as a row vector.
 		 */
-
-		size_t const nitems = height * pitch;
 
 		#if NMFGPU_PROFILING_TRANSF
 		start_cuda_timer();
@@ -1508,22 +1511,22 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 				cuda_status =
 			#endif
 
-				cudaMemcpyAsync( d_A, p_A, nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
+				cudaMemcpyAsync( d_A, &A[ (strow * pitch) ], nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
 
 				/* Same code using CUBLAS:
 				 *	cublasStatus cublas_status =
-				 *		cublasSetVectorAsync( nitems, sizeof(real), p_A, 1, d_A, 1, stream_A );
+				 *		cublasSetVectorAsync( nitems, sizeof(real), &A[ (strow * pitch) ], 1, d_A, 1, stream_A );
 				 */
 
 
-	} // if ( ( block_pitch < pitch ) || ( offset > 0 ) )
+	} // if ( ( block_pitch < pitch ) || ( stcol > 0 ) )
 
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			printf("\n--- [GPU%" PRI_IDX "] Uploaded Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",offset=%"
-				PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ")\n", device_id,  matrix_name_A, matrix_name_dA,
-				height, pitch, offset, block_width, block_pitch );
+			printf("\n--- [GPU%" PRI_IDX "] Uploaded Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%"
+				PRI_IDX ",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ")\n", device_id, matrix_name_A,
+				matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch );
 			check_cuda_status_st( cuda_status );
 			show_device_matrix( d_A, height, block_width, block_pitch, false, NULL );
 		#elif NMFGPU_SYNC_TRANSF
@@ -1533,7 +1536,7 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 
 
 	#if NMFGPU_PROFILING_TRANSF
-	stop_cuda_timer_cnt( upload_timing, nitems, 1 );
+		stop_cuda_timer_cnt( upload_timing, nitems, 1 );
 	#endif
 
 
@@ -1552,9 +1555,9 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 			if ( cuda_status != cudaSuccess ) {
 				fflush(stdout);
 				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA: %s\nError in upload_matrix_partial(%s to %s, "
-						"partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",offset=%" PRI_IDX ",block_width=%" PRI_IDX
-						", block_pitch=%" PRI_IDX ").\n", device_id, cudaGetErrorString(cuda_status), matrix_name_A,
-						matrix_name_dA, height, pitch, offset, block_width, block_pitch);
+					"partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX ",stcol=%" PRI_IDX ",block_width=%"
+					PRI_IDX ", block_pitch=%" PRI_IDX ").\n", device_id, cudaGetErrorString(cuda_status), matrix_name_A,
+					matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch);
 			}
 		#endif
 		///////////////////////////////
@@ -1563,11 +1566,10 @@ void upload_matrix_partial( real const *__restrict__ p_A, index_t height, index_
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-	if (! device_id)
-		if ( ! device_id )
-			printf("\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",offset=%" PRI_IDX ",block_width=%"
-				PRI_IDX ", block_pitch=%" PRI_IDX ")...Done.\n", matrix_name_A, matrix_name_dA, height, pitch, offset,
-				block_width, block_pitch);
+		if ( (! device_id) + (num_devices == 1) )
+			printf("\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX ",stcol=%"
+				PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ")...Done.\n", matrix_name_A, matrix_name_dA,
+				height, pitch, strow, stcol, block_width, block_pitch);
 	#endif
 
 } // upload_matrix_partial
@@ -1591,7 +1593,7 @@ void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real 
 {
 
 	#if NMFGPU_VERBOSE_2
-		if ( ! device_id )
+		if ( (! device_id) + (num_devices == 1) )
 			printf("\nDownloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i)\n", matrix_name_dA, matrix_name_A, height, width, pitch, transpose );
 	#endif
@@ -1646,7 +1648,7 @@ void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real 
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		if ( ! device_id )
+		if ( (! device_id) + (num_devices == 1) )
 			printf("\nDownloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i)...Done.\n", matrix_name_dA, matrix_name_A, height, width, pitch, transpose );
 	#endif
@@ -1672,7 +1674,7 @@ void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch
 {
 
 	#if NMFGPU_VERBOSE_2
-		if ( ! device_id )
+		if ( (! device_id) + (num_devices == 1) )
 			printf("\nDownloading integer Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i)\n", matrix_name_dA, matrix_name_A, height, width, pitch, transpose );
 	#endif
@@ -1712,9 +1714,9 @@ void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch
 					height, width, pitch, transpose);
 				check_cuda_status_st( cuda_status );
 				if ( transpose )
-					matrix_int_show( d_A, width, height, pitch, true, NULL );
+					matrix_int_show( A, width, height, pitch, true, NULL );
 				else
-					matrix_int_show( d_A, height, width, pitch, false, NULL );
+					matrix_int_show( A, height, width, pitch, false, NULL );
 			#elif NMFGPU_SYNC_TRANSF
 				check_cuda_status_st( cuda_status );
 			#endif
@@ -1727,7 +1729,7 @@ void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		if ( ! device_id )
+		if ( (! device_id) + (num_devices == 1) )
 			printf("\nDownloading integer Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i)...Done.\n", matrix_name_dA, matrix_name_A, height, width, pitch, transpose );
 	#endif

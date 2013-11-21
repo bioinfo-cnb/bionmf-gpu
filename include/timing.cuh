@@ -235,13 +235,13 @@ int stop_cuda_timer_cnt( timing_data_t *RESTRICT td, index_t nitems, index_t cou
 
 /*
  * Prints the following information for the given operation "<op>":
- *	- Total elapsed time, measured in milliseconds but shown in seconds.
+ *	- Total elapsed time, measured in milliseconds (but shown in seconds if show_secs is 'true').
  *	- Number of times the operation was performed and the average time, in milliseconds.
  *	- Throughput, in Gigabytes per second.
  *
  * size_of_data: Size, in bytes, of data processed.
  */
-void print_elapsed_time( char const *RESTRICT const op, timing_data_t *RESTRICT td, size_t size_of_data );
+void print_elapsed_time( char const *RESTRICT const op, timing_data_t *RESTRICT td, size_t size_of_data, bool show_secs );
 
 // ------------------------------------------
 

@@ -150,7 +150,7 @@ index_t *restrict last_classification = NULL;
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeric_lbls, bool isBinary, struct matrix_labels *restrict ml )
+static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeric_lbls, index_t isBinary, struct matrix_labels *restrict ml )
 {
 
 	#if NMFGPU_VERBOSE
@@ -183,8 +183,8 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 				nrows = N;
 				ncols = M;
 			} else {
-				nrows = MIN_VAL( N, nrows );
-				ncols = MIN_VAL( M, ncols );
+				nrows = MIN( N, nrows );
+				ncols = MIN( M, ncols );
 			}
 			printf( "\nForcing to N=%" PRI_IDX ", M=%" PRI_IDX "\n", nrows, ncols );
 		}
@@ -253,11 +253,8 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 	int status = EXIT_SUCCESS;
 
-	// Pointers to d_W and d_H
-	pd_H = d_H;
-	pd_W = d_W;
-
-	pVcol = pVrow = V;
+	// Pointers to (or aliases for) V.
+	Vcol = Vrow = V;
 
 
 	#if NMFGPU_PROFILING_GLOBAL
@@ -283,7 +280,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 						true, "H", "d_H",
 					#endif
 					#if (! NMFGPU_CPU_RANDOM) && NMFGPU_PROFILING_TRANSF
-						upload_H_timing,
+						&upload_H_timing,
 					#endif
 					streams_NMF[ psNMF_N ], NULL );
 
@@ -293,7 +290,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 						false, "W", "d_W",
 					#endif
 					#if (! NMFGPU_CPU_RANDOM) && NMFGPU_PROFILING_TRANSF
-						upload_W_timing,
+						&upload_W_timing,
 					#endif
 					stream_W, &event_W );
 
@@ -305,13 +302,13 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	// Uploads matrix V
 	{
 		// Block configuration.
-		index_t BLM = block_M.BL[ pBLM ];		// Number of columns.
+		index_t BLM  = block_M.BL[ pBLM ];		// Number of columns.
 		index_t BLMp = block_M.BLp[ pBLM ];		// Number of columns (with padding).
-		index_t BLN = block_N.BL[ pBLN ];		// Number of rows.
+		index_t BLN  = block_N.BL[ pBLN ];		// Number of rows.
 
 		// d_Vcol
 		if ( d_Vcol != d_Vrow )
-			upload_matrix_partial( pVcol, N, MnPp, offset_Vcol,
+			upload_matrix_partial( Vcol, N, MnPp, 0, colIdx,	// Starting row: 0
 						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 							BLM, "Vcol", "d_Vcol",
 						#endif
@@ -322,7 +319,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 						);
 
 		// d_Vrow
-		upload_matrix_partial( pVrow, BLN, Mp, 0,
+		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 						M, "Vrow", "d_Vrow",
 					#endif
@@ -379,7 +376,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
-			printf("\n------------ iter=%i, loop %i (niter_test_conv) Matrix W: ------------\n",iter,i);
+				printf("\n------------ iter=%i, loop %i (niter_test_conv) Matrix W: ------------\n",iter,i);
 			/////////////////////////////
 			#endif
 
@@ -418,6 +415,13 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 		// Computes differences
 		index_t diff = get_difference( classification, last_classification, M );
+
+			#ifdef NMFGPU_DEBUG
+			///////////////////////////////
+				printf("\n[GPU%" PRI_IDX "] Returned difference between classification vectors: %" PRI_IDX "\n",
+					device_id, diff );
+			/////////////////////////////
+			#endif
 
 		// -------------------------------------
 
@@ -553,6 +557,12 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	if ( status == EXIT_FAILURE )
 		return EXIT_FAILURE;
 
+	#if NMFGPU_DEBUG || NMFGPU_VERBOSE
+		///////////////////////////////
+			printf( "\n\tnorm(V)=%g, norm(V-WH)=%g\n", SQRTR( dot_V ), SQRTR( dot_VWH ) );
+		///////////////////////////////
+	#endif
+
 	printf( "\nDistance between V and W*H: %g\n", SQRTR( dot_VWH ) / SQRTR( dot_V ) );
 
 	// --------------------------------
@@ -629,7 +639,7 @@ static int write_matrices( const char *restrict filename, index_t save_bin, stru
 		return EXIT_FAILURE;
 	}
 
-	status = matrix_save( filename_out, save_bin, W, N, K, false, &labels_W, Kp );
+	status = matrix_save( filename_out, save_bin, W, N, K, false, &labels_W, Kp, true );
 	if ( status == EXIT_FAILURE ) {
 		fprintf( stderr, "Error writing matrix W.\n" );
 		free( filename_out );
@@ -646,7 +656,7 @@ static int write_matrices( const char *restrict filename, index_t save_bin, stru
 		return EXIT_FAILURE;
 	}
 
-	status = matrix_save( filename_out, save_bin, H, K, M, true, &labels_H, Kp );
+	status = matrix_save( filename_out, save_bin, H, K, M, true, &labels_H, Kp, false );
 	if (status == EXIT_FAILURE )
 		fprintf( stderr, "Error writting matrix H\n" );
 
@@ -724,7 +734,7 @@ int main( int argc, char const *restrict *restrict argv )
 	index_t const niter_test_conv = arguments.niter_test_conv;	// Number of iterations before testing convergence.
 	index_t const stop_threshold = arguments.stop_threshold;	// Stopping criterion.
 	index_t const gpu_device = arguments.gpu_device;		// Device ID.
-	index_t const idx_other_args = arguments.idx_other_args;	// Index in argv[] with additional arguments.
+	index_t idx_other_args = arguments.idx_other_args;		// Index in argv[] with additional arguments.
 
 
 	// Compute classification vector?
@@ -740,11 +750,11 @@ int main( int argc, char const *restrict *restrict argv )
 			M = atoi( argv[ idx_other_args++ ] );
 			if ( ( N < 2 ) + ( M < 2 ) ) {
 				fflush(stdout);
-				if ( verbose_error )
-					fprintf( stderr, "\nError: Invalid forced matrix dimensions: '%i' x '%i'\n", N, M );
+				fprintf( stderr, "\nError: Invalid forced matrix dimensions: '%" PRI_IDX "' x '%" PRI_IDX "'\n", N, M );
 				fflush(NULL);
 				return EXIT_FAILURE;
 			}
+			printf("\nMatrix dimensions requested (forced): %" PRI_IDX " x %" PRI_IDX "\n", N, M );
 		}
 	#endif
 
@@ -762,7 +772,7 @@ int main( int argc, char const *restrict *restrict argv )
 	// Total global memory
 	size_t mem_size = 0;
 
-	status = init_GPU( gpu_device, &mem_size );
+	status = init_GPU( gpu_device, 1, &mem_size );	// One device.
 	if ( status == EXIT_FAILURE ) {
 		fflush(NULL);
 		return EXIT_FAILURE;
@@ -787,7 +797,7 @@ int main( int argc, char const *restrict *restrict argv )
 	// ----------------------------------------
 
 	// Initializes other CUDA structures
-	status = init_GPUdevice( 1, mem_size, do_classf );
+	status = init_GPUdevice( mem_size, do_classf );
 	if ( status == EXIT_FAILURE ) {
 		freeHostMemory( V ); clean_matrix_labels( ml );
 		finalize_GPU();
@@ -799,7 +809,7 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// Initializes matrices W and H
 
-	W = getHostMemory( N * Kp * sizeof(real), false );
+	W = (real *restrict) getHostMemory( N * Kp * sizeof(real), false );
 	if ( status == EXIT_FAILURE ) {
 		fprintf( stderr, "Error allocating memory for HOST matrix W (N=%" PRI_IDX ", Kp=%" PRI_IDX ").\n", N, Kp );
 		freeHostMemory( V ); clean_matrix_labels( ml );
@@ -808,7 +818,7 @@ int main( int argc, char const *restrict *restrict argv )
 		return EXIT_FAILURE;
 	}
 
-	H = getHostMemory( M * Kp * sizeof(real), false );
+	H = (real *restrict) getHostMemory( M * Kp * sizeof(real), false );
 	if ( status == EXIT_FAILURE ) {
 		fprintf( stderr, "Error allocating memory for HOST matrix H (M=%" PRI_IDX ", Kp=%" PRI_IDX ").\n", M, Kp );
 		freeHostMemory( W ); freeHostMemory( V ); clean_matrix_labels( ml );
@@ -822,7 +832,7 @@ int main( int argc, char const *restrict *restrict argv )
 	// Initializes classification vectors.
 
 	if ( do_classf ) {
-		classification = getHostMemory( Mp * sizeof(index_t), false );
+		classification = (index_t *restrict) getHostMemory( Mp * sizeof(index_t), false );
 		if ( status == EXIT_FAILURE ) {
 			fprintf( stderr, "Error allocating memory for HOST classification vector (M=%" PRI_IDX ", Mp=%" PRI_IDX ").\n", M, Mp );
 			freeHostMemory( H ); freeHostMemory( W ); freeHostMemory( V ); clean_matrix_labels( ml );
@@ -831,7 +841,7 @@ int main( int argc, char const *restrict *restrict argv )
 			return EXIT_FAILURE;
 		}
 
-		last_classification = getHostMemory( Mp * sizeof(index_t), false );
+		last_classification = (index_t *restrict) getHostMemory( Mp * sizeof(index_t), false );
 		if ( status == EXIT_FAILURE ) {
 			fprintf( stderr, "Error allocating memory for HOST classification vector (last, M=%" PRI_IDX ", Mp=%" PRI_IDX ").\n",
 				M, Mp );

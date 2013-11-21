@@ -102,6 +102,7 @@ size_t read_line( FILE *restrict file, char *restrict *restrict str )
 
 		char *p = data + len_data;	// Overwrites the '\0' (if exists).
 
+		errno = 0;
 		if ( ! fgets(p, max_len_data - len_data, file) ) {
 
 			if ( errno + ferror(file) ) {

@@ -466,13 +466,13 @@ int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, index_t nitems, index_t
 
 /*
  * Prints the following information for the given operation "<op>":
- *	- Total elapsed time, measured in milliseconds but shown in seconds.
+ *	- Total elapsed time, measured in milliseconds (but shown in seconds if show_secs is 'true').
  *	- Number of times the operation was performed and the average time, in milliseconds.
  *	- Throughput, in Gigabytes per second.
  *
  * size_of_data: Size, in bytes, of data processed.
  */
-void print_elapsed_time( char const *__restrict__ const op, timing_data_t *__restrict__ td, size_t size_of_data )
+void print_elapsed_time( char const *__restrict__ const op, timing_data_t *__restrict__ td, size_t size_of_data, bool show_secs )
 {
 
 	// if ( op != NULL ) && ( td != NULL ) && ( size_of_data > 0 )
@@ -483,7 +483,13 @@ void print_elapsed_time( char const *__restrict__ const op, timing_data_t *__res
 		 *
 		 * Note that (size_of_data * ( 1000 / 2**30 )) is calculated at compile time.
 		 */
-		printf( "%s: %.3Lg sec (%" PRIuMAX " time(s), avg: %.6Lg ms), %.3Lg GB/s\n", op, (td->time / 1000), td->counter,
+
+		if ( show_secs )	// Time in seconds
+			printf( "%s: %Lg sec", op, (td->time / 1000) );
+		else
+			printf( "%s: %Lg ms", op, td->time );
+
+		printf( " (%" PRIuMAX " time(s), avg: %Lg ms), %Lg GB/s\n", td->counter,
 			(td->time / td->counter), ( ( td->nitems * size_of_data * (1000.0/(1<<30)) ) / td->time ) );
 	}
 
@@ -501,6 +507,8 @@ void show_kernel_times( void )
 
 		printf("\n\tDevice Kernels:\n");
 
+		bool const show_secs = false;	// Shows elapsed time in milliseconds, not in seconds.
+
 		// --------------------
 
 		// reduce (sum)
@@ -508,89 +516,89 @@ void show_kernel_times( void )
 			long double total_time = 0.0;
 			index_t num_kernels = 0;
 			if ( reduce_timing[0].counter ) {
-				print_elapsed_time("\t\tGPU matrix_to_row", &reduce_timing[0], sizeof(real) );
+				print_elapsed_time("\t\tGPU matrix_to_row", &reduce_timing[0], sizeof(real), show_secs );
 				total_time = reduce_timing[0].time;
 				num_kernels = 1;
 			}
 			if ( reduce_timing[1].counter ) {
-				print_elapsed_time("\t\tGPU matrix_to_row (extended grid)", &reduce_timing[1], sizeof(real) );
+				print_elapsed_time("\t\tGPU matrix_to_row (extended grid)", &reduce_timing[1], sizeof(real), show_secs );
 				total_time += reduce_timing[1].time;
 				num_kernels++;
 			}
 			if ( reduce_timing[2].counter ) {
-				print_elapsed_time("\t\tGPU matrix_to_row (single block)", &reduce_timing[2], sizeof(real) );
+				print_elapsed_time("\t\tGPU matrix_to_row (single block)", &reduce_timing[2], sizeof(real), show_secs );
 				total_time += reduce_timing[2].time;
 				num_kernels++;
 			}
 			if ( reduce_timing[3].counter ) {
-				print_elapsed_time("\t\tGPU matrix_to_row (copy)", &reduce_timing[3], sizeof(real) );
+				print_elapsed_time("\t\tGPU matrix_to_row (copy)", &reduce_timing[3], sizeof(real), show_secs );
 				total_time += reduce_timing[3].time;
 				num_kernels++;
 			}
 			if ( num_kernels > 1 )
-				printf("\t\t\tTotal matrix_to_row time: %.6Lg ms\n", total_time );
+				printf("\t\t\tTotal matrix_to_row time: %Lg ms\n", total_time );
 		}
 
 		// --------------------
 
 		// div
 		if ( div_timing[0].counter )
-			print_elapsed_time("\t\tGPU div", &div_timing[0], sizeof(real) );
+			print_elapsed_time("\t\tGPU div", &div_timing[0], sizeof(real), show_secs );
 
 		if ( div_timing[1].counter )
-			print_elapsed_time("\t\tGPU div (extended grid)", &div_timing[1], sizeof(real) );
+			print_elapsed_time("\t\tGPU div (extended grid)", &div_timing[1], sizeof(real), show_secs );
 
 		if ( div_timing[0].counter * div_timing[1].counter )
-			printf("\t\t\tTotal div time: %.6Lg ms.\n", div_timing[0].time + div_timing[1].time );
+			printf("\t\t\tTotal div time: %Lg ms.\n", div_timing[0].time + div_timing[1].time );
 
 		// ------------------
 
 		// mul_div
 		if ( mul_div_timing[0].counter )
-			print_elapsed_time("\t\tGPU mul_div_time", &mul_div_timing[0], sizeof(real) );
+			print_elapsed_time("\t\tGPU mul_div_time", &mul_div_timing[0], sizeof(real), show_secs );
 
 		if ( mul_div_timing[1].counter )
-			print_elapsed_time("\t\tGPU mul_div_time (extended grid)", &mul_div_timing[1], sizeof(real) );
+			print_elapsed_time("\t\tGPU mul_div_time (extended grid)", &mul_div_timing[1], sizeof(real), show_secs );
 
 		if ( mul_div_timing[0].counter * mul_div_timing[1].counter )
-			printf("\t\t\tTotal mul_div time: %.6Lg ms.\n", mul_div_timing[0].time + mul_div_timing[1].time );
+			printf("\t\t\tTotal mul_div time: %Lg ms.\n", mul_div_timing[0].time + mul_div_timing[1].time );
 
 
 		// --------------------
 
 		// Adjust
 		if ( adjust_timing[0].counter )
-			print_elapsed_time( "\t\tGPU adjust", &adjust_timing[0], sizeof(real) );
+			print_elapsed_time( "\t\tGPU adjust", &adjust_timing[0], sizeof(real), show_secs );
 
 		if ( adjust_timing[1].counter )
-			print_elapsed_time( "\t\tGPU adjust (extended grid)", &adjust_timing[1], sizeof(real) );
+			print_elapsed_time( "\t\tGPU adjust (extended grid)", &adjust_timing[1], sizeof(real), show_secs );
 
 		if ( adjust_timing[0].counter * adjust_timing[1].counter )
-			printf("\t\t\tTotal adjust time: %.6Lg ms.\n", adjust_timing[0].time + adjust_timing[1].time );
+			printf("\t\t\tTotal adjust time: %Lg ms.\n", adjust_timing[0].time + adjust_timing[1].time );
 
 		// -------------------
 
 		// Column index of maximum value.
 		if ( idx_max_timing[0].counter )
-			print_elapsed_time("\t\tGPU matrix_idx_max", &idx_max_timing[0], sizeof(index_t) );
+			print_elapsed_time("\t\tGPU matrix_idx_max", &idx_max_timing[0], sizeof(index_t), show_secs );
 
 		if ( idx_max_timing[1].counter )
-			print_elapsed_time("\t\tGPU matrix_idx_max (extended grid)", &idx_max_timing[1], sizeof(index_t) );
+			print_elapsed_time("\t\tGPU matrix_idx_max (extended grid)", &idx_max_timing[1], sizeof(index_t), show_secs );
 
 		if ( idx_max_timing[0].counter * idx_max_timing[1].counter )
-			printf("\t\t\tTotal matrix_idx_max time: %.6Lg ms.\n", idx_max_timing[0].time + idx_max_timing[1].time );
+			printf("\t\t\tTotal matrix_idx_max time: %Lg ms.\n", idx_max_timing[0].time + idx_max_timing[1].time );
 
 		// --------------------
 
 		// sub
 		if ( sub_timing[0].counter )
-			print_elapsed_time("\t\tGPU sub", &sub_timing[0], sizeof(real) );
+			print_elapsed_time("\t\tGPU sub", &sub_timing[0], sizeof(real), show_secs );
 
 		if ( sub_timing[1].counter )
-			print_elapsed_time("\t\tGPU sub (extended grid)", &sub_timing[1], sizeof(real) );
+			print_elapsed_time("\t\tGPU sub (extended grid)", &sub_timing[1], sizeof(real), show_secs );
 
 		if ( sub_timing[0].counter * sub_timing[1].counter )
-			printf("\t\t\tTotal sub time: %.6Lg ms.\n", sub_timing[0].time + sub_timing[1].time );
+			printf("\t\t\tTotal sub time: %Lg ms.\n", sub_timing[0].time + sub_timing[1].time );
 
 	#endif	/* if defined( NMFGPU_PROFILING_KERNELS ) */
 
@@ -608,30 +616,34 @@ void show_transfer_times( void )
 
 		printf("\n\tData Transfers:\n");
 
-		print_elapsed_time( "\t\tSend V (rows)", &upload_Vrow_timing, sizeof(real) );
+		bool const show_secs = true;	// Shows elapsed time in seconds.
+
+		// --------------------
+
+		print_elapsed_time( "\t\tSend V (rows)", &upload_Vrow_timing, sizeof(real), show_secs );
 
 		if ( upload_Vcol_timing.counter )
-			print_elapsed_time( "\t\tSend V (columns)", &upload_Vcol_timing, sizeof(real) );
+			print_elapsed_time( "\t\tSend V (columns)", &upload_Vcol_timing, sizeof(real), show_secs );
 
 		if ( upload_W_timing.counter )
-			print_elapsed_time( "\t\tSend W", &upload_W_timing, sizeof(real) );
+			print_elapsed_time( "\t\tSend W", &upload_W_timing, sizeof(real), show_secs );
 
 		if ( upload_H_timing.counter )
-			print_elapsed_time( "\t\tSend H", &upload_H_timing, sizeof(real) );
+			print_elapsed_time( "\t\tSend H", &upload_H_timing, sizeof(real), show_secs );
 
-		print_elapsed_time( "\t\tGet W", &download_W_timing, sizeof(real) );
+		print_elapsed_time( "\t\tGet W", &download_W_timing, sizeof(real), show_secs );
 
-		print_elapsed_time( "\t\tGet H", &download_H_timing, sizeof(real) );
+		print_elapsed_time( "\t\tGet H", &download_H_timing, sizeof(real), show_secs );
 
 		// Transfer of classification vector (test of convergence).
-		print_elapsed_time( "\t\tGet Classification vector", &download_classf_timing, sizeof(index_t) );
+		print_elapsed_time( "\t\tGet Classification vector", &download_classf_timing, sizeof(index_t), show_secs );
 
 		long double const total_data_transf = upload_Vrow_timing.time + upload_Vcol_timing.time +
 							upload_W_timing.time + upload_H_timing.time +
 							download_W_timing.time + download_H_timing.time +
 							download_classf_timing.time;
 
-		printf( "\tTotal data-transfers time: %.10Lg ms\n\n", total_data_transf );
+		printf( "\tTotal data-transfers time: %Lg ms\n\n", total_data_transf );
 
 	#endif /* defined( NMFGPU_PROFILING_TRANSF ) */
 

@@ -277,6 +277,8 @@ int matrix_save_binary_native( char const *RESTRICT filename, real const *RESTRI
  *
  * ncols <= padding, unless matrix transposing is set (in that case, nrows <= padding).
  *
+ * If verbose is 'true', shows some information messages (e.g., file format).
+ *
  * WARNING:
  *	"Native" mode (i.e., save_bin > 1) skips ALL data transformation (matrix transposing, padding, etc).
  *	All related arguments are ignored. The file is saved in raw format.
@@ -284,7 +286,7 @@ int matrix_save_binary_native( char const *RESTRICT filename, real const *RESTRI
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int matrix_save( char const *RESTRICT filename, index_t is_bin, real *RESTRICT matrix, index_t nrows, index_t ncols, bool transpose,
-		struct matrix_labels const *RESTRICT ml, index_t padding );
+		struct matrix_labels const *RESTRICT ml, index_t padding, bool verbose );
 
 //////////////////////////////////////////////////
 //////////////////////////////////////////////////

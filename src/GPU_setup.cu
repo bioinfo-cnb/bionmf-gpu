@@ -131,6 +131,8 @@
 
 index_t device_id = 0;			// Device ID number.
 
+index_t num_devices = 1;		// Number of devices.
+
 cublasHandle_t cublas_handle;		// CUBLAS library context.
 
 curandGenerator_t curand_generator;	// CURAND Random values Generator.
@@ -412,11 +414,11 @@ int check_cuda_status( void )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_GPU( index_t dev_id, size_t *__restrict__ const mem_size )
+int init_GPU( index_t dev_id, index_t num_devs, size_t *__restrict__ const mem_size )
 {
 
 	#if NMFGPU_VERBOSE
-		printf("\nInitializing CUDA/CUBLAS on device %" PRI_IDX "...\n", dev_id);
+		printf("\nInitializing CUDA/CUBLAS on device %" PRI_IDX "/%" PRI_IDX "...\n", dev_id, num_devs );
 	#endif
 
 	cudaError_t cuda_status = cudaSuccess;
@@ -448,7 +450,8 @@ int init_GPU( index_t dev_id, size_t *__restrict__ const mem_size )
 		return EXIT_FAILURE;
 	}
 
-	device_id = dev_id;	// Global variable.
+	device_id = dev_id;	// Global variables.
+	num_devices = num_devs;
 
 	// ----------------------------------
 
@@ -617,16 +620,16 @@ int init_GPU( index_t dev_id, size_t *__restrict__ const mem_size )
 
 		#if ! ( NMFGPU_VERBOSE || NMFGPU_DEBUG )
 		// If it is NOT in debug mode, only shows properties for device 0.
-		if ( ! dev_id )
+		if ( ( ! dev_id ) + (num_devs == 1) )
 		#endif
 		{
-			printf( "\n[GPU%" PRI_IDX "] %s: Compute_Capability=%i.%i, CUDA=%i.%i, CUBLAS=%i.%i\n"
+			printf( "\n[GPU%" PRI_IDX "] %s (total devices=%" PRI_IDX "): Compute_Capability=%i.%i, CUDA=%i.%i, CUBLAS=%i.%i\n"
 				"\tWarp_size=%i, Memory_Alignment=%i, Max_Threads_per_Block=%i, Threads_per_Block=%i, "
 				"Max_Grid_Dimensions(X,Y)=(%i,%i).\n"
 				"\tMultiprocessors=%i, Threads_per_MultiProcessor=%i,\n"
 				"\tGlobal_Memory=%zu bytes (%0.2fMB), Total_Memory=%0.2fMB.\n"
 				"\tFree_Memory=%0.2fMB, Used=%0.2fMB, (Maximum_Allocatable=%0.2fMB).\n",
-				dev_id, device_prop.name, device_prop.major, device_prop.minor,
+				dev_id, device_prop.name, num_devs, device_prop.major, device_prop.minor,
 				runtime_version/1000, runtime_version%100, cublas_version/1000, cublas_version%100,
 				device_prop.warpSize, memory_alignment, device_prop.maxThreadsPerBlock, threadsPerBlock,
 				device_prop.maxGridSize[0], device_prop.maxGridSize[1],
@@ -751,7 +754,7 @@ int static set_threadsPerBlock_pitch( void )
 
 	if ( pitch > maxThreadsPerBlock ) {
 		fflush(stdout);
-		if ( ! device_id )
+		if ( (! device_id) + (num_devices == 1) )
 			fprintf( stderr, "\nInvalid factorization rank. On this GPU device, it must be less than or equal to %"
 					PRI_IDX ".\n", maxThreadsPerBlock );
 		return EXIT_FAILURE;
@@ -966,7 +969,7 @@ static int max_bounds( index_t *__restrict__ maxDimension, index_t *__restrict__
  *
  * do_classf: Set to 'true' if classification vector will be computed.
  */
-static int get_BLs( index_t num_devices, size_t mem_size, bool do_classf, index_t *__restrict__ const BLN, index_t *__restrict__ const BLM,
+static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const BLN, index_t *__restrict__ const BLM,
 		index_t *__restrict__ const BLMp, bool *__restrict__ const full_matrix )
 {
 
@@ -1357,7 +1360,7 @@ static int allocate_dev_mem( index_t BLN, index_t BLMp, bool single_matrix_V, bo
 	}
 
 	// d_Aux: N x Kp (i.e., Waux), or M x Kp (i.e., Haux).
-	// Actually, it just uses MAX(BLN,BLM)*Kp, but matrix_to_row() requires up to <MAX(N,M) * Kp>.
+	// Actually, it just uses MAX(BLN,BLM)*Kp, but matrix_to_row() might require up to <MAX(N,M) * Kp>.
 	if ( size < size2 ) { size = size2; }
 	cuda_status = cudaMalloc((void **)&d_Aux, size * sizeof(real));
 	if ( cuda_status != cudaSuccess ) {
@@ -1912,7 +1915,7 @@ static int free_dev_mem( void )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_GPUdevice( index_t num_devices, size_t mem_size, bool do_classf )
+int init_GPUdevice( size_t mem_size, bool do_classf )
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1952,7 +1955,7 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool do_classf )
 	// Fails if any of N or M are out of bounds.
 	if ( MAX(N,M) > maxDim_GPU ) {
 		fflush(stdout);
-		if ( ! device_id ) {
+		if ( (! device_id) + (num_devices == 1) ) {
 			fprintf( stderr, "\nError: matrix dimensions exceed the limits for this GPU device. Both number of rows and columns "
 					"must be less than or equal to %" PRI_IDX ".\n", maxDim_GPU );
 			// Informs the user if it is possible to reduce the factorization rank
@@ -1998,7 +2001,7 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool do_classf )
 	index_t BLN=NnP, BLM=MnP, BLMp=MnPp;
 	bool full_matrix = true;
 
-	if ( get_BLs( num_devices, mem_size, do_classf, &BLN, &BLM, &BLMp, &full_matrix ) == EXIT_FAILURE )
+	if ( get_BLs( mem_size, do_classf, &BLN, &BLM, &BLMp, &full_matrix ) == EXIT_FAILURE )
 		return EXIT_FAILURE;
 
 	// -------------------------------------
@@ -2010,7 +2013,7 @@ int init_GPUdevice( index_t num_devices, size_t mem_size, bool do_classf )
 
 		if ( maxSize_GPU < MIN( sizeVr, sizeVc ) ) {
 			fflush(stdout);
-			if ( ! device_id )
+			if ( (! device_id) + (num_devices == 1) )
 				fprintf( stderr, "\nError: matrix size exceed the limits for this GPU device.\n"
 						"Current limit is set to %" PRI_IDX " items (not bytes).\n", maxSize_GPU );
 			return EXIT_FAILURE;

@@ -208,12 +208,12 @@
 	#endif
 #endif
 
-// CUBLAS: Euclidean norm.
-#ifndef CUBLAS_R_NRM2
+// CUBLAS: Sum of absolute values.
+#ifndef CUBLAS_R_ASUM
 	#if NMFGPU_SINGLE_PREC
-		#define CUBLAS_R_NRM2 cublasSnrm2
+		#define CUBLAS_R_ASUM cublasSasum
 	#else
-		#define CUBLAS_R_NRM2 cublasDnrm2
+		#define CUBLAS_R_ASUM cublasDasum
 	#endif
 #endif
 

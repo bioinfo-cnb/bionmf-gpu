@@ -148,11 +148,12 @@ extern int stepM;		// Loop directions: +1 (forward) || -1 (backward).
 extern index_t psNMF_N;		// Current index in NMF_streams[].
 extern index_t psNMF_M;		// Current index in NMF_streams[].
 
-extern index_t offset_Vcol;	// Current column index on first row in Vcol. Used for Vcol -> d_Vcol data transfers.
+extern index_t colIdx;		// Current column index in Vcol, H and d_H (actually, row index, since H is transposed).
+extern index_t rowIdx;		// Current row index in Vrow and W.
 
 // Data matrices (host side)
-extern real *pVcol;		// Pointers to V
-extern real *pVrow;		// Pointers to V
+extern real *Vcol;		// Pointer to V (actually, it is just an alias).
+extern real *Vrow;		// Pointer to V (actually, it is just an alias).
 
 // ---------------------------------------------
 

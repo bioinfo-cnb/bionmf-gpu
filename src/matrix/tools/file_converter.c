@@ -226,7 +226,7 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// Saves the file.
 
-	status = matrix_save( filename_str, save_bin, matrix, nrows, ncols, false, &ml, ncols );
+	status = matrix_save( filename_str, save_bin, matrix, nrows, ncols, false, &ml, ncols, true ); // be verbose
 	if ( status == EXIT_FAILURE ) {
 		free( filename_str ); matrix_clean( matrix, ml );
 		fflush(NULL);

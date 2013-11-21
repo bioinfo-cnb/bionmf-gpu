@@ -87,7 +87,7 @@
  *
  * Returns the sum of the corresponding column. That is, sum(d_A[...][tx]).
  */
-template < bool ext_grid, bool single_Blk, index_t items_per_thread>
+template < bool ext_grid, bool single_Blk, index_t items_per_thread >
 __device__ static real reduce_gmem_to_row( real const *__restrict__ d_A, index_t matrix_size, index_t bs, index_t offset )
 {
 
@@ -619,7 +619,7 @@ __global__ static void kernel_reduce_to_row(real const *__restrict__ d_A,index_t
 			 * due to the required number of registers.
 			 */
 
-			#if __CUDA_ARCH__ >= 120
+			#if (__CUDA_ARCH__ >= 120)
 
 				// Grid dimensions
 				index_t const gdy = ( grid_extension ? gridDim.y : 1 );
@@ -915,7 +915,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t pitch, real *
 	 */
 	else {
 
-		if ( grid_length > 1 ){	// multi-blocks grid.
+		if ( grid_length > 1 ) {	// multi-blocks grid.
 
 			switch ( block_height ) {
 
@@ -2325,17 +2325,19 @@ __host__ void idx_max( real const *__restrict__ d_A, index_t width, index_t pitc
 
 			case 16: { // On Compute Capability 1.x, this is the half of the warp size.
 				index_t const bw = 16;
+				index_t const shmem_size = bw * block_height * (sizeof(real) + sizeof(index_t));
 				dim3 const dimBlock( bw, block_height );
 				kernel_idx_max< extended_grid, bw, num_items >
-							<<< dimGrid, dimBlock, 0, stream_A >>>
+							<<< dimGrid, dimBlock, shmem_size, stream_A >>>
 								( d_A, width, pitch, matrix_size, d_Idx );
 			} break;
 
 			case 32: { // Warp size on Compute Capability <= 3.5
 				index_t const bw = 32;
+				index_t const shmem_size = bw * block_height * (sizeof(real) + sizeof(index_t));
 				dim3 const dimBlock( bw, block_height );
 				kernel_idx_max< extended_grid, bw, num_items >
-							<<< dimGrid, dimBlock, 0, stream_A >>>
+							<<< dimGrid, dimBlock, shmem_size, stream_A >>>
 								( d_A, width, pitch, matrix_size, d_Idx );
 			} break;
 
@@ -2344,10 +2346,10 @@ __host__ void idx_max( real const *__restrict__ d_A, index_t width, index_t pitc
 			 *	so the kernel uses the "blockDim.x" built-in variable.
 			 */
 			default: {
-				index_t const bw = IDX_MAX;
+				index_t const shmem_size = block_width * block_height * (sizeof(real) + sizeof(index_t));
 				dim3 const dimBlock( block_width, block_height );
-				kernel_idx_max< extended_grid, bw, num_items >
-							<<< dimGrid, dimBlock, 0, stream_A >>>
+				kernel_idx_max< extended_grid, IDX_MAX, num_items >
+							<<< dimGrid, dimBlock, shmem_size, stream_A >>>
 								( d_A, width, pitch, matrix_size, d_Idx );
 			} break;
 
@@ -2364,17 +2366,19 @@ __host__ void idx_max( real const *__restrict__ d_A, index_t width, index_t pitc
 
 			case 16: { // On Compute Capability 1.x, this is the half of the warp size.
 				index_t const bw = 16;
+				index_t const shmem_size = bw * block_height * (sizeof(real) + sizeof(index_t));
 				dim3 const dimBlock( bw, block_height );
 				kernel_idx_max< extended_grid, bw, num_items >
-							<<< dimGrid, dimBlock, 0, stream_A >>>
+							<<< dimGrid, dimBlock, shmem_size, stream_A >>>
 								( d_A, width, pitch, matrix_size, d_Idx );
 			} break;
 
 			case 32: { // Warp size on Compute Capability <= 3.5
 				index_t const bw = 32;
+				index_t const shmem_size = bw * block_height * (sizeof(real) + sizeof(index_t));
 				dim3 const dimBlock( bw, block_height );
 				kernel_idx_max< extended_grid, bw, num_items >
-							<<< dimGrid, dimBlock, 0, stream_A >>>
+							<<< dimGrid, dimBlock, shmem_size, stream_A >>>
 								( d_A, width, pitch, matrix_size, d_Idx );
 			} break;
 
@@ -2383,10 +2387,10 @@ __host__ void idx_max( real const *__restrict__ d_A, index_t width, index_t pitc
 			 *	so the kernel uses the "blockDim.x" built-in variable.
 			 */
 			default: {
-				index_t const bw = IDX_MAX;
+				index_t const shmem_size = block_width * block_height * (sizeof(real) + sizeof(index_t));
 				dim3 const dimBlock( block_width, block_height );
-				kernel_idx_max< extended_grid, bw, num_items >
-							<<< dimGrid, dimBlock, 0, stream_A >>>
+				kernel_idx_max< extended_grid, IDX_MAX, num_items >
+							<<< dimGrid, dimBlock, shmem_size, stream_A >>>
 								( d_A, width, pitch, matrix_size, d_Idx );
 			} break;
 

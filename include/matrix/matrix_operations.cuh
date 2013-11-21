@@ -300,24 +300,25 @@ void upload_matrix( real const *RESTRICT A, index_t height, index_t pitch, real 
 /*
  * Transfers (a portion of) a matrix from the HOST (CPU) to the DEVICE (GPU).
  *
- * d_A[1..height][1..block_pitch] <--- p_A[1..height][1..block_pitch],
+ * d_A[1..height][1..block_pitch] <--- pA[1..height][1..block_pitch],
  * where:
- *	p_A[1..height][1..block_pitch] == &A[X..(X+height)][offset..(offset+block_pitch)]
+ *	pA[1..height][1..block_pitch] == &A[strow..(strow+height)][stcol..(stcol+block_pitch)]
  *
  * block_pitch: Matrix block pitch.
  * block_width <= block_pitch
- * offset: Starting COLUMN.
+ * strow: Starting row.
+ * stcol: Starting column.
  *
- * 0 <= offset < pitch.
+ * 0 <= stcol < pitch.
  * Matrix is ROW-wise (i.e., it is NOT transposed).
  *
  * The transfer is delayed until the event 'event_A' has completed all previous operations.
  * Then, the operation is recorded using the same event object.
  *
- * It also checks that (offset + block_pitch) <= pitch,
+ * It also checks that (stcol + block_pitch) <= pitch,
  * and adjusts the width of the block to be transferred, if necessary.
  */
-void upload_matrix_partial( real const *RESTRICT p_A, index_t height, index_t pitch, index_t offset,
+void upload_matrix_partial( real const *RESTRICT pA, index_t height, index_t pitch, index_t strow, index_t stcol,
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 					index_t block_width, char const *RESTRICT const matrix_name_A,
 					char const *RESTRICT const matrix_name_dA,

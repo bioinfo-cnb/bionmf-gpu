@@ -157,6 +157,8 @@ typedef struct {
 
 extern index_t device_id;			// Device ID number.
 
+extern index_t num_devices;			// Number of devices.
+
 extern cublasHandle_t cublas_handle;		// CUBLAS library context.
 
 extern curandGenerator_t curand_generator;	// CURAND Random values Generator.
@@ -296,7 +298,7 @@ int check_cuda_status( void );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_GPU( index_t dev_id, size_t *RESTRICT const mem_size );
+int init_GPU( index_t dev_id, index_t num_devs, size_t *RESTRICT const mem_size );
 
 // ------------------------------------------
 
@@ -327,7 +329,7 @@ index_t prev_power_2( index_t x );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_GPUdevice( index_t num_devices, size_t mem_size, bool do_classf );
+int init_GPUdevice( size_t mem_size, bool do_classf );
 
 // ------------------------------------------
 

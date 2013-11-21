@@ -338,7 +338,7 @@ int main( int argc, char const *restrict *restrict argv )
 
 	struct matrix_labels ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
 
-	int status = matrix_save( filename, save_bin, matrix, nrows, ncols, false, &ml, ncols );
+	int status = matrix_save( filename, save_bin, matrix, nrows, ncols, false, &ml, ncols, true ); // be verbose
 	if ( status == EXIT_FAILURE ) {
 		free( matrix );
 		fflush(NULL);

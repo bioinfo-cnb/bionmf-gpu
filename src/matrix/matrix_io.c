@@ -2630,9 +2630,9 @@ int matrix_load_binary_native( char const *restrict filename, index_t offset, in
 
 	index_t nitems;
 	{
-		uintmax_t nitems_overflow = (uintmax_t) dim[0] * (uintmax_t) dim[1];
+		uintmax_t nitems_overflow = ((uintmax_t) dim[0] * (uintmax_t) dim[1]) - (uintmax_t)(offset + length);
 
-		if ( (dim[0] <= 0) || (dim[1] <= 0) || (nitems_overflow > (uintmax_t) IDX_MAX) ) {
+		if ( (dim[0] <= 0) + (dim[1] <= 0) + (nitems_overflow > (uintmax_t) IDX_MAX) ) {
 			fflush(stdout);
 			errno = EINVAL;
 			fprintf( stderr, "\nmatrix_load_binary_native( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
@@ -3996,6 +3996,8 @@ fflush(NULL); printf("MARK2\n"); fflush(NULL);
  *
  * ncols <= padding, unless matrix transposing is set (in that case, nrows <= padding).
  *
+ * If verbose is 'true', shows some information messages (e.g., file format).
+ *
  * WARNING:
  *	"Native" mode (i.e., save_bin > 1) skips ALL data transformation (matrix transposing, padding, etc).
  *	All related arguments are ignored. The file is saved in raw format.
@@ -4003,7 +4005,7 @@ fflush(NULL); printf("MARK2\n"); fflush(NULL);
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int matrix_save( char const *restrict filename, index_t save_bin, real *restrict matrix, index_t nrows, index_t ncols, bool transpose,
-		struct matrix_labels const *restrict ml, index_t padding )
+		struct matrix_labels const *restrict ml, index_t padding, bool verbose )
 {
 
 	// Checks for NULL parameters
@@ -4027,25 +4029,29 @@ int matrix_save( char const *restrict filename, index_t save_bin, real *restrict
 
 	// -------------------------------
 
-	printf("\nSaving output file as ");
+	if ( verbose )
+		printf("\nSaving output file as ");
 
 	// Saves output as "native" binary.
 	if ( save_bin > 1 ) {
-		printf("\"native\" binary (i.e., raw format)...\n");
-		if ( padding + transpose )
+		if ( verbose )
+			printf("\"native\" binary (i.e., raw format)...\n");
+		if ( (padding + transpose) * verbose )
 			printf("\tSkipping all transformation options (matrix transposing, padding, etc.)...\n");
 		status = matrix_save_binary_native( filename, matrix, nrows, ncols, ml );
 	}
 
 	// Saves output as (non-"native") binary.
 	else if ( save_bin ) {
-		printf("(non-\"native\") binary (i.e., double-precision data and unsigned integers)...\n");
+		if ( verbose )
+			printf("(non-\"native\") binary (i.e., double-precision data and unsigned integers)...\n");
 		status = matrix_save_binary( filename, matrix, nrows, ncols, transpose, ml, padding );
 	}
 
 	// Saves output as ASCII text.
 	else {
-		printf("ASCII text...\n");
+		if ( verbose )
+			printf("ASCII text...\n");
 		status = matrix_save_ascii( filename, matrix, nrows, ncols, transpose, false, ml, padding );
 	}
 
