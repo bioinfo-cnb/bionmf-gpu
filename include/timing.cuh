@@ -51,9 +51,7 @@
 
 #include <stdint.h>	/* [u]intmax_t */
 
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-	#include <cuda_runtime_api.h>
-#endif
+#include <cuda.h>
 
 #include "index_type.h"
 
@@ -237,7 +235,7 @@ int stop_cuda_timer_cnt( timing_data_t *RESTRICT td, index_t nitems, index_t cou
  * Prints the following information for the given operation "<op>":
  *	- Total elapsed time, measured in milliseconds (but shown in seconds if show_secs is 'true').
  *	- Number of times the operation was performed and the average time, in milliseconds.
- *	- Throughput, in Gigabytes per second.
+ *	- Bandwidth, in Gigabytes per second.
  *
  * size_of_data: Size, in bytes, of data processed.
  */

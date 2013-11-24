@@ -109,7 +109,6 @@
 #include <string.h>	/* strerror() */
 #include <math.h>	/* sqrtd() */
 
-#include <cuda_runtime_api.h>
 #include <cublas_v2.h>
 
 #if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_CONV
@@ -203,7 +202,7 @@ void set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t he
 					bool transpose, char const *__restrict__ const matrix_name_A,
 					char const *__restrict__ const matrix_name_dA,
 				#endif
-				#if (! NMFGPU_CPU_RANDOM) && NMFGPU_PROFILING_TRANSF
+				#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
 					timing_data_t *__restrict__ const upload_timing,
 				#endif
 				cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )

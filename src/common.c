@@ -203,7 +203,7 @@ void print_nmf_gpu_help( char const *restrict const execname, FILE *restrict fil
 
 	// ---------------------------
 
-	fprintf( file, "\n\t<< bioNMF-mGPU: Non-negative Matrix Factorization on GPU for Biology >>\n\n"
+	fprintf( file, "\n\t<< bioNMF-mGPU: Non-negative Matrix Factorization on GPU >>\n\n"
 			"Usage:\n\t%s <filename> [ -b native_format ] [ -cr ] [ -k <factorization_rank> ] [ -i <nIters> ] "
 			"[ -j <niter_test_conv> ] [ -t <stop_threshold> ] [ -e native_format ] [ -z device_ID ]\n\t%s -h\n\n",
 			execname, execname );

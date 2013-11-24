@@ -69,7 +69,6 @@
 #include <string.h>
 #include <stdint.h>	/* [u]intmax_t */
 
-#include <cuda_runtime_api.h>
 #include <curand.h>	/* Random values */
 
 #include "matrix/matrix_io.h"

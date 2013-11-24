@@ -152,7 +152,7 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 	// ---------------------------
 
 	// Fails if no more arguments
-	if ( idx_other_args >= (argc-1) ) {
+	if ( idx_other_args >= (index_t) (argc-1) ) {
 		fflush(stdout);
 		if ( verbose_error )
 			fprintf( stderr, "\nError: No matrix dimensions. Not enough arguments.\n" );
@@ -209,7 +209,7 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 	// ---------------------------
 
 	// Maximum random value (optional)
-	if ( idx_other_args < argc ) {
+	if ( idx_other_args < (index_t) argc ) {
 		errno = 0;
 		char *endptr = NULL;
 		l_max_value = STRTOREAL( argv[idx_other_args], &endptr );

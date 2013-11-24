@@ -68,6 +68,8 @@
 
 //////////////////////////////////////////////////////
 
+#include <cuda.h>
+
 #include "index_type.h"
 #include "real_type.h"
 #include "matrix/matrix_io_routines.h"	/* matrix_labels */

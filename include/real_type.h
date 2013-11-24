@@ -64,22 +64,11 @@
 	 * They can be done with 'gcc -D_GNU_SOURCE'.
 	 */
 	#if ( ! _GNU_SOURCE )
-		#warning "'_GNU_SOURCE' NOT defined. Some (optional) useful features for processing single-precision data might not be " \
-			"available. This feature macro can be enabled with '-D_GNU_SOURCE' gcc option."
+		#warning "'_GNU_SOURCE' NOT defined. Some (optional) useful features for processing single-precision data might not be \
+			available. This feature macro can be enabled with '-D_GNU_SOURCE' option."
 	#endif
 
 #else	/* Double precision */
-
-	// CUDA: Double-precision data requires Compute Capability >= 1.3
-	#if __CUDA_ARCH__
-		#if __CUDA_ARCH__ < 130
-			#error "Double-precision floating-point data is only supported on devices with CUDA Compute Capability 1.3 and above."
-
-		#elif __CUDA_ARCH__ < 200
-			#warning "Although double-precision floating-point data is supported, performance on kernels that make use of " \
-				"shared memory can be very low. Please use single-precision data, if possible."
-		#endif
-	#endif
 
 	typedef double real;
 

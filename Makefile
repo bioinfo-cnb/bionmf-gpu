@@ -36,7 +36,12 @@
 # Parameters (set to '1' to enable; e.g., "make SINGLE=1"):
 #
 #	SINGLE:			If set to 1, uses single-precision data (i.e., 'float').
-#				Else, uses double-precision data (i.e., 'double')
+#				Else, uses double-precision data (i.e., 'double').
+#				Please note that double-precision data is NOT supported on
+#				Compute Capability 1.2 or lower.
+#
+#	UNSIGNED:		Uses unsigned integers for matrix dimensions.
+#				Note that, however, some CUDA Libraries require SIGNED integer values.
 #
 #	FAST_MATH:		Uses less-precise faster math functions.
 #
@@ -83,6 +88,9 @@
 # Single precision (i.e., float). Set to 0 for double-precision data
 SINGLE := 1
 
+# Use unsigned integers for matrix dimensions
+UNSIGNED := 1
+
 # Use less-precise, faster math functions
 FAST_MATH := 1
 
@@ -95,22 +103,24 @@ TIME := 1
 
 # Path to CUDA Toolkit.
 CUDA_INSTALL_PATH := /usr/local/cuda-5.5
-nvcc_bindir	  := $(CUDA_INSTALL_PATH)/bin
+nvcc_BINDIR	  := $(CUDA_INSTALL_PATH)/bin
 nvcc_libdir	  := $(CUDA_INSTALL_PATH)/lib
 nvcc_incdir	  := $(CUDA_INSTALL_PATH)/include
 
 # Target GPU architectures.
 #	Please note these values will be used to set both PTX intermediate code, and the final binary image.
 #	Since there is no "compute_21" PTX version, if you want to compile specific code for Compute Capability 2.1, please
-#	uncomment the "other_archs" sentence below.
-SM_VERSIONS := 13
-# 10 13 20 30
+#	use the dash-separated form as shown below.
+#
+# WARNING: The compilation process will fail on SM versions "12" or less if the "SINGLE" option is set to zero, since
+# double-precision data is NOT supported on those architectures.
+SM_VERSIONS := 10 13 20 30
 
 # To compile specific code for Compute Capability 2.1. Comment to disable.
-# other_archs := --generate-code=arch=compute_20,code=sm_21
+SM_VERSIONS := $(SM_VERSIONS) 20-21
 
 # This line provides compatibility with future GPU architectures. Comment to disable.
-# other_archs += --generate-code=arch=compute_35,code=\"sm_35,compute_35\"
+SM_VERSIONS := $(SM_VERSIONS) 35-35
 
 
 ########################################
@@ -131,11 +141,12 @@ tools_dirname := tools
 tools_dir := $(matrix_dir)/$(tools_dirname)
 
 # Source files
-single_gpu_file	  := NMF_GPU.c
-tools_files	  := $(tools_dir)/file_converter.c $(tools_dir)/generate_matrix.c
-cuda_files	  := timing.cu GPU_setup.cu $(matrix_dir)/matrix_operations.cu NMF_routines.cu
-cuda_device_files := GPU_kernels.cu
-c_files		  := $(matrix_dir)/matrix_io_routines.c $(matrix_dir)/matrix_io.c common.c
+ # Note : "cuda_device_FILES" refers to CUDA files including device code.
+single_gpu_FILE	  := NMF_GPU.c
+tools_FILES	  := $(tools_dir)/file_converter.c $(tools_dir)/generate_matrix.c
+cuda_device_FILES := GPU_kernels.cu
+cuda_FILES	  := timing.cu GPU_setup.cu $(matrix_dir)/matrix_operations.cu NMF_routines.cu
+c_FILES		  := $(matrix_dir)/matrix_io_routines.c $(matrix_dir)/matrix_io.c common.c
 
 
 ########################################
@@ -145,16 +156,16 @@ c_files		  := $(matrix_dir)/matrix_io_routines.c $(matrix_dir)/matrix_io.c commo
 # C/C++ common flags
 CC := gcc
 optim_level	   := 3
-common_cflags	   := -O$(optim_level) -pipe -fPIC
-common_warn_cflags := -Wall -Wextra -Wpointer-arith -Wcast-align -Wstrict-overflow=5 -Wunsafe-loop-optimizations \
-			-Wmissing-declarations -Winline -Wno-unused-parameter -Wno-unused-variable
-common_fast_cflags := -march=native -ffast-math -fbranch-target-load-optimize2 -fomit-frame-pointer \
+common_CFLAGS	   := -O$(optim_level) -pipe -fPIC
+common_warn_CFLAGS := -Wall -Wextra -Wpointer-arith -Wcast-align -Wstrict-overflow=5 -Wunsafe-loop-optimizations \
+			-Wmissing-declarations -Winline -Wno-unused-parameter -Wno-unused-variable -Wno-type-limits
+common_fast_CFLAGS := -march=native -ffast-math -fbranch-target-load-optimize2 -fomit-frame-pointer \
 			-ftree-loop-distribution -funroll-loops -funsafe-loop-optimizations
  # Other system-dependent fast flags: -Ofast -mssse3 -msse4.2 -mfpmath=sse -fbranch-target-load-optimize
 
 # C-only flags.
-c_only_cflags	   := -D_GNU_SOURCE -std=c99 $(common_cflags) $(common_warn_cflags) -Wnested-externs -Wstrict-prototypes -Wmissing-prototypes
-c_only_fast_cflags := $(common_fast_cflags)
+c_only_CFLAGS	   := -D_GNU_SOURCE -std=c99 $(common_CFLAGS) $(common_warn_CFLAGS) -Wnested-externs -Wstrict-prototypes -Wmissing-prototypes
+c_only_fast_CFLAGS := $(common_fast_CFLAGS)
 
 # Linkage program (must be in C++).
 LINK	:= gcc
@@ -162,25 +173,25 @@ LINK	:= gcc
 ########################################
 
 # CUDA compiler
-NVCC := $(nvcc_bindir)/nvcc
+NVCC := $(nvcc_BINDIR)/nvcc
 
 # Flags for HOST code (always compiled as C++).
-nvcc_cflags	 := --restrict --optimize $(optim_level) $(addprefix --compiler-options ,$(common_cflags))
-nvcc_warn_cflags := $(addprefix --compiler-options ,$(common_warn_cflags))
-nvcc_fast_cflags := --use_fast_math $(addprefix --compiler-options ,$(common_fast_cflags))
-nvcc_ldlibs	 := -lcudart
+nvcc_CFLAGS	 := --restrict --optimize $(optim_level) $(addprefix --compiler-options ,$(common_CFLAGS))
+nvcc_warn_CFLAGS := $(addprefix --compiler-options ,$(common_warn_CFLAGS))
+nvcc_fast_CFLAGS := --use_fast_math $(addprefix --compiler-options ,$(common_fast_CFLAGS))
+nvcc_LDLIBS	 := -lcudart
 
 
 # Internal compiler for HOST code.
 #	Useful to make NVCC to follow a customized CC variable (e.g., 'CC=icc', 'CC=gcc-4.2', etc).
 #	Otherwise, CC is ignored and the default C/C++ compiler is invoked (GNU CC for UNIX, and Visual for Windows).
 #
-# nvcc_cflags += --compiler-bindir $(CC)
+# nvcc_CFLAGS += --compiler-bindir $(CC)
 
 # Others useful options for CygWin and Mingw under Windows platforms.
 #
-# nvcc_cflags += --drive-prefix /cygwin/
-# nvcc_cflags += --drive-prefix /
+# nvcc_CFLAGS += --drive-prefix /cygwin/
+# nvcc_CFLAGS += --drive-prefix /
 
 
 #########
@@ -188,9 +199,9 @@ nvcc_ldlibs	 := -lcudart
 
 # Flags for nvopencc (i.e., PTX code generation).
  export OPENCC_FLAGS := $(OPENCC_FLAGS) -inline -O3 -fPIC -fstrict-aliasing
-opencc_warn_cflags := -Wall -W -Wcast-align -Wstrict-aliasing -Wstrict-prototypes -Wmissing-declarations -Winline -Wpointer-arith \
+opencc_warn_CFLAGS := -Wall -W -Wcast-align -Wstrict-aliasing -Wstrict-prototypes -Wmissing-declarations -Winline -Wpointer-arith \
 			-Wno-unused-parameter -Wno-unused-variable
-opencc_fast_cflags := -ffast-stdlib -ffast-math -finline-functions -fomit-frame-pointer -funroll-loops -funsafe-math-optimizations
+opencc_fast_CFLAGS := -ffast-stdlib -ffast-math -finline-functions -fomit-frame-pointer -funroll-loops -funsafe-math-optimizations
  # Other system-dependent flags: -msse4a -gcc -gnu42
 
 
@@ -199,7 +210,7 @@ opencc_fast_cflags := -ffast-stdlib -ffast-math -finline-functions -fomit-frame-
 
 # Flags for PTX (i.e., GPU-assembler) code compilation.
  export PTXAS_FLAGS := $(PTXAS_FLAGS) --opt-level=4 --allow-expensive-optimizations=true --warning-as-error 0
-ptxas_warn_cflags := --generate-line-info --verbose
+ptxas_warn_CFLAGS := --generate-line-info --verbose
 
  # # Other flags controlling the cache policy:
  # export PTXAS_FLAGS = $(PTXAS_FLAGS) --def-load-cache=ca --def-store-cache=wb
@@ -214,10 +225,24 @@ ptxas_warn_cflags := --generate-line-info --verbose
 #	Only target versions specified in the 'code=' clause will be retained in the resulting binary. At least one of such
 #	targets must be virtual in order to provide compatibility with future ('real') architectures.
 #
-gencode_arch_template = --generate-code=arch=compute_$(sm_ver),code=sm_$(sm_ver)
+gencode_arch_template = --generate-code=arch=compute_$(1),code=sm_$(2)
 
-gencode_arch := $(foreach sm_ver,$(SM_VERSIONS),$(gencode_arch_template))
-gencode_arch += $(other_archs)
+# The argument may be of the form "XX" or "XX-XX".
+sm_template = $(call gencode_arch_template,$(firstword $(1)),$(lastword $(1)))
+
+# For each SM version, splits any existing dash-separated sub-arguments and call "sm_template".
+sm_CFLAGS := $(foreach sm_ver,$(SM_VERSIONS),$(call sm_template,$(subst -, ,$(sm_ver))))
+
+
+# Double-precision data is NOT supported on Compute Capability <= 1.2
+
+# Searches for unsupported Compute Capabilities.
+unsupported_sm_versions := $(filter 10 11 12,$(subst -, ,$(SM_VERSIONS)))
+
+# Error message to show.
+error_msj := Double-precision data is NOT supported on Compute Capability 1.2 or lower. \
+		Please, either use single-precision data (SINGLE=1) or remove the unsupported \
+		architectures from the SM_VERSIONS variable.
 
 
 ########################################
@@ -236,84 +261,88 @@ CPPFLAGS :=
 
 # Use single-precision data.
 ifeq ($(SINGLE),1)
-	CPPFLAGS += -DNMFGPU_SINGLE_PREC
+	CPPFLAGS += -DNMFGPU_SINGLE_PREC=1
 endif
 
+# Use unsigned integers for matrix dimensions
+ifeq ($(UNSIGNED),1)
+	CPPFLAGS += -DNMFGPU_UINDEX=1
+endif
 
 # Use faster math functions
 ifeq ($(FAST_MATH),1)
-	c_only_cflags	+= $(c_only_fast_cflags)
-	nvcc_cflags	+= $(nvcc_fast_cflags)
-	export OPENCC_FLAGS := $(OPENCC_FLAGS) $(opencc_fast_cflags)
+	c_only_CFLAGS	+= $(c_only_fast_CFLAGS)
+	nvcc_CFLAGS	+= $(nvcc_fast_CFLAGS)
+	export OPENCC_FLAGS := $(OPENCC_FLAGS) $(opencc_fast_CFLAGS)
 endif
 
 
 # Show total elapsed time
 ifeq ($(TIME),1)
-	CPPFLAGS += -DNMFGPU_PROFILING_GLOBAL
+	CPPFLAGS += -DNMFGPU_PROFILING_GLOBAL=1
 endif
 
 
 # Show time elapsed on data transfers
 ifeq ($(TRANSF_TIME),1)
-	CPPFLAGS += -DNMFGPU_PROFILING_TRANSF
+	CPPFLAGS += -DNMFGPU_PROFILING_TRANSF=1
 endif
 
 
 # Show time elapsed on kernel code.
 ifeq ($(KERNEL_TIME),1)
-	CPPFLAGS += -DNMFGPU_PROFILING_KERNELS
+	CPPFLAGS += -DNMFGPU_PROFILING_KERNELS=1
 endif
 
 
 # Performs SYNCHRONOUS data transfers.
 ifeq ($(SYNC_TRANSF),1)
-	CPPFLAGS += -DNMFGPU_SYNC_TRANSF
+	CPPFLAGS += -DNMFGPU_SYNC_TRANSF=1
 endif
 
 
 # Fixed initial values for W and H. Useful for debugging.
 ifeq ($(FIXED_INIT),1)
-	CPPFLAGS += -DNMFGPU_FIXED_INIT
+	CPPFLAGS += -DNMFGPU_FIXED_INIT=1
 endif
 
 
 # Generates values from the CPU (host) random generator,
 # not from the GPU device.
 ifeq ($(CPU_RANDOM),1)
-	CPPFLAGS += -DNMFGPU_CPU_RANDOM
+	CPPFLAGS += -DNMFGPU_CPU_RANDOM=1
 endif
 
 # VERBOSE and DEBUG mode (prints A LOT of information)
 ifeq ($(DBG),1)
- 	CPPFLAGS += -DNMFGPU_VERBOSE -DNMFGPU_DEBUG
+	CPPFLAGS += -DNMFGPU_VERBOSE=1 -DNMFGPU_DEBUG=1
 
 	# Other DEBUG flags
 
 	# Verbosity level
- 	CPPFLAGS += -DNMFGPU_VERBOSE_2
+	CPPFLAGS += -DNMFGPU_VERBOSE_2=1
 
-	# Data transfers
-	CPPFLAGS += -DNMFGPU_DEBUG_TRANSF
+#	# Data transfers
+#	CPPFLAGS += -DNMFGPU_DEBUG_TRANSF=1
 
-	CPPFLAGS += -DNMFGPU_FORCE_BLOCKS
-#	CPPFLAGS += -DNMFGPU_TEST_BLOCKS
-#	CPPFLAGS += -DNMFGPU_FORCE_DIMENSIONS
-#	CPPFLAGS += -DNMFGPU_DEBUG_REDUCT
+#	CPPFLAGS += -DNMFGPU_FORCE_BLOCKS=1
+#	CPPFLAGS += -DNMFGPU_TEST_BLOCKS=1
+#	CPPFLAGS += -DNMFGPU_FORCE_DIMENSIONS=1
+#	CPPFLAGS += -DNMFGPU_DEBUG_REDUCT=1
 
 #	# Flags for I/O Debug & testing.
-#	CPPFLAGS += -DNMFGPU_DEBUG_READ_FILE
-#	CPPFLAGS += -DNMFGPU_DEBUG_READ_FILE2
-#	CPPFLAGS += -DNMFGPU_DEBUG_READ_MATRIX
-#	CPPFLAGS += -DNMFGPU_DEBUG_READ_MATRIX2
-#	CPPFLAGS += -DNMFGPU_TESTING
+#	CPPFLAGS += -DNMFGPU_DEBUG_READ_FILE=1
+#	CPPFLAGS += -DNMFGPU_DEBUG_READ_FILE2=1
+#	CPPFLAGS += -DNMFGPU_DEBUG_READ_MATRIX=1
+#	CPPFLAGS += -DNMFGPU_DEBUG_READ_MATRIX2=1
+#	CPPFLAGS += -DNMFGPU_TESTING=1
 endif
 
 
 # Verbose compiling commands
 ifeq ($(VERBOSE),2)
 	cmd_prefix :=
-	nvcc_cflags += --verbose
+	nvcc_CFLAGS += --verbose
 else
 	ifeq ($(VERBOSE),1)
 		cmd_prefix :=
@@ -325,24 +354,24 @@ endif
 
 # Show NVCC warnings.
 ifeq ($(NVCC_WARN_VERBOSE),1)
-	nvcc_cflags += $(nvcc_warn_cflags)
-	export OPENCC_FLAGS := $(OPENCC_FLAGS) $(opencc_warn_cflags)
+	nvcc_CFLAGS += $(nvcc_warn_CFLAGS)
+	export OPENCC_FLAGS := $(OPENCC_FLAGS) $(opencc_warn_CFLAGS)
 	PTXAS_WARN_VERBOSE := 1
 endif
 
 
 # Show kernel compilation warnings
 ifeq ($(PTXAS_WARN_VERBOSE),1)
-	export PTXAS_FLAGS := $(PTXAS_FLAGS) $(ptxas_warn_cflags)
+	export PTXAS_FLAGS := $(PTXAS_FLAGS) $(ptxas_warn_CFLAGS)
 endif
 
 
 # Keep intermediate code files.
 ifeq ($(KEEP_INTERMEDIATE),1)
-	nvcc_cflags += --keep
-	clean_files :=
+	nvcc_CFLAGS += --keep
+	clean_FILES :=
 else
-	clean_files := clean
+	clean_FILES := clean
 endif
 
 
@@ -351,35 +380,35 @@ endif
 ########################################
 
 # C files
-c_objs		:= $(addprefix $(objdir)/,$(addsuffix .o,$(c_files)))
-c_cflags	:= $(c_only_cflags) $(CPPFLAGS)
-c_includes	:= -I$(incdir) -I$(incdir)/$(matrix_dir)
-c_ldlibs	:= -lm
+c_OBJS		:= $(addprefix $(objdir)/,$(addsuffix .o,$(c_FILES)))
+c_CFLAGS	:= $(c_only_CFLAGS) $(CPPFLAGS)
+c_INCLUDES	:= -I$(incdir) -I$(incdir)/$(matrix_dir)
+c_LDLIBS	:= -lm
 
 # CUDA files
-cuda_device_objs := $(addprefix $(objdir)/,$(addsuffix .o,$(cuda_device_files)))
-cuda_objs	 := $(cuda_device_objs) $(addprefix $(objdir)/,$(addsuffix .o,$(cuda_files)))
-cuda_cflags	 := $(nvcc_cflags) $(CPPFLAGS)
-cuda_includes	 := $(addprefix --compiler-options ,$(c_includes)) $(addprefix -I,$(nvcc_incdir))
-cuda_ldlibs	 := -lcublas -lcurand
+cuda_device_OBJS := $(addprefix $(objdir)/,$(addsuffix .o,$(cuda_device_FILES)))
+cuda_OBJS	 := $(addprefix $(objdir)/,$(addsuffix .o,$(cuda_FILES)))
+cuda_CFLAGS	 := $(nvcc_CFLAGS) $(CPPFLAGS)
+cuda_INCLUDES	 := $(addprefix --compiler-options ,$(c_INCLUDES)) $(addprefix -I,$(nvcc_incdir))
+cuda_LDLIBS	 := -lcublas -lcurand
 
 # Tools
-tools_objdir	:= $(objdir)/$(tools_dir)
-tools_bindir	:= $(bindir)/$(tools_dirname)
-tools_targets	:= $(patsubst $(tools_dir)/%.c,$(tools_bindir)/%,$(tools_files))
-tools_deps	:= $(c_objs)
-tools_cflags	:= $(c_cflags)
-tools_includes	:= $(c_includes)
-tools_ldlibs	:= $(c_ldlibs)
+tools_OBJDIR	:= $(objdir)/$(tools_dir)
+tools_BINDIR	:= $(bindir)/$(tools_dirname)
+tools_TARGETS	:= $(patsubst $(tools_dir)/%.c,$(tools_BINDIR)/%,$(tools_FILES))
+tools_DEPS	:= $(c_OBJS)
+tools_CFLAGS	:= $(c_CFLAGS)
+tools_INCLUDES	:= $(c_INCLUDES)
+tools_LDLIBS	:= $(c_LDLIBS)
 
 # Main Program (single-GPU version)
-single_gpu_obj		:= $(objdir)/$(single_gpu_file).o
-single_gpu_target	:= $(bindir)/$(basename $(single_gpu_file))
-single_gpu_deps		:= $(c_objs) $(cuda_objs)
-single_gpu_cflags	:= $(c_cflags)
-single_gpu_includes	:= $(c_includes) $(addprefix -I,$(nvcc_incdir))
-single_gpu_ldflags	:= $(addprefix -L,$(nvcc_libdir))
-single_gpu_ldlibs	:= $(cuda_ldlibs) $(nvcc_ldlibs) $(c_ldlibs)
+single_gpu_OBJ		:= $(objdir)/$(single_gpu_FILE).o
+single_gpu_TARGET	:= $(bindir)/$(basename $(single_gpu_FILE))
+single_gpu_DEPS		:= $(c_OBJS) $(cuda_device_OBJS) $(cuda_OBJS)
+single_gpu_CFLAGS	:= $(c_CFLAGS)
+single_gpu_INCLUDES	:= $(c_INCLUDES) $(addprefix -I,$(nvcc_incdir))
+single_gpu_LDFLAGS	:= $(addprefix -L,$(nvcc_libdir))
+single_gpu_LDLIBS	:= $(cuda_LDLIBS) $(nvcc_LDLIBS) $(c_LDLIBS)
 
 
 ########################################
@@ -393,17 +422,17 @@ single_gpu_ldlibs	:= $(cuda_ldlibs) $(nvcc_ldlibs) $(c_ldlibs)
 
 # Rule to compile all programs.
 .PHONY: all
-all : single_gpu tools $(clean_files)
+all : single_gpu tools $(clean_FILES)
 
 
 # Main Program (single-GPU version)
 .PHONY: single_gpu
-single_gpu : $(single_gpu_target)
+single_gpu : $(single_gpu_TARGET)
 
 
 # Utility programs
 .PHONY: tools
-tools : $(tools_targets)
+tools : $(tools_TARGETS)
 
 
 ########################################
@@ -411,29 +440,43 @@ tools : $(tools_targets)
 ########################################
 
 # Main Program (single-GPU version, C++ code)
-$(single_gpu_target) : $(single_gpu_deps) $(single_gpu_obj)
+$(single_gpu_TARGET) : $(single_gpu_DEPS) $(single_gpu_OBJ)
 	$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(LINK) $(single_gpu_cflags) $(single_gpu_includes) $(single_gpu_ldflags) $^ $(single_gpu_ldlibs) $(CFLAGS) -o $@
+	$(cmd_prefix)$(LINK) $(single_gpu_CFLAGS) $(single_gpu_INCLUDES) $(single_gpu_LDFLAGS) $^ $(single_gpu_LDLIBS) $(CFLAGS) -o $@
 
 # Tools (C code)
-$(tools_bindir)/% : $(tools_deps) $(tools_objdir)/%.c.o
+$(tools_BINDIR)/% : $(tools_DEPS) $(tools_OBJDIR)/%.c.o
 	$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(CC) $(tools_cflags) $(tools_includes) $^ $(tools_ldlibs) $(CFLAGS) -o $@
+	$(cmd_prefix)$(CC) $(tools_CFLAGS) $(tools_INCLUDES) $^ $(tools_LDLIBS) $(CFLAGS) -o $@
 
 
-# CUDA host and device code
-$(cuda_device_objs) : cuda_cflags+=$(gencode_arch)
+# CUDA DEVICE code
+$(cuda_device_OBJS) : cuda_CFLAGS+=$(sm_CFLAGS)
+$(objdir)/%.cu.o : $(srcdir)/%.cu check_sm_versions
+	$(cmd_prefix)mkdir -p $(@D)
+	$(cmd_prefix)$(NVCC) $(cuda_CFLAGS) $(cuda_INCLUDES) $(addprefix --compiler-options ,$(CXXFLAGS)) $(NVCCFLAGS) --output-file $@ --compile $<
+
+# CUDA HOST code
 $(objdir)/%.cu.o : $(srcdir)/%.cu
 	$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(NVCC) $(cuda_cflags) $(cuda_includes) $(addprefix --compiler-options ,$(CXXFLAGS)) $(NVCCFLAGS) --output-file $@ --compile $<
+	$(cmd_prefix)$(NVCC) $(cuda_CFLAGS) $(cuda_INCLUDES) $(addprefix --compiler-options ,$(CXXFLAGS)) $(NVCCFLAGS) --output-file $@ --compile $<
 
 
 # C files
-$(single_gpu_obj) : c_includes:=$(single_gpu_includes)
+$(single_gpu_OBJ) : c_INCLUDES:=$(single_gpu_INCLUDES)
 $(objdir)/%.c.o : $(srcdir)/%.c
 	$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(CC) $(c_cflags) $(c_includes) $(CFLAGS) -o $@ -c $<
+	$(cmd_prefix)$(CC) $(c_CFLAGS) $(c_INCLUDES) $(CFLAGS) -o $@ -c $<
 
+
+# Double-precision data is not supported on Compute Capability <= 1.2
+.PHONY: check_sm_versions
+check_sm_versions :
+ifneq ($(SINGLE),1)
+ifneq ($(strip $(unsupported_sm_versions)),)
+	$(error $(error_msj))
+endif
+endif
 
 ########################################
 # Clean-up rules
@@ -448,12 +491,12 @@ clobber:
 
 .PHONY: clobber_single_gpu
 clobber_single_gpu: clean_single_gpu
-	$(cmd_prefix)rm -f $(single_gpu_target)
+	$(cmd_prefix)rm -f $(single_gpu_TARGET)
 
 
 .PHONY: clobber_tools
 clobber_tools: clean_tools
-	$(cmd_prefix)rm -f $(tools_targets)
+	$(cmd_prefix)rm -f $(tools_TARGETS)
 
 
 ########################################
@@ -475,12 +518,12 @@ clean_tools : clean_c
 
 .PHONY: clean_cuda
 clean_cuda:
-	$(cmd_prefix)rm -f $(cuda_objs)
+	$(cmd_prefix)rm -f $(cuda_OBJS)
 
 
 .PHONY: clean_c
 clean_c:
-	$(cmd_prefix)rm -f $(c_objs)
+	$(cmd_prefix)rm -f $(c_OBJS)
 
 ########################################
 

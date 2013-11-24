@@ -607,8 +607,7 @@ int init_GPU( index_t dev_id, index_t num_devs, size_t *__restrict__ const mem_s
 
 	// Shows some GPU properties
 
-	#if NMFGPU_VERBOSE || NMFGPU_DEBUG || NMFGPU_FORCE_BLOCKS \
-		|| NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
+	#if NMFGPU_VERBOSE || NMFGPU_DEBUG || NMFGPU_FORCE_BLOCKS || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
 		// CUDA version
 		int runtime_version = 0;
@@ -618,17 +617,13 @@ int init_GPU( index_t dev_id, index_t num_devs, size_t *__restrict__ const mem_s
 		int cublas_version = 0;
 		cublasGetVersion( cublas_handle, &cublas_version );
 
-		#if ! ( NMFGPU_VERBOSE || NMFGPU_DEBUG )
-		// If it is NOT in debug mode, only shows properties for device 0.
-		if ( ( ! dev_id ) + (num_devs == 1) )
-		#endif
-		{
+		if ( ( ! dev_id ) + (num_devs == 1) ) {
 			printf( "\n[GPU%" PRI_IDX "] %s (total devices=%" PRI_IDX "): Compute_Capability=%i.%i, CUDA=%i.%i, CUBLAS=%i.%i\n"
 				"\tWarp_size=%i, Memory_Alignment=%i, Max_Threads_per_Block=%i, Threads_per_Block=%i, "
 				"Max_Grid_Dimensions(X,Y)=(%i,%i).\n"
 				"\tMultiprocessors=%i, Threads_per_MultiProcessor=%i,\n"
-				"\tGlobal_Memory=%zu bytes (%0.2fMB), Total_Memory=%0.2fMB.\n"
-				"\tFree_Memory=%0.2fMB, Used=%0.2fMB, (Maximum_Allocatable=%0.2fMB).\n",
+				"\tGlobal_Memory=%zu bytes (%g MiB), Total_Memory=%g MiB.\n"
+				"\tFree_Memory=%g MiB, Used=%g MiB, (Maximum_Allocatable=%g MiB).\n",
 				dev_id, device_prop.name, num_devs, device_prop.major, device_prop.minor,
 				runtime_version/1000, runtime_version%100, cublas_version/1000, cublas_version%100,
 				device_prop.warpSize, memory_alignment, device_prop.maxThreadsPerBlock, threadsPerBlock,
@@ -1033,7 +1028,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 	}
 
 	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-		printf("\n[GPU%" PRI_IDX "] Total device memory required (approx.): %0.3f MB. (required by output & auxiliary data: %0.3f MB)\n",
+		printf("\n[GPU%" PRI_IDX "] Total device memory required (approx.): %g MiB. (required by output & auxiliary data: %g MiB)\n",
 			device_id, (float) (required_mem + data_matrices) * (sizeof(real) / 1048576.0f),
 			(float) data_matrices * (sizeof(real) / 1048576.0f) );
 	#endif
@@ -1118,7 +1113,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 
 			#if NMFGPU_VERBOSE_2
 				printf("[GPU%" PRI_IDX "] Step %" PRI_IDX ": BLN=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
-					" (%0.3f MB), dBLN=%" PRI_IDX ", dBLM=%" PRI_IDX ", required_mem=%zu\n", device_id, step, lBLN, lBLM,
+					" (%g MiB), dBLN=%" PRI_IDX ", dBLM=%" PRI_IDX ", required_mem=%zu\n", device_id, step, lBLN, lBLM,
 					lBLMp, (float) ((required_mem + data_matrices) * sizeof(real)) / 1048576.0f, dBLN, dBLM, required_mem );
 				step++;
 			#endif
@@ -1164,7 +1159,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 				cols = N * lBLMp;
 				required_mem = rows + cols + MAX( rows, cols ); // d_Vr + d_Vc + d_WH == MAX( d_Vr , d_Vc )
 				printf("[GPU%" PRI_IDX "] Resulting values: BLN=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
-					" (approx. %0.3f MB)\n", device_id, lBLN, lBLM, lBLMp,
+					" (approx. %g MiB)\n", device_id, lBLN, lBLM, lBLMp,
 					(float) (required_mem + data_matrices) * (sizeof(real) / 1048576.0f) );
 			#endif
 
@@ -1173,7 +1168,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 				cols = N * memory_alignment;		// i.e., N*BLMp
 				required_mem = MAX( ((size_t) Mp), cols ) + Mp + cols;	// d_WH + d_Vrow + d_Vcol
 				fflush(stdout);
-				fprintf(stderr,"\n[GPU%" PRI_IDX "] Not enough memory. Minimum required: %0.3f MB.\n", device_id,
+				fprintf(stderr,"\n[GPU%" PRI_IDX "] Not enough memory. Minimum required: %g MiB.\n", device_id,
 						(float) ((required_mem + data_matrices) * sizeof(real))/1048576.0f);
 				return EXIT_FAILURE;
 			}
@@ -1182,9 +1177,9 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 	} // if ( required_mem > free_mem )
 
 
-	#if NMFGPU_VERBOSE || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
+	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		printf("\n[GPU%" PRI_IDX "] Resulting values: BLN=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
-			" (approx. %0.3f MB), full_matrix=%i\n", device_id, lBLN, lBLM, lBLMp,
+			" (approx. %g MiB), full_matrix=%i\n", device_id, lBLN, lBLM, lBLMp,
 			(float) (required_mem + data_matrices) * (sizeof(real) / 1048576.0f), l_full_matrix );
 	#endif
 
@@ -1590,7 +1585,7 @@ static int init_GPU_data( bool single_matrix_V )
 			fprintf( stderr, "\n[GPU%" PRI_IDX "] Error creating stream object %" PRI_IDX "/%" PRI_IDX
 					" for synchronization on main flow: %s\n", device_id, st, num_streams_NMF,
 					cudaGetErrorString(cuda_status) );
-			for ( st--; st >= 0; st-- ) { cudaStreamDestroy( streams_NMF[ st ] ); } free( (void *) streams_NMF );
+			for ( index_t i=0 ; i < (st-1) ; i++ ) { cudaStreamDestroy( streams_NMF[ st ] ); } free( (void *) streams_NMF );
 			cudaStreamDestroy( stream_H ); cudaStreamDestroy( stream_W );
 			if ( ! single_matrix_V ) { cudaStreamDestroy( stream_Vcol ); } cudaStreamDestroy( stream_Vrow );
 			cudaEventDestroy( event_reduction ); cudaEventDestroy( event_H ); cudaEventDestroy( event_W );
@@ -2025,14 +2020,14 @@ int init_GPUdevice( size_t mem_size, bool do_classf )
 	// Initializes block information structures.
 
 	// block_N
-	#if NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
+	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		printf("\n[GPU%" PRI_IDX "] For dimension \"NnP\" = %" PRI_IDX " (N=%" PRI_IDX ", %" PRI_IDX " devices):\n",
 			device_id, NnP, N, num_devices);
 	#endif
 	init_block_conf( NnP, BLN, 0, &block_N );
 
 	// block_M
-	#if NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
+	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		printf("\n[GPU%" PRI_IDX "] For dimension \"MnP\" = %" PRI_IDX " (%" PRI_IDX " with padding ; M=%" PRI_IDX ", %" PRI_IDX
 			" devices):\n", device_id, MnP, MnPp, M, num_devices );
 	#endif

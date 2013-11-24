@@ -109,6 +109,8 @@
 
 ///////////////////////////////////////////////////////
 
+#include <cuda.h>
+
 #include "index_type.h"
 #include "real_type.h"
 
@@ -200,7 +202,7 @@ void set_random_values( real *RESTRICT A, real *RESTRICT d_A, index_t height, in
 					bool transpose, char const *RESTRICT const matrix_name_A,
 					char const *RESTRICT const matrix_name_dA,
 				#endif
-				#if (! NMFGPU_CPU_RANDOM) && NMFGPU_PROFILING_TRANSF
+				#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
 					timing_data_t *RESTRICT const upload_timing,
 				#endif
 				cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
@@ -241,7 +243,7 @@ void update_W( void );
  * Computes classification vector from matrix d_H (full size).
  * Result is downloaded from the GPU and stored in 'classification[]'.
  */
-void get_classification( int *RESTRICT const classification );
+void get_classification( index_t *RESTRICT classification );
 
 // -----------------------------------
 

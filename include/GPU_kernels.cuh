@@ -42,6 +42,8 @@
 
 ////////////////////////////////////////////////
 
+#include <cuda.h>
+
 #include "index_type.h"
 #include "real_type.h"
 

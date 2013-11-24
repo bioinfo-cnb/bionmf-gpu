@@ -279,7 +279,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
 						true, "H", "d_H",
 					#endif
-					#if (! NMFGPU_CPU_RANDOM) && NMFGPU_PROFILING_TRANSF
+					#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
 						&upload_H_timing,
 					#endif
 					streams_NMF[ psNMF_N ], NULL );
@@ -289,7 +289,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
 						false, "W", "d_W",
 					#endif
-					#if (! NMFGPU_CPU_RANDOM) && NMFGPU_PROFILING_TRANSF
+					#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
 						&upload_W_timing,
 					#endif
 					stream_W, &event_W );
@@ -343,6 +343,10 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 		printf("niter_test_conv=%" PRI_IDX ", niter_conv=%" PRI_IDX ", niter_rem=%" PRI_IDX "\n",
 			niter_test_conv, niter_div.quot, niter_div.rem);
 	#endif
+
+
+	printf( "\n\nStarting NMF( K=%"PRI_IDX" )...\n", K );
+	fflush(stdout);
 
 	// ------------------------
 
@@ -745,7 +749,7 @@ int main( int argc, char const *restrict *restrict argv )
 		/* Uses optional arguments to force matrix dimensions.
 		 * NOTE: Both N and M are global variables.
 		 */
-		if ( idx_other_args < (argc-1) ) {
+		if ( idx_other_args < (index_t) (argc-1) ) {
 			N = atoi( argv[ idx_other_args++ ] );
 			M = atoi( argv[ idx_other_args++ ] );
 			if ( ( N < 2 ) + ( M < 2 ) ) {
@@ -764,6 +768,10 @@ int main( int argc, char const *restrict *restrict argv )
 		// Total elapsed time
 		gettimeofday( &t_tv, NULL );
 	#endif
+
+	// ----------------------------------------
+
+	printf( "\n\t<<< bioNMF-mGPU: Non-negative Matrix Factorization on GPU >>>\n\t\t\t\tSingle-GPU version\n\n" );
 
 	// ----------------------------------------
 
@@ -883,8 +891,6 @@ int main( int argc, char const *restrict *restrict argv )
 	// ----------------------------------------
 
 	// Writes output matrices.
-
-	printf( "\nWriting output matrices.\n" );
 
 	status = write_matrices( filename, save_bin, ml );
 	if ( status == EXIT_FAILURE ) {
