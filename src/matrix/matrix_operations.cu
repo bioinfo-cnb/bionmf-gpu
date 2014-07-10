@@ -1,8 +1,11 @@
 /************************************************************************
- * Copyright (C) 2011-2013:
  *
- *	Edgardo Mejia-Roa(*), Carlos Garcia, Jose Ignacio Gomez,
- *	Manuel Prieto, Francisco Tirado and Alberto Pascual-Montano(**).
+ * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ *
+ * Copyright (C) 2011-2014:
+ *
+ *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
+ *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
  *
  *	(*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
  *	(**) Functional Bioinformatics Group, Biocomputing Unit,
@@ -12,20 +15,20 @@
  *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-mGPU..
+ * This file is part of bioNMF-GPU.
  *
- * BioNMF-mGPU is free software: you can redistribute it and/or modify
+ * BioNMF-GPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-mGPU is distributed in the hope that it will be useful,
+ * BioNMF-GPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-mGPU.  If not, see <http://www.gnu.org/licenses/>.
+ * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ***********************************************************************/
 /**********************************************************
@@ -36,9 +39,12 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
- *	Timing (WARNING: They PREVENT asynchronous operations):
- *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers (should be used with NMFGPU_SYNC_TRANSF).
- *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels.
+ *	Data type:
+ *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
+ *
+ *	GPU timing (WARNING: They PREVENT asynchronous operations. The CPU thread is blocked on synchronization):
+ *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
+ *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
  *
  *	Additional information:
  *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
@@ -54,31 +60,520 @@
  *
  * NOTE: In order to improve performance:
  *
- *	- All matrices include useless data for padding. Padded dimensions
- *	  are denoted with the 'p' character, e.g., 'Mp' (i.e., M + padding)
- *	  or 'Kp' (factorization_rank + padding).
+ *	+ The number of columns is rounded up to a multiple of <memory_alignment>.
+ *	  The padded dimension is referred as "pitch".
  *
- *	- Padded dimensions are a multiple of memory_alignment
- *	  (a global variable which currently is equal to warpSize or warpSize/2).
+ *	  This leads to the following limits:
+ *		- Maximum number of columns (padded or not): matrix_max_pitch.
+ *		- Maximum number of rows: matrix_max_non_padded_dim.
+ *		- Maximum number of items: matrix_max_num_items.
+ *
+ *	  All four GLOBAL variables must be initialized with the
+ *	  set_matrix_limits() function.
+ *
+ ****************
+ *
+ * Mapped Memory on integrated GPUs:
+ *
+ * On integrated systems, such as notebooks, where device memory and host memory are physically the
+ * same (but disjoint regions), any data transfer between host and device memory is superfluous.
+ * In such case, host memory is mapped into the address space of the device, and all transfer
+ * operations are skipped. Memory for temporary buffers (e.g., d_WH or d_Aux) is also allocated
+ * on the HOST and then mapped. This saves device memory, which is typically required for graphics/video
+ * operations.
+ *
+ * This feature is disabled if NMFGPU_FORCE_BLOCKS is non-zero.
  *
  **********************************************************/
 
-#include <stdlib.h>
+// Required by <inttypes.h>
+#ifndef __STDC_FORMAT_MACROS
+	#define __STDC_FORMAT_MACROS (1)
+#endif
+#ifndef __STDC_CONSTANT_MACROS
+	#define __STDC_CONSTANT_MACROS (1)
+#endif
+
+#include "matrix/matrix_operations.cuh"
+#include "GPU_setup.cuh"
+#include "GPU_kernels.cuh"
+#include "matrix/matrix_io.h"
+#include "common.h"
+
+#include <curand.h>
+
+#include <limits.h>	/* [U]INT_MAX */
+/* WARNING:
+ *	There is a known bug on Intel C/C++ Compiler (icc), version 10,
+ *	when <limits.h> is included.
+ *	A workaround may be to use the following definitions, instead:
+ *
+ * #ifndef INT_MAX
+ *	#define INT_MAX (2147483647)
+ * #endif
+ * #ifndef UINT_MAX
+ *	#define UINT_MAX (4294967295U)
+ * #endif
+ */
+#include <inttypes.h>	/* PRIuFAST64, UINT64_C, uint_fast64_t */
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
-#include <stdint.h>	/* [u]intmax_t */
+#include <stdlib.h>
 
-#include <curand.h>	/* Random values */
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
-#include "matrix/matrix_io.h"
-#include "GPU_kernels.cuh"
-#include "GPU_setup.cuh"
-#include "matrix/matrix_operations.cuh"
+/* Data types */
+
+// Kernel parameters.
+struct kernel_params {
+	index_t block_magnitude;	// Block magnitude (height or size).
+	index_t abm;			// "Active" block magnitude (i.e., block_magnitude * <items_per_thread>)
+	uint_fast64_t max_magnitude;	// Maximum magnitude value with <number_of_blocks> (it may be > IDX_MAX on CC >= 3.0).
+};
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* Macro Constants */
+
+// Generates uniformly distributed real data
+#undef CURAND_GENERATE_UNIFORM_REAL
+#if NMFGPU_SINGLE_PREC
+	#define CURAND_GENERATE_UNIFORM_REAL curandGenerateUniform
+#else
+	#define CURAND_GENERATE_UNIFORM_REAL curandGenerateUniformDouble
+#endif
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* Global variables */
+
+// Kernel parameters.
+struct kernel_params matrix_to_row_kparams;
+struct kernel_params matrix_div_sub_kparams;
+struct kernel_params matrix_mul_div_kparams;
+struct kernel_params matrix_adjust_kparams;
+struct kernel_params matrix_idx_max_kparams;
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+/*
+ * Returns a new struct kernel_params, with the given values.
+ */
+static struct kernel_params new_kernel_params( index_t bmag, index_t items_per_thread, uint_fast64_t num_blocks )
+{
+
+	struct kernel_params kparams;
+
+	kparams.block_magnitude = bmag;
+	kparams.abm = bmag * items_per_thread;
+	kparams.max_magnitude = num_blocks * kparams.abm;	// It may be greater than IDX_MAX on Compute Capability >= 3.0
+
+	return kparams;
+
+} // new_kernel_params
+
+////////////////////////////////////////////////
+
+/*
+ * Returns a new width-based struct kernel_params, with the given values.
+ */
+static struct kernel_params new_kernel_params_width( index_t pitch, index_t items_per_thread, uint_fast64_t num_blocks )
+{
+
+	/* Block Dimensions:
+	 *	Each thread processes <items_per_thread> from the same row.
+	 *
+	 * (block_width * items_per_thread) must be >= width
+	 *
+	 * That is (using pitch, instead),
+	 *	block_width >= (pitch / items_per_thread).
+	 *
+	 * In addition, block_width must be a power of 2, and >= memory_alignment
+	 */
+
+	/* If pitch <= (memory_alignment * items_per_thread),
+	 * then memory_alignment (which is a power of 2) is the required block_width
+	 */
+	index_t block_width = memory_alignment;
+	if ( pitch > (memory_alignment * items_per_thread) ) {
+
+		block_width = (pitch / items_per_thread) + ((pitch % items_per_thread) != 0);	// <= maxThreadsPerBlock
+
+		block_width = next_power_2( block_width );		// < 2 * ceil(pitch/items_per_thread)
+
+		block_width = MIN( block_width, maxThreadsPerBlock );	// maxThreadsPerBlock is also a power of 2.
+	}
+
+	index_t block_height = threadsPerBlock / block_width;
+	if ( block_height <= 1 ) {
+
+		/* With maxThreadsPerBlock, the block height may be increased to two or three rows,
+		 * but then there will be just one or two blocks per multiprocessor. Instead, the
+		 * block size is increased to (maxThreadsPerBlock + threadsPerBlock) / 2, which
+		 * allows up to two rows, but two or three blocks per multiprocessor.
+		 *
+		 * In addition, the block_height must be a multiple of <pitch>.
+		 */
+		block_height = (maxThreadsPerBlock + threadsPerBlock) / (2 * pitch);	// (possibly truncated)
+	}
+
+	// -------------------------------------
+
+	struct kernel_params kparams_width;
+
+	kparams_width.block_magnitude = block_height;
+
+	// HACK: Uses the "abm" field to store "block_width".
+	kparams_width.abm = block_width;
+
+	// It may be greater than IDX_MAX on Compute Capability >= 3.0
+	kparams_width.max_magnitude = num_blocks * block_height;
+
+	return kparams_width;
+
+} // new_kernel_params_width
+
+////////////////////////////////////////////////
+
+/*
+ * Returns an empty struct kernel_params.
+ */
+#define new_empty_kernel_params() ( new_kernel_params( INDEX_C(0), INDEX_C(0), UINT64_C(0) ) )
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Returns the maximum matrix dimension supported by this GPU device,
+ * for the given pitch, and regardless of the available memory.
+ */
+index_t gpu_max_non_padded_dimension( index_t pitch )
+{
+
+	#if NMFGPU_VERBOSE_2
+		print_message( false, "gpu_max_non_padded_dimension( pitch = %" PRI_IDX ", ComputeCapability: %" PRI_IDX ".%" PRI_IDX " )\n",
+				pitch, computeCapability, computeCapability_minor );
+	#endif
+
+	// ---------------------------------
+
+	index_t max_dim = matrix_max_non_padded_dim;
 
 
-///////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////////////////////////////////////////
+	// maxtrix_to_row():
+	{
+
+		index_t const block_height = prev_power_2( maxBlockHeight_pitch );
+		index_t const items_per_thread = REDUCE_TO_ROW__ITEMS_PER_THREAD;
+		unsigned int const maxBlocksPerGrid = ( (computeCapability == 1) ? (1 << 24) : UINT_MAX ); // << (maxGridSizeX * maxGridSizeY)
+
+		// Computes the maximum dimension.
+		struct kernel_params kparams = new_kernel_params( block_height, items_per_thread, maxBlocksPerGrid );
+		uint_fast64_t const l_max_dim = kparams.max_magnitude;
+
+		#if NMFGPU_DEBUG
+		///////////////////////////////
+			print_message( false, "\tMatrix to row: %" PRIuFAST64 "\n", l_max_dim );
+		//////////////////////////////
+		#endif
+
+		// Final value
+		if ( l_max_dim < (uint_fast64_t) max_dim )
+			max_dim = l_max_dim;
+
+	} // matrix_to_row()
+
+	// ---------------------------------
+
+	// matrix_mul_div() and matrix_adjust():
+	{
+
+		index_t const block_height = maxBlockHeight_pitch;
+		index_t const items_per_thread = MIN( MUL_DIV__ITEMS_PER_THREAD, ADJUST__ITEMS_PER_THREAD );
+		uint_fast64_t const maxBlocksPerGrid = (uint_fast64_t) maxGridSizeX * (uint_fast64_t) maxGridSizeY;
+
+		struct kernel_params kparams = new_kernel_params( block_height, items_per_thread, maxBlocksPerGrid );
+		uint_fast64_t const l_max_dim = kparams.max_magnitude;
+
+		#if NMFGPU_DEBUG
+		///////////////////////////////
+			print_message( false, "\tMatrix mul_div and adjust: %" PRIuFAST64 "\n", l_max_dim );
+		//////////////////////////////
+		#endif
+
+		// Final value
+		if ( l_max_dim < (uint_fast64_t) max_dim )
+			max_dim = l_max_dim;
+
+	} // matrix_mul_div() and matrix_adjust()
+
+	// ---------------------------------
+
+	// matrix_idx_max(): On this one, block_width might be different than <pitch>.
+	{
+
+		index_t const items_per_thread = IDX_MAX__ITEMS_PER_THREAD;
+		uint_fast64_t const maxBlocksPerGrid = (uint_fast64_t) maxGridSizeX * (uint_fast64_t) maxGridSizeY;
+
+		struct kernel_params kparams_width = new_kernel_params_width( pitch, items_per_thread, maxBlocksPerGrid );
+		uint_fast64_t const l_max_dim = kparams_width.max_magnitude;
+
+		#if NMFGPU_DEBUG
+		///////////////////////////////
+			print_message( false, "\tMatrix idx_max: %" PRIuFAST64 "\n", l_max_dim );
+		//////////////////////////////
+		#endif
+
+		// Final value
+		if ( l_max_dim < (uint_fast64_t) max_dim )
+			max_dim = l_max_dim;
+
+	} // matrix_idx_max()
+
+	// ---------------------------------
+
+	#if NMFGPU_VERBOSE_2
+		print_message( false, "gpu_max_non_padded_dimension( pitch = %" PRI_IDX ", ComputeCapability: %" PRI_IDX ".%" PRI_IDX " ): %"
+				PRI_IDX "\n", pitch, computeCapability, computeCapability_minor, max_dim );
+	#endif
+
+	return max_dim;
+
+} // gpu_max_non_padded_dimension
+
+////////////////////////////////////////////////
+
+/*
+ * Returns the maximum number of items in a matrix supported by this GPU device,
+ * (regardless of the available memory).
+ */
+size_t gpu_max_nitems( void )
+{
+
+	#if NMFGPU_VERBOSE_2
+		print_message( false, "gpu_max_nitems( ComputeCapability: %" PRI_IDX ".%" PRI_IDX " )\n",
+				computeCapability, computeCapability_minor );
+	#endif
+
+	// ---------------------------------
+
+	// Starting limit.
+	size_t max_items = matrix_max_nitems;
+
+	// ---------------------------------
+
+	// Checks the limit for each related kernel, and updates the previous value if necessary.
+
+	// matrix_div_sub
+	{
+
+		index_t const block_size = threadsPerBlock;
+		index_t const items_per_thread = DIV_SUB__ITEMS_PER_THREAD;
+		uint_fast64_t const maxBlocksPerGrid = (uint_fast64_t) maxGridSizeX * (uint_fast64_t) maxGridSizeY;
+
+		struct kernel_params kparams = new_kernel_params( block_size, items_per_thread, maxBlocksPerGrid );
+		uint_fast64_t const l_max_items = kparams.max_magnitude;
+
+		#if NMFGPU_DEBUG
+		///////////////////////////////
+			print_message( true, "\tMatrix div_sub: %" PRIuFAST64 "\n", l_max_items );
+		//////////////////////////////
+		#endif
+
+		// Final value
+		if ( l_max_items < (uint_fast64_t) max_items )
+			max_items = l_max_items;
+
+	} // matrix_div_sub
+
+	// ---------------------------------
+
+	#if NMFGPU_VERBOSE_2
+		print_message( false, "gpu_max_nitems( ComputeCapability: %" PRI_IDX ".%" PRI_IDX " ): %zu\n",
+				computeCapability, computeCapability_minor, max_items );
+	#endif
+
+	return max_items;
+
+} // gpu_max_nitems
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Initializes all kernel parameters.
+ */
+void init_kernel_params( index_t pitch )
+{
+
+	/* matrix_to_row: Uses a block width equal to <pitch>. Each block reduces <REDUCE_TO_ROW__ITEMS_PER_THREAD> times its height
+	 * (see the reduction example in CUDA Samples for details). Block height must be a power of 2.
+	 */
+	matrix_to_row_kparams = new_kernel_params( prev_power_2( maxBlockHeight_pitch ), REDUCE_TO_ROW__ITEMS_PER_THREAD, maxGridSizeX );
+
+
+	// matrix_div_sub: Uses 1-D blocks. Each block processes up to <DIV_SUB__ITEMS_PER_THREAD> times its size.
+	matrix_div_sub_kparams = new_kernel_params ( threadsPerBlock, DIV_SUB__ITEMS_PER_THREAD, maxGridSizeX );
+
+
+	// matrix_mul_div: Uses a block width equal to <pitch>. Each block processes up to <MUL_DIV__ITEMS_PER_THREAD> times its height.
+	matrix_mul_div_kparams = new_kernel_params( maxBlockHeight_pitch, REDUCE_TO_ROW__ITEMS_PER_THREAD, maxGridSizeX );
+
+
+	// matrix_adjust: Uses a block width equal to <pitch>. Each block processes up to <ADJUST__ITEMS_PER_THREAD> times its height.
+	matrix_adjust_kparams = new_kernel_params( maxBlockHeight_pitch, ADJUST__ITEMS_PER_THREAD, maxGridSizeX );
+
+
+	/* matrix_idx_max: Each thread processes <IDX_MAX__ITEMS_PER_THREAD> from the same row.
+	 * (block_width * IDX_MAX__ITEMS_PER_THREAD) must be >= width
+	 * In addition, block_width must be a power of 2, and >= memory_alignment
+	 */
+	matrix_idx_max_kparams = new_kernel_params_width( pitch, IDX_MAX__ITEMS_PER_THREAD, maxGridSizeX );
+
+} // init_kernel_params
+
+////////////////////////////////////////////////
+
+/*
+ * Setups the given matrix operation.
+ *
+ * That is, computes grid dimensions, and timing index (on NMFGPU_PROFILING_KERNELS, only).
+ */
+static void setup_matrix_operation( struct kernel_params *__restrict__ p_kparams, size_t magnitude, dim3 *__restrict__ p_dimGrid,
+					#if NMFGPU_PROFILING_KERNELS
+						index_t *__restrict__ p_timing_index,
+					#endif
+					index_t *__restrict__ p_block_magnitude )
+{
+
+	#if NMFGPU_PROFILING_KERNELS
+		index_t l_timing_index = INDEX_C( 0 );	// Non-extended grid (0), extended grid (1), ...
+	#endif
+
+	// Kernel parameters
+	index_t const block_magnitude = p_kparams->block_magnitude;
+	index_t const abm = p_kparams->abm;
+	uint_fast64_t const max_magnitude = p_kparams->max_magnitude;	// It may be greater than IDX_MAX on Compute Capability >= 3.0
+
+	// Grid dimensions
+	index_t grid_length = 1;	// <= maxGridSizeX
+	index_t grid_extension = 1;	// <= MIN( maxGridSizeY, grid_length )
+
+	// -------------------------------------
+
+	/* "Grid extension" is required only if (magnitude > (maxGridSizeX * abm)).
+	 *
+	 * Note, however, it never happens on Compute Capability >= 3.0 under certain conditions,
+	 * described on each matrix operation method.
+	 */
+
+	// No "grid extension" required
+	if ( (uint_fast64_t) magnitude <= max_magnitude ) {
+
+		grid_length = (magnitude / abm) + ((magnitude % abm) != 0);
+
+		#if NMFGPU_PROFILING_KERNELS
+			l_timing_index = INDEX_C( 0 );	// Non-extended grid.
+		#endif
+
+	// "Extended" grid
+	} else {
+
+		/* Grid geometry:
+		 *
+		 * (grid_extension * grid_length * abm) >= magnitude.
+		 *
+		 * That is,
+		 *	grid_extension * grid_length >= ceil( magnitude / abm ).
+		 *
+		 * So, we can use:
+		 *	grid_extension == grid_length == ceil( sqrt( ceil(magnitude/abm) ) ),
+		 *
+		 * but this may lead to an excessive number of idle blocks. That is,
+		 *	(grid_extension * grid_length * abm) >> magnitude.
+		 *
+		 * Instead,
+		 *	grid_extension	= ceil( magnitude / (maxGridSizeX   * abm) ), which is << maxGridSizeY,
+		 *	grid_length	= ceil( magnitude / (grid_extension * abm) ), which is <= maxGridSizeX,
+		 *
+		 * is more accurate.
+		 *
+		 * Note that grid_extension <= grid_length
+		 */
+
+		// Grid "extension"
+		size_t const gh = max_magnitude;				// max_magnitude < magnitude
+		grid_extension = (magnitude / gh) + ((magnitude % gh) != 0);	// << maxGridSizeY
+
+		// Grid "length"
+		size_t const gw = grid_extension * abm;
+		grid_length = (magnitude / gw) + ((magnitude % gw) != 0);	// <= maxGridSizeX
+
+		#if NMFGPU_PROFILING_KERNELS
+			l_timing_index = INDEX_C(1);	// Extended grid
+		#endif
+
+	} // If grid extension is required
+
+	// -------------------------------------
+
+	// Output values
+
+	// Final grid dimensions
+	p_dimGrid->x = grid_length;
+	p_dimGrid->y = grid_extension;
+
+	#if NMFGPU_PROFILING_KERNELS
+		*p_timing_index = l_timing_index;
+	#endif
+
+	*p_block_magnitude = block_magnitude;
+
+} // setup_matrix_operation
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+/*
+ * SYNCHRONOUSLY downloads a matrix from the GPU to a temporary buffer,
+ * whose memory is automatically allocated.
+ *
+ * Returns a pointer to the buffer, or NULL on error.
+ */
+static void *download_to_buffer( void const *__restrict__ dMatrix, index_t height, index_t pitch, size_t data_size )
+{
+
+	size_t const size_bytes = height * pitch * data_size;
+
+	// Downloads the device matrix to a temporary array and shows its content.
+	void const *__restrict__ const buffer = (void *) malloc( size_bytes );
+	if ( ! buffer ) {
+		print_errnum( true, errno, "Error in show_device_matrix(): malloc()" );
+		return NULL;
+	}
+
+	// SYNCHRONOUS data transfer.
+	cudaError_t const cuda_status = cudaMemcpy( (void *) buffer, dMatrix, size_bytes, cudaMemcpyDeviceToHost );
+	if ( cuda_status != cudaSuccess ) {
+		print_error( true, "Error downloading DEVICE matrix (height=%" PRI_IDX ", pitch=%" PRI_IDX "): %s\n",
+				height, pitch, cudaGetErrorString(cuda_status) );
+		free( (void *) buffer );
+		return NULL;
+	}
+	/* Same code using cuBLAS:
+	 *	cublasStatus_t cublas_status = cublasGetVector( height * pitch, data_size, dMatrix, 1, buffer, 1 );
+	 */
+
+	return (void *) buffer;
+
+} // download_to_buffer
+
+// ---------------------------------------------
 
 /*
  * Partially prints device matrix content.
@@ -87,52 +582,38 @@
  * If 'transpose' is 'true', transposes matrix as follows:
  * - Matrix dimension in memory: <ncols> rows, <nrows> columns.
  * - Matrix dimension on screen: <nrows> rows, <ncols> columns.
- * - Shows <ncols> ml->headers (as column headers) and <nrows> ml->labels (as row labels).
+ * - Shows <ncols> mt->headers (as column headers) and <nrows> mt->labels (as row labels).
  *
  * ncols <= pitch, unless matrix transposing is set (in that case, nrows <= padding).
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int show_device_matrix( real const *__restrict__ dMatrix, index_t nrows, index_t ncols, index_t pitch, bool transpose,
-			struct matrix_labels const *__restrict__ ml )
+int show_device_matrix( real const *__restrict__ dMatrix, index_t nrows, index_t ncols, index_t pitch, bool transpose, bool shown_by_all,
+			struct matrix_tags_t const *__restrict__ mt )
 {
 
 	int status = EXIT_SUCCESS;
 
-	// Downloads the device matrix to a temporary array and shows its content.
-	real *__restrict__ const buffer = (real *) malloc( nrows * pitch * sizeof(real) );
-	if ( ! buffer ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error in HOST memory allocation (malloc): %s\nError in show_device_matrix()\n",
-			device_id, strerror(errno) );
-		return EXIT_FAILURE;
-	}
+	// -----------------------------
 
-	// Synchronous data transfer.
-	cudaError_t const cuda_status = cudaMemcpy( buffer, dMatrix, nrows * pitch * sizeof(real), cudaMemcpyDeviceToHost );
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error downloading DEVICE matrix (nrows=%" PRI_IDX ", ncols=%" PRI_IDX ", pitch=%"
-				PRI_IDX ", transpose=%i): %s\n", device_id, nrows, ncols, pitch, transpose, cudaGetErrorString(cuda_status) );
-		free( buffer );
+	real const *__restrict__ const buffer = (real const *) download_to_buffer( dMatrix, nrows, pitch, sizeof(real) );
+	if ( ! buffer )
 		return EXIT_FAILURE;
-	}
-	/* Same code using CUBLAS:
-	 *	cublasStatus_t cublas_status = cublasGetVector( nrows * pitch, sizeof(real), dMatrix, 1, buffer, 1 );
-	 */
 
-	if ( transpose )
-		status = matrix_show( buffer, ncols, nrows, pitch, true, ml );
+	// -----------------------------
+
+	if ( transpose )	// TODO: Improve this!!
+		status = matrix_show( buffer, ncols, nrows, pitch, true, shown_by_all, mt );
 	else
-		status = matrix_show( buffer, nrows, ncols, pitch, false, ml );
+		status = matrix_show( buffer, nrows, ncols, pitch, false, shown_by_all, mt );
 
-	free( buffer );
+	free( (void *) buffer );
 
 	return status;
 
 } // show_device_matrix
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Partially prints device matrix content (INTEGER version).
@@ -141,53 +622,38 @@ int show_device_matrix( real const *__restrict__ dMatrix, index_t nrows, index_t
  * If 'transpose' is 'true', transposes matrix as follows:
  * - Matrix dimension in memory: <ncols> rows, <nrows> columns.
  * - Matrix dimension on screen: <nrows> rows, <ncols> columns.
- * - Shows <ncols> ml->headers (as column headers) and <nrows> ml->labels (as row labels).
+ * - Shows <ncols> mt->headers (as column headers) and <nrows> mt->labels (as row labels).
  *
  * ncols <= pitch, unless matrix transposing is set (in that case, nrows <= padding).
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int show_device_matrix_int( index_t const *__restrict__ dMatrix, index_t nrows, index_t ncols, index_t pitch, bool transpose,
-			struct matrix_labels const *__restrict__ ml )
+int show_device_matrix_int( index_t const *__restrict__ dMatrix, index_t nrows, index_t ncols, index_t pitch, bool transpose, bool shown_by_all,
+				struct matrix_tags_t const *__restrict__ mt )
 {
 
 	int status = EXIT_SUCCESS;
 
-	// Downloads the device matrix to a temporary array and shows its content.
-	index_t *__restrict__ const buffer = (index_t *) malloc( nrows * pitch * sizeof(index_t) );
-	if ( ! buffer ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error in HOST memory allocation (malloc): %s\nError in show_device_matrix_int()\n",
-			device_id, strerror(errno) );
-		return EXIT_FAILURE;
-	}
+	// -----------------------------
 
-	// *SYNCHRONOUS* data transfer.
-	cudaError_t const cuda_status = cudaMemcpy( buffer, dMatrix, nrows * pitch * sizeof(index_t), cudaMemcpyDeviceToHost );
-	if ( cuda_status != cudaSuccess ) {
-		fflush(stdout);
-		fprintf( stderr, "\n[GPU%" PRI_IDX "] Error downloading DEVICE matrix of INTEGERS (nrows=%" PRI_IDX ", ncols=%" PRI_IDX
-				", pitch=%" PRI_IDX ", transpose=%i): %s\n", device_id, nrows, ncols, pitch, transpose,
-				cudaGetErrorString(cuda_status) );
-		free( buffer );
+	index_t const *__restrict__ const buffer = (index_t const *) download_to_buffer( dMatrix, nrows, pitch, sizeof(index_t) );
+	if ( ! buffer )
 		return EXIT_FAILURE;
-	}
-	/* Same code using CUBLAS:
-	 *	cublasStatus_t cublas_status = cublasGetVector( nrows * pitch, sizeof(index_t), dMatrix, 1, buffer, 1 );
-	 */
 
-	if ( transpose )
-		status = matrix_int_show( buffer, ncols, nrows, pitch, true, ml );
+	// -----------------------------
+
+	if ( transpose )	// TODO: Improve this!!
+		status = matrix_int_show( buffer, ncols, nrows, pitch, true, shown_by_all, mt );
 	else
-		status = matrix_int_show( buffer, nrows, ncols, pitch, false, ml );
+		status = matrix_int_show( buffer, nrows, ncols, pitch, false, shown_by_all, mt );
 
-	free( buffer );
+	free( (void *) buffer );
 
 	return status;
 
 } // show_device_matrix_int
 
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * d_A = random_value
@@ -211,9 +677,8 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
 	#if ! NMFGPU_CPU_RANDOM
 
 		#if NMFGPU_VERBOSE_2
-			if ( (! device_id) + (num_devices == 1) )
-				printf("\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
-					", transpose=%i)\n", matrix_name, height, width, padding, transpose );
+			print_message( false, "\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX
+					", padding=%" PRI_IDX ", transpose=%i)\n", matrix_name, height, width, padding, transpose );
 		#endif
 
 		#if NMFGPU_DEBUG
@@ -232,12 +697,9 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( curand_status != CURAND_STATUS_SUCCESS ) {
-				fflush(stdout);
-				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error setting stream for CURAND kernel launches (matrix %s): ",
-					device_id, matrix_name );
-				printCurandErrorString( curand_status );
-			}
+			if ( curand_status != CURAND_STATUS_SUCCESS )
+				print_error( true, "Error setting stream for CURAND kernel launches (matrix %s): %s\n",
+						matrix_name, getCurandErrorString( curand_status ) );
 		#endif
 		///////////////////////////////
 
@@ -253,17 +715,19 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
 
 			CURAND_GENERATE_UNIFORM_REAL( curand_generator, d_A, size );
 
+
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( curand_status != CURAND_STATUS_SUCCESS ) {
-				fflush(stdout);
-				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error generating random values for matrix %s: ", device_id, matrix_name );
-				printCurandErrorString( curand_status );
-			}
-			printf( "\n--- [GPU%" PRI_IDX "] Random values on matrix %s (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%"
-				PRI_IDX ", transpose=%i): ---\n", device_id, matrix_name, height, width, padding, transpose );
+		{
+			bool const shown_by_all = true;
+			if ( curand_status != CURAND_STATUS_SUCCESS )
+				print_error( true, "Error generating random values for matrix %s: ", matrix_name,
+						getCurandErrorString( curand_status ) );
+			print_message( shown_by_all, "--- Random values on matrix %s (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%"
+					PRI_IDX ", transpose=%i): ---\n", matrix_name, height, width, padding, transpose );
 			check_cuda_status();
-			show_device_matrix( d_A, height, width, padding, transpose, NULL );
+			show_device_matrix( d_A, height, width, padding, transpose, shown_by_all, NULL );
+		}
 		#endif
 		/////////////////////////////
 
@@ -271,38 +735,35 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
 
 		// Records the previous operation on stream_A as 'event_A'
 		if ( event_A ) {
+
 			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
 				cudaError_t cuda_status =
 			#endif
 
 				cudaEventRecord( *event_A, stream_A );
 
-				///////////////////////////////
-				#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-					if ( cuda_status != cudaSuccess ) {
-						fflush(stdout);
-						fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in "
-							"matrix_random(%s, height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
-							", transpose=%i).\n", device_id, cudaGetErrorString(cuda_status), matrix_name,
-							height, width, padding, transpose );
-					}
-				#endif
-				///////////////////////////////
+			///////////////////////////////
+			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+				if ( cuda_status != cudaSuccess )
+					print_error( true, "Error recording CUDA event: %s\nError in matrix_random(%s, height=%"
+						PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX ", transpose=%i).\n",
+						cudaGetErrorString(cuda_status), matrix_name, height, width, padding, transpose );
+			#endif
+			///////////////////////////////
 		}
 
 		// ----------------------------------
 
 		#if NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX
-				", transpose=%i)... Done.\n", matrix_name, height, width, padding, transpose );
+			print_message( false, "\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%"
+					PRI_IDX ", transpose=%i)... Done.\n", matrix_name, height, width, padding, transpose );
 		#endif
 
 	#endif /* NMFGPU_CPU_RANDOM */
 
 } //matrix_random
 
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * d_accum_A[ i ] = SUM( d_A[ i ][...] )
@@ -318,9 +779,7 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
  * The operation is recorded with "event_reduction".
  *
  * WARNING:
- *	- On Compute Capability 1.x:
- *		height < prev_power_2(maxBlockHeight_pitch) * REDUCE_TO_ROW__ITEMS_PER_THREAD * (2**24)
- *		('REDUCE_TO_ROW__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
+ *	(height / (prev_power_2(maxBlockHeight_pitch) * REDUCE_TO_ROW__ITEMS_PER_THREAD)) <= UINT_MAX
  */
 void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
@@ -331,8 +790,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 	///////////////////////////////
 	#if NMFGPU_DEBUG_REDUCT
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\n--- Begin of matrix_to_row(computeCapability=%" PRI_IDX ".%" PRI_IDX ", width=%" PRI_IDX ", pitch=%"
+		print_message( false, "\n--- Begin of matrix_to_row(computeCapability=%" PRI_IDX ".%" PRI_IDX ", width=%" PRI_IDX ", pitch=%"
 				PRI_IDX ", height=%" PRI_IDX ") on %s: ---\n", computeCapability, computeCapability_minor, width, pitch,
 				height, matrix_name);
 	#endif
@@ -347,120 +805,70 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 	if ( height > 1 ) {
 
+		/* Kernel setup:
+		 *
+		 * Block dimensions:
+		 *	Uses a block width equal to <pitch>.
+		 *	Each block reduces <REDUCE_TO_ROW__ITEMS_PER_THREAD> times its height
+		 *	(see the reduction example in CUDA Samples for details).
+		 *
+		 * Grid Dimensions:
+		 *	"Grid extension" is required only if (height > (maxGridSizeX * abh)).
+		 *
+		 *	Note, however, it never happens on Compute Capability >= 3.0, if
+		 *		(sizeof(index_t) == sizeof(int)) && (REDUCE_TO_ROW__ITEMS_PER_THREAD > 2).
+		 *
+		 *	On such architectures, maxGridSizeX >= INT_MAX, so if sizeof(index_t) == sizeof(int),
+		 *	then (IDX_MAX / maxGridSizeX) <= 2.
+		 *
+		 *	Therefore, if REDUCE_TO_ROW__ITEMS_PER_THREAD > 2, then
+		 *		(maxGridSizeX * REDUCE_TO_ROW__ITEMS_PER_THREAD) > IDX_MAX >= height
+		 *
+		 *	This condition will be checked on kernel compilation.
+		 */
+		index_t block_height;
+		dim3 dimGrid;
 		#if NMFGPU_PROFILING_KERNELS
-			index_t timing_index = 0;	// Non-extended grid (0), extended grid (1), single block (2), copy (3)
+			index_t timing_index;		// Non-extended grid (0), extended grid (1), single block (2), copy (3)
 		#endif
 
-		index_t const matrix_size = pitch * height;
+		setup_matrix_operation( &matrix_to_row_kparams, height, &dimGrid,
+					#if NMFGPU_PROFILING_KERNELS
+						&timing_index,
+					#endif
+					&block_height );
 
-		/* Uses a block width equal to <pitch>.
-		 *
-		 * Each block reduces, at least, <REDUCE_TO_ROW__ITEMS_PER_THREAD> times its height
-		 * ('REDUCE_TO_ROW__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
-		 *
-		 *	Please, see the reduction example in CUDA SDK for details.
+
+		/* Non-extended grid:
+		 * If there is not enough work for more than two blocks, overrides the kernel setup
+		 * and uses just one block, which will iteratively read data from global memory.
 		 */
+		if ( dimGrid.x <= 2 ) {	// dimGrid.y == 1
 
-		index_t block_height = prev_power_2( maxBlockHeight_pitch );		// A power of two.
+			// Tries to use a block height as large as possible.
 
-		index_t const abh = block_height * REDUCE_TO_ROW__ITEMS_PER_THREAD;	// "Active" block height.
+			index_t max_block_height1 = height / REDUCE_TO_ROW__ITEMS_PER_THREAD;
+			max_block_height1 = MIN( 1, max_block_height1 );
 
+			index_t const max_block_height2 = maxThreadsPerBlock / pitch;
 
-		// Grid dimensions
-		index_t grid_length = 1;	// <= maxGridSizeX
-		index_t grid_extension = 1;	// <= maxGridSizeY, and <= grid_length
+			block_height = prev_power_2( MIN( max_block_height1, max_block_height2 ) );	// A power of 2
 
-		/* "grid_extension" is required only if matrix_size > (maxGridSizeX * abh * pitch).
-		 *
-		 * On Compute Capability >= 3.0:
-		 *	It never happens if (IDX_MAX / maxGridSizeX) < memory_alignment
-		 *
-		 * On Compute Capability 1.x:
-		 *	"Grid extension" is also required if matrix_size >= 2**24
-		 */
-		uintmax_t max_size = maxGridSizeX * abh * pitch;	// It may be > IDX_MAX on Compute Capability >= 3.0
-		if ( ( computeCapability == 1 ) * ( max_size >= (1 << 24) ) )
-			max_size = (1 << 24) - 1;
-
-
-		// No "grid extension" required
-		if ( (uintmax_t) matrix_size <= max_size ) {
-
-			grid_length = (height + abh - 1) / abh;
+			dimGrid.x = 1;
 
 			#if NMFGPU_PROFILING_KERNELS
-				timing_index = 0;	// Non-extended grid.
+				timing_index = 2;	// Single-block mode.
 			#endif
 
-			/* If there is not enough work for more than two blocks, uses just a single one.
-			 * Such block will iteratively read data from global memory.
-			 */
-			if ( grid_length <= 2 ) {
+		} // Single-block mode
 
-				// Tries to use a block height as large as possible.
-
-				index_t max_block_height1 = height / REDUCE_TO_ROW__ITEMS_PER_THREAD;
-				max_block_height1 = MIN( 1, max_block_height1 );
-
-				index_t const max_block_height2 = maxThreadsPerBlock / pitch;
-
-				block_height = prev_power_2( MIN( max_block_height1, max_block_height2 ) );	// A power of 2
-
-				grid_length = 1;
-
-				#if NMFGPU_PROFILING_KERNELS
-					timing_index = 2;	// Single-block mode.
-				#endif
-
-			}
-
-		// "Extended" grid.
-		} else {
-
-			/* Grid geometry:
-			 *
-			 * (grid_extension * grid_length * abh) >= height.
-			 *
-			 * That is,
-			 *	grid_extension * grid_length >= ceil( height / abh ).
-			 *
-			 * So, we can use:
-			 *	grid_extension == grid_length == ceil( sqrt( ceil(height/abh) ) ),
-			 *
-			 * but this may lead to an excessive number of idle thread blocks. That is,
-			 *	(grid_extension * grid_length * abh) >> height.
-			 *
-			 * Instead,
-			 *	grid_extension	= ceil( height / (maxGridSizeX	 * abh) ), which is << maxGridSizeY
-			 *	grid_length	= ceil( height / (grid_extension * abh) ), which is <= maxGridSizeX
-			 *
-			 * is more accurate.
-			 *
-			 * Note that grid_extension <= grid_length
-			 */
-
-			// Grid "extension"
-			index_t const gh = maxGridSizeX * abh;
-			grid_extension = ( height + gh - 1 ) / gh;	// << maxGridSizeY
-
-			// Grid "length"
-			index_t const gw = grid_extension * abh;
-			grid_length = ( height + gw - 1 ) / gw;		// <= maxGridSizeX
-
-			#if NMFGPU_PROFILING_KERNELS
-				timing_index = 1;	// Extended grid
-			#endif
-
-		} // If grid extension is required
-
-			///////////////////////////////
-			#if NMFGPU_DEBUG_REDUCT
-				if ( (! device_id) + (num_devices == 1) )
-					printf("reduce_to_row(pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX
-						",grid_length=%" PRI_IDX ", matrix_size=%" PRI_IDX "), abh=%" PRI_IDX "...\n", pitch,
-						block_height, grid_extension, grid_length, matrix_size, abh );
-			#endif
-			///////////////////////////////
+		///////////////////////////////
+		#if NMFGPU_DEBUG_REDUCT
+			print_message( false, "reduce_to_row(height=%" PRI_IDX "pitch=%" PRI_IDX ",block_height=%" PRI_IDX
+					",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX ", abh=%" PRI_IDX ")...\n",
+					height, pitch, block_height, dimGrid.y, dimGrid.x, matrix_to_row_kparams.abm );
+		#endif
+		///////////////////////////////
 
 		// ---------------------------
 
@@ -472,17 +880,16 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			 *
 			 * d_Tmp[ grid_extension*grid_length ][ pitch ] is used as a temporary storage.
 			 */
-			reduce_to_row( d_A, pitch, d_Tmp, block_height, grid_extension, grid_length, matrix_size, stream_AccA, d_accum_A );
+			reduce_to_row( d_A, height, pitch, d_Tmp, block_height, dimGrid, stream_AccA, d_accum_A );
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG_REDUCT
-				if ( (! device_id) + (num_devices == 1) )
-					check_cuda_status();
+				check_cuda_status();
 			#endif
 			///////////////////////////////
 
 		#if NMFGPU_PROFILING_KERNELS
-			stop_cuda_timer_cnt( &reduce_timing[ timing_index ], matrix_size, 1 );
+			stop_cuda_timer_cnt( &reduce_timing[ timing_index ], (height * pitch), 1 );
 		#endif
 
 		// ---------------------------
@@ -491,20 +898,26 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 		 * d_Tmp[ grid_extension*grid_length ][ pitch ].
 		 * Such call is performed in "single-block" mode.
 		 */
-		if ( (computeCapability == 1) * (computeCapability_minor < 2) * (grid_length > 1) ) {
+		if ( (computeCapability == 1) * (computeCapability_minor < 2) * (dimGrid.x > 1) ) {
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG_REDUCT
+			{
 				// Resulting d_Tmp from previous stage:
-				if ( (! device_id) + (num_devices == 1) ) {
-					printf("\n---Resulting d_Tmp (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+				bool const shown_by_all = false;
+				print_message( shown_by_all, "\n---Resulting d_Tmp (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 						",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX "):---\n",
-						height, width, pitch, block_height, grid_extension, grid_length );
-					check_cuda_status();
-					show_device_matrix( d_Tmp, (grid_extension * grid_length), width, pitch, false, NULL );
-				}
+						height, width, pitch, block_height, dimGrid.y, dimGrid.x );
+				check_cuda_status();
+				show_device_matrix( d_Tmp, (dimGrid.y * dimGrid.x), width, pitch, false, shown_by_all, NULL );
+			}
 			#endif
 			///////////////////////////////
+
+			index_t const d_Tmp_height = (dimGrid.y * dimGrid.x);
+
+			// New grid dimensions
+			dimGrid.x = dimGrid.y = 1;
 
 			// ---------------------------
 
@@ -515,21 +928,19 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 				/* d_Tmp[ grid_extension*grid_length ][ pitch ] is reduced with a single block.
 				 * No temporary storage is required.
 				 */
-				index_t const Tmp_size = grid_extension * grid_length * pitch;
-				reduce_to_row( d_Tmp, pitch, NULL, block_height, 1, 1, Tmp_size, stream_AccA, d_accum_A );
+				reduce_to_row( d_Tmp, d_Tmp_height, pitch, NULL, block_height, dimGrid, stream_AccA, d_accum_A );
 
 				///////////////////////////////
 				#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-					if ( (! device_id) + (num_devices == 1) )
-						check_cuda_status();
+					check_cuda_status();
 				#endif
 				///////////////////////////////
 
 			#if NMFGPU_PROFILING_KERNELS
-				stop_cuda_timer_cnt( &reduce_timing[2], matrix_size, 1 );
+				stop_cuda_timer_cnt( &reduce_timing[2], d_Tmp_height * pitch, 1 );
 			#endif
 
-		} // If a second call is required.
+		} // If a second call was required.
 
 	} else { // (height == 1)
 
@@ -545,7 +956,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 				cudaMemcpyAsync( d_accum_A, d_A, pitch * sizeof(real), cudaMemcpyDeviceToDevice, stream_AccA );
 
-			/* Same code using CUBLAS:
+			/* Same code using cuBLAS:
 			 *	cublas_status = cublasSetStream( cublas_handle, stream_AccA );
 			 *	cublas_status = CUBLAS_R_COPY( cublas_handle, pitch, d_A, 1, d_accum_A, 1 );
 			 */
@@ -565,10 +976,13 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 	///////////////////////////////
 	#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-		printf("\n--- [GPU%" PRI_IDX "] Resulting accumulator (length=%" PRI_IDX ",pitch=%" PRI_IDX ") for matrix %s: ---\n",
-			device_id, width, pitch, matrix_name );
+	{
+		bool const shown_by_all = true;
+		print_message( shown_by_all, "--- Resulting accumulator (length=%" PRI_IDX ",pitch=%" PRI_IDX ") for matrix %s: ---\n",
+				width, pitch, matrix_name );
 		check_cuda_status();
-		show_device_matrix( d_accum_A, 1, width, pitch, false, NULL );
+		show_device_matrix( d_accum_A, 1, width, pitch, false, shown_by_all, NULL );
+	}
 	#endif
 	///////////////////////////////
 
@@ -582,141 +996,85 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 			cudaEventRecord( event_AccA, stream_AccA );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess ) {
-					fflush(stdout);
-					fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in matrix2row(%s, width=%"
-						PRI_IDX ", pitch=%" PRI_IDX ").\n", device_id, cudaGetErrorString(cuda_status),
+		///////////////////////////////
+		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error recording CUDA event: %s\nError in matrix2row(%s, width=%"
+						PRI_IDX ", pitch=%" PRI_IDX ").\n", cudaGetErrorString(cuda_status),
 						matrix_name, width, pitch );
-				}
-			#endif
-			///////////////////////////////
+		#endif
+		///////////////////////////////
 	}
 
 } // matrix_to_row
 
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * d_A = d_B <op> d_A
  *
  * <op> is "./" or "-"
  *
- * div_operand: 'True' if operation to perform is a floating-point division.
+ * div_operator: 'True' if operation to perform is a floating-point division.
  *		Otherwise, a subtraction is performed.
  *
- * Kernel launch is delayed upon event "event_B" completes.
+ * If host memory was NOT mapped, kernel launch is delayed upon event "event_B" completes.
  * Then, the operation is registered using the same event object.
  *
  * 'pitch' must be a multiple of 'memory_alignment'.
- *
- * WARNING:
- *	- On Compute Capability 1.x:
- *		matrix_size < threadsPerBlock * DIV_SUB__ITEMS_PER_THREAD * (2**24)
- *		('DIV_SUB__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h")
  */
 void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
 				index_t width, char const *__restrict__ const matrix_name_A,
 				char const *__restrict__ const matrix_name_B,
 			#endif
-			bool div_operand,
+			bool div_operator,
 			#if NMFGPU_PROFILING_KERNELS
 				timing_data_t *__restrict__ td,
 			#endif
 			cudaStream_t stream_A, cudaEvent_t event_B )
 {
 
+	/* Kernel setup:
+	 *
+	 * Block dimensions:
+	 *	Uses 1-D blocks.
+	 *	Each block processes <DIV_SUB__ITEMS_PER_THREAD> times its size.
+	 *
+	 * Grid Dimensions:
+	 *	"Grid extension" is required only if matrix_size > (maxGridSizeX * act_bs).
+	 *
+	 *	Note, however, it never happens on Compute Capability >= 3.0, if
+	 *		sizeof(gpu_size_t) == sizeof(int)
+	 *
+	 *	On such architectures, maxGridSizeX >= INT_MAX, so if sizeof(gpu_size_t) == sizeof(int),
+	 *	then (GPU_MAX_ITEMS / maxGridSizeX) <= 2, which is certainly less than memory_alignment
+	 *	(i.e., the minimum block size).
+	 *
+	 *	Therefore, (maxGridSizeX * act_bs) > GPU_MAX_ITEMS for any (active) block size.
+	 *
+	 *	This condition will be checked on kernel compilation.
+	 */
+
+	size_t const matrix_size = height * pitch;
+
+	index_t block_size;
+	dim3 dimGrid;
 	#if NMFGPU_PROFILING_KERNELS
-		index_t timing_index = 0;
+		index_t timing_index;		// Non-extended grid (0), extended grid (1).
 	#endif
 
-	index_t const matrix_size = pitch * height;
+	setup_matrix_operation( &matrix_div_sub_kparams, matrix_size, &dimGrid,
+				#if NMFGPU_PROFILING_KERNELS
+					&timing_index,
+				#endif
+				&block_size );
 
 	// ------------------------------------------
 
-	/* Uses 1-D blocks.
-	 *
-	 * Each block processes up to <DIV_SUB__ITEMS_PER_THREAD> times its size
-	 * ('DIV_SUB__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
-	 */
+	// Delays kernel launch until d_B[] is ready (skipped if host memory was mapped)
 
-	index_t const block_size = threadsPerBlock;
-
-	index_t const act_bs = block_size * DIV_SUB__ITEMS_PER_THREAD;		// "Active" block size
-
-
-	// Grid dimensions
-	index_t grid_length = 1;	// <= maxGridSizeX
-	index_t grid_extension = 1;	// <= maxGridSizeY, and <= grid_length
-
-	/* "grid_extension" is required only if matrix_size > (maxGridSizeX * act_bs).
-	 *
-	 * On Compute Capability >= 3.0:
-	 *	It never happens if (IDX_MAX / maxGridSizeX) < memory_alignment
-	 *
-	 * On Compute Capability 1.x:
-	 *	"Grid extension" is also required if matrix_size >= 2**24
-	 */
-	uintmax_t max_size = maxGridSizeX * act_bs;	// It may be > IDX_MAX on Compute Capability >= 3.0
-	if ( ( computeCapability == 1 ) * ( max_size >= (1 << 24) ) )
-		max_size = (1 << 24) - 1;
-
-
-	// No "grid extension" required
-	if ( (uintmax_t) matrix_size <= max_size ) {
-
-		grid_length = (matrix_size + act_bs - 1) / act_bs;
-
-		#if NMFGPU_PROFILING_KERNELS
-			timing_index = 0;
-		#endif
-
-	// "Extended" grid.
-	} else {
-
-		/* Grid geometry:
-		 *
-		 * (grid_extension * grid_length * act_bs) >= matrix_size.
-		 *
-		 * That is,
-		 *	grid_extension * grid_length >= ceil( matrix_size / act_bs ).
-		 *
-		 * So, we can use:
-		 *	grid_extension == grid_length == ceil( sqrt( ceil(matrix_size/act_bs) ) ),
-		 *
-		 * but this may lead to an excessive number of idle thread blocks. That is,
-		 *	(grid_extension * grid_length * act_bs) >> matrix_size.
-		 *
-		 * Instead,
-		 *	grid_extension	= ceil( matrix_size / (maxGridSizeX   * act_bs) ), which is << maxGridSizeY
-		 *	grid_length	= ceil( matrix_size / (grid_extension * act_bs) ), which is <= maxGridSizeX
-		 *
-		 * is more accurate.
-		 *
-		 * Note that grid_extension <= grid_length
-		 */
-
-		// Grid "extension"
-		index_t const gh = maxGridSizeX * act_bs;
-		grid_extension = ( matrix_size + gh - 1 ) / gh;	// << maxGridSizeY
-
-		// Grid "length"
-		index_t const gw = grid_extension * act_bs;
-		grid_length = ( matrix_size + gw - 1 ) / gw;	// <= maxGridSizeX
-
-		#if NMFGPU_PROFILING_KERNELS
-			timing_index = 1;
-		#endif
-
-	} // If grid extension is required
-
-	// ------------------------------------------
-
-	// Delays kernel launch until d_B[] is ready.
-
-	{
+	if ( ! mappedHostMemory ) {
 
 		#if NMFGPU_DEBUG
 			cudaError_t cuda_status =
@@ -726,12 +1084,10 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr,"\n[GPU%" PRI_IDX "] cudaStreamWaitEvent: %s\nError in matrix_div_sub(%s %s %s, height=%" PRI_IDX
-					", pitch=%" PRI_IDX ").\n", device_id, cudaGetErrorString(cuda_status), matrix_name_A,
-					( div_operand ? "./" : "-" ), matrix_name_B, height, pitch );
-			}
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "cudaStreamWaitEvent: %s\nError in matrix_div_sub(%s %s %s, height=%" PRI_IDX
+						", pitch=%" PRI_IDX ").\n", cudaGetErrorString(cuda_status), matrix_name_A,
+						( div_operator ? "./" : "-" ), matrix_name_B, height, pitch );
 		#endif
 		///////////////////////////////
 	}
@@ -744,16 +1100,19 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 		start_cuda_timer();
 	#endif
 
-		div_sub( d_A, d_B, matrix_size, block_size, grid_extension, grid_length, div_operand, stream_A );
+		div_sub( d_A, d_B, matrix_size, block_size, dimGrid, div_operator, stream_A );
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			printf("\n--- [GPU%" PRI_IDX "] Resulting %s = %s %s %s (height=%" PRI_IDX ", width=%" PRI_IDX ", pitch=%" PRI_IDX
-				",block_size=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX "): ---\n", device_id,
-				matrix_name_A, matrix_name_B, ( div_operand ? "./" : "-" ), matrix_name_A, height, width, pitch, block_size,
-				grid_extension, grid_length );
+		{
+			bool const shown_by_all = true;
+			print_message( shown_by_all, "--- Resulting %s = %s %s %s (height=%" PRI_IDX ", width=%" PRI_IDX ", pitch=%" PRI_IDX
+					",block_size=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX "): ---\n", matrix_name_A,
+					matrix_name_B, ( div_operator ? "./" : "-" ), matrix_name_A, height, width, pitch, block_size,
+					dimGrid.y, dimGrid.x );
 			check_cuda_status();
-			show_device_matrix( d_A, height, width, pitch, false, NULL );
+			show_device_matrix( d_A, height, width, pitch, false, shown_by_all, NULL );
+		}
 		#endif
 		///////////////////////////////
 
@@ -763,8 +1122,8 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 
 	// ------------------------------------------
 
-	// Records the operations as an event (reuses the event object).
-	{
+	// Records the operations as an event (reuses the event object; skipped if host memory was mapped).
+	if ( ! mappedHostMemory ) {
 
 		#if NMFGPU_DEBUG
 			cudaError_t cuda_status =
@@ -774,12 +1133,10 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in matrix_div(%s %s %s, height=%"
-						PRI_IDX ", pitch=%" PRI_IDX ").\n", device_id, cudaGetErrorString(cuda_status), matrix_name_A,
-						( div_operand ? "./" : "-" ), matrix_name_B, height, pitch );
-			}
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error recording CUDA event: %s\nError in matrix_div(%s %s %s, height=%"
+						PRI_IDX ", pitch=%" PRI_IDX ").\n", cudaGetErrorString(cuda_status), matrix_name_A,
+						( div_operator ? "./" : "-" ), matrix_name_B, height, pitch );
 		#endif
 		///////////////////////////////
 
@@ -787,7 +1144,7 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 
 } // matrix_div_sub
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * d_A[i][j] = d_A[i][j] .* d_Aux[i][j] ./ d_accum_B[j]
@@ -798,11 +1155,6 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
  * Then, the operation is registered using the same event object.
  *
  * 'pitch' must be a multiple of 'memory_alignment', and <= maxThreadsPerBlock.
- *
- * WARNING:
- *	- On Compute Capability 1.x:
- *		height < maxBlockHeight_pitch * MUL_DIV__ITEMS_PER_THREAD * (2**24)
- *		('MUL_DIV__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
  */
 void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, real const *__restrict__ d_accum_B, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
@@ -820,93 +1172,42 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
 
 	// ------------------------------------------
 
+	/* Kernel setup:
+	 *
+	 * Block dimensions:
+	 *	Uses a block width equal to <pitch>.
+	 *	Each block processes up to <MUL_DIV__ITEMS_PER_THREAD> times its height.
+	 *
+	 * Grid dimensions:
+	 *	"Grid extension" is required only if (height > (maxGridSizeX * abh)).
+	 *
+	 *	Note, however, it never happens on Compute Capability >= 3.0, if
+	 *		(sizeof(index_t) == sizeof(int)) && (MUL_DIV__ITEMS_PER_THREAD > 2).
+	 *
+	 *	On such architectures, maxGridSizeX >= INT_MAX, so if sizeof(index_t) == sizeof(int),
+	 *	then (IDX_MAX / maxGridSizeX) <= 2.
+	 *
+	 *	Therefore, if MUL_DIV__ITEMS_PER_THREAD > 2, then
+	 *		(maxGridSizeX * MUL_DIV__ITEMS_PER_THREAD) > IDX_MAX >= height
+	 *
+	 *	This condition will be checked on kernel compilation.
+	 */
+	index_t block_height;
+	dim3 dimGrid;
 	#if NMFGPU_PROFILING_KERNELS
-		index_t timing_index = 0;
+		index_t timing_index;		// Non-extended grid (0), extended grid (1).
 	#endif
 
-	index_t const matrix_size = pitch * height;
-
-	// ------------------------------------------
-
-	/* Uses a block width equal to <pitch>.
-	 *
-	 * Each block processes up to <MUL_DIV__ITEMS_PER_THREAD> times its height
-	 * ('MUL_DIV__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
-	 */
-
-	index_t const abh = maxBlockHeight_pitch * REDUCE_TO_ROW__ITEMS_PER_THREAD;	// "Active" block height.
-
-
-	// Grid dimensions
-	index_t grid_length = 1;	// <= maxGridSizeX
-	index_t grid_extension = 1;	// <= maxGridSizeY, and <= grid_length
-
-	/* "grid_extension" is required only if matrix_size > (maxGridSizeX * abh * pitch).
-	 *
-	 * On Compute Capability >= 3.0:
-	 *	It never happens if (IDX_MAX / maxGridSizeX) < memory_alignment
-	 *
-	 * On Compute Capability 1.x:
-	 *	"Grid extension" is also required if matrix_size >= 2**24
-	 */
-	uintmax_t max_size = maxGridSizeX * abh * pitch;	// It may be > IDX_MAX on Compute Capability >= 3.0
-	if ( ( computeCapability == 1 ) * ( max_size >= (1 << 24) ) )
-		max_size = (1 << 24) - 1;
-
-
-	// No "grid extension" required
-	if ( (uintmax_t) matrix_size <= max_size ) {
-
-		grid_length = (height + abh - 1) / abh;
-
-		#if NMFGPU_PROFILING_KERNELS
-			timing_index = 0;
-		#endif
-
-	// "Extended" grid.
-	} else {
-
-		/* Grid geometry:
-		 *
-		 * (grid_extension * grid_length * abh) >= height.
-		 *
-		 * That is,
-		 *	grid_extension * grid_length >= ceil( height / abh ).
-		 *
-		 * So, we can use:
-		 *	grid_extension == grid_length == ceil( sqrt( ceil(height/abh) ) ),
-		 *
-		 * but this may lead to an excessive number of idle thread blocks. That is,
-		 *	(grid_extension * grid_length * abh) >> height.
-		 *
-		 * Instead,
-		 *	grid_extension	= ceil( height / (maxGridSizeX	 * abh) ), which is << maxGridSizeY
-		 *	grid_length	= ceil( height / (grid_extension * abh) ), which is <= maxGridSizeX
-		 *
-		 * is more accurate.
-		 *
-		 * Note that grid_extension <= grid_length
-		 */
-
-		// Grid "extension"
-		index_t const gh = maxGridSizeX * abh;
-		grid_extension = ( height + gh - 1 ) / gh;	// << maxGridSizeY
-
-		// Grid "length"
-		index_t const gw = grid_extension * abh;
-		grid_length = ( height + gw - 1 ) / gw;		// <= maxGridSizeX
-
-		#if NMFGPU_PROFILING_KERNELS
-			timing_index = 1;
-		#endif
-
-	} // If grid extension is required
+	setup_matrix_operation( &matrix_mul_div_kparams, height, &dimGrid,
+				#if NMFGPU_PROFILING_KERNELS
+					&timing_index,
+				#endif
+				&block_height );
 
 	// ------------------------------------------
 
 	// Delays kernel launch until d_accum_B[] is ready.
 	{
-
 		#if NMFGPU_DEBUG
 			cudaError_t cuda_status =
 		#endif
@@ -915,14 +1216,13 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error: could not delay operations until %s is ready: %s\n"
-					"Error in matrix_mul_div(%s, %s, %s, height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
-					",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX ", transpose=%i\n",
-					device_id, matrix_name_accB, cudaGetErrorString(cuda_status), matrix_name_A, matrix_name_Aux,
-					matrix_name_accB, height, width, pitch, maxBlockHeight_pitch, grid_extension, grid_length, transpose );
-			}
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error: could not delay operations until %s is ready: %s\n"
+						"Error in matrix_mul_div(%s, %s, %s, height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%"
+						PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
+						", transpose=%i\n", matrix_name_accB, cudaGetErrorString(cuda_status), matrix_name_A,
+						matrix_name_Aux, matrix_name_accB, height, width, pitch, block_height, dimGrid.y,
+						dimGrid.x, transpose );
 		#endif
 		///////////////////////////////
 	}
@@ -933,26 +1233,29 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
 		start_cuda_timer();
 	#endif
 
-		mul_div( d_A, d_Aux, d_accum_B, pitch, matrix_size, maxBlockHeight_pitch, grid_extension, grid_length, stream_A );
+		mul_div( d_A, d_Aux, d_accum_B, height, pitch, block_height, dimGrid, stream_A );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				printf("\n--- [GPU%" PRI_IDX "] Resulting %s = %s .* %s ./ %s (height=%" PRI_IDX ",width=%" PRI_IDX
-					", pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-					", transpose=%i ): ---\n", device_id, matrix_name_A, matrix_name_A, matrix_name_Aux, matrix_name_accB,
-					height, width, pitch, maxBlockHeight_pitch, grid_extension, grid_length, transpose );
-				check_cuda_status();
-				show_device_matrix( d_A, height, width, pitch, transpose, NULL );
-			#endif
-			///////////////////////////////
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+		{
+			bool const shown_by_all = true;
+			print_message( shown_by_all, "--- Resulting %s = %s .* %s ./ %s (height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%"
+					PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
+					", transpose=%i ): ---\n", matrix_name_A, matrix_name_A, matrix_name_Aux, matrix_name_accB,
+					height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
+			check_cuda_status();
+			show_device_matrix( d_A, height, width, pitch, transpose, shown_by_all, NULL );
+		}
+		#endif
+		///////////////////////////////
 
 	#if NMFGPU_PROFILING_KERNELS
-		stop_cuda_timer_cnt( &mul_div_timing[ timing_index ], matrix_size, 1 );
+		stop_cuda_timer_cnt( &mul_div_timing[ timing_index ], (height * pitch), 1 );
 	#endif
 
 } // matrix_mul_div
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * d_A = MAX( d_A , R_MIN )
@@ -961,11 +1264,6 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
  *
  * If 'event_A' is non-NULL, delays the kernel launch until such event completes.
  * Then, the operation is recorded using the same event object.
- *
- * WARNING:
- *	- On Compute Capability 1.x:
- *		height < maxBlockHeight_pitch * ADJUST__ITEMS_PER_THREAD * (2**24)
- *		('ADJUST__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h")
  */
 void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
@@ -974,87 +1272,37 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
 {
 
+	/* Kernel setup:
+	 *
+	 * Block dimensions:
+	 *	Uses a block width equal to <pitch>.
+	 *	Each block processes up to <ADJUST__ITEMS_PER_THREAD> times its height.
+	 *
+	 * Grid dimensions:
+	 *	"Grid extension" is required only if (height > (maxGridSizeX * abh)).
+	 *
+	 *	Note, however, it never happens on Compute Capability >= 3.0, if
+	 *		(sizeof(index_t) == sizeof(int)) && (ADJUST__ITEMS_PER_THREAD > 2).
+	 *
+	 *	On such architectures, maxGridSizeX >= INT_MAX, so if sizeof(index_t) == sizeof(int),
+	 *	then (IDX_MAX / maxGridSizeX) <= 2.
+	 *
+	 *	Therefore, if ADJUST__ITEMS_PER_THREAD > 2, then
+	 *		(maxGridSizeX * ADJUST__ITEMS_PER_THREAD) > IDX_MAX >= height
+	 *
+	 *	This condition will be checked on kernel compilation.
+	 */
+	index_t block_height;
+	dim3 dimGrid;
 	#if NMFGPU_PROFILING_KERNELS
-		index_t timing_index = 0;
+		index_t timing_index;		// Non-extended grid (0), extended grid (1).
 	#endif
 
-	index_t const matrix_size = pitch * height;
-
-	// ------------------------------------------
-
-	/* Uses a block width equal to <pitch>.
-	 *
-	 * Each block processes up to <ADJUST__ITEMS_PER_THREAD> times its height
-	 * ('ADJUST__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
-	 */
-
-	index_t const abh = maxBlockHeight_pitch * ADJUST__ITEMS_PER_THREAD;	// "Active" block height.
-
-
-	// Grid dimensions
-	index_t grid_length = 1;	// <= maxGridSizeX
-	index_t grid_extension = 1;	// <= maxGridSizeY, and <= grid_length
-
-	/* "grid_extension" is required only if matrix_size > (maxGridSizeX * abh * pitch).
-	 *
-	 * On Compute Capability >= 3.0:
-	 *	It never happens if (IDX_MAX / maxGridSizeX) < memory_alignment
-	 *
-	 * On Compute Capability 1.x:
-	 *	"Grid extension" is also required if matrix_size >= 2**24
-	 */
-	uintmax_t max_size = maxGridSizeX * abh * pitch;	// It may be > IDX_MAX on Compute Capability >= 3.0
-	if ( ( computeCapability == 1 ) * ( max_size >= (1 << 24) ) )
-		max_size = (1 << 24) - 1;
-
-
-	// No "grid extension" required
-	if ( (uintmax_t) matrix_size <= max_size ) {
-
-		grid_length = (height + abh - 1) / abh;
-
-		#if NMFGPU_PROFILING_KERNELS
-			timing_index = 0;
-		#endif
-
-	// "Extended" grid.
-	} else {
-
-		/* Grid geometry:
-		 *
-		 * (grid_extension * grid_length * abh) >= height.
-		 *
-		 * That is,
-		 *	grid_extension * grid_length >= ceil( height / abh ).
-		 *
-		 * So, we can use:
-		 *	grid_extension == grid_length == ceil( sqrt( ceil(height/abh) ) ),
-		 *
-		 * but this may lead to an excessive number of idle thread blocks. That is,
-		 *	(grid_extension * grid_length * abh) >> height.
-		 *
-		 * Instead,
-		 *	grid_extension	= ceil( height / (maxGridSizeX	 * abh) ), which is << maxGridSizeY
-		 *	grid_length	= ceil( height / (grid_extension * abh) ), which is <= maxGridSizeX
-		 *
-		 * is more accurate.
-		 *
-		 * Note that grid_extension <= grid_length
-		 */
-
-		// Grid "extension"
-		index_t const gh = maxGridSizeX * abh;
-		grid_extension = ( height + gh - 1 ) / gh;	// << maxGridSizeY
-
-		// Grid "length"
-		index_t const gw = grid_extension * abh;
-		grid_length = ( height + gw - 1 ) / gw;		// <= maxGridSizeX
-
-		#if NMFGPU_PROFILING_KERNELS
-			timing_index = 1;
-		#endif
-
-	} // If grid extension is required
+	setup_matrix_operation( &matrix_adjust_kparams, height, &dimGrid,
+				#if NMFGPU_PROFILING_KERNELS
+					&timing_index,
+				#endif
+				&block_height );
 
 	// ---------------------------
 
@@ -1069,14 +1317,12 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error: could not delay operations until %s is ready: %s\n"
-					"Error in matrix_adjust(height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
-					",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-					", transpose=%i ): ---\n", device_id, matrix_name_A, cudaGetErrorString(cuda_status),
-					height, width, pitch, maxBlockHeight_pitch, grid_extension, grid_length , transpose );
-			}
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error: could not delay operations until %s is ready: %s\n"
+						"Error in matrix_adjust(height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
+						",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
+						", transpose=%i ): ---\n", matrix_name_A, cudaGetErrorString(cuda_status),
+						height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
 		#endif
 		///////////////////////////////
 	}
@@ -1087,21 +1333,24 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 		start_cuda_timer();
 	#endif
 
-		adjust( d_A, pitch, matrix_size, maxBlockHeight_pitch, grid_extension, grid_length, stream_A );
+		adjust( d_A, height, pitch, block_height, dimGrid, stream_A );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				printf("\n--- [GPU%" PRI_IDX "] Resulting %s = MAX( %s, R_MIN ), (height=%" PRI_IDX ",width=%" PRI_IDX
-					", pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-					", transpose=%i ): ---\n", device_id, matrix_name_A, matrix_name_A, height, width, pitch,
-					maxBlockHeight_pitch, grid_extension, grid_length , transpose );
-				check_cuda_status();
-				show_device_matrix( d_A, height, width, pitch, transpose, NULL );
-			#endif
-			///////////////////////////////
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+		{
+			bool const shown_by_all = true;
+			print_message( shown_by_all, "--- Resulting %s = MAX( %s, R_MIN ), (height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%"
+					PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
+					", transpose=%i ): ---\n", matrix_name_A, matrix_name_A, height, width, pitch,
+					block_height, dimGrid.y, dimGrid.x, transpose );
+			check_cuda_status();
+			show_device_matrix( d_A, height, width, pitch, transpose, shown_by_all, NULL );
+		}
+		#endif
+		///////////////////////////////
 
 	#if NMFGPU_PROFILING_KERNELS
-		stop_cuda_timer_cnt( &adjust_timing[ timing_index ], matrix_size, 1 );
+		stop_cuda_timer_cnt( &adjust_timing[ timing_index ], (height * pitch), 1 );
 	#endif
 
 	// ---------------------------
@@ -1117,21 +1366,19 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr,"\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\n"
-					"Error in matrix_adjust(%s, height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
-					",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-					", transpose=%i ): ---\n", device_id, cudaGetErrorString(cuda_status), matrix_name_A,
-					height, width, pitch, maxBlockHeight_pitch, grid_extension, grid_length , transpose );
-			}
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error recording CUDA event: %s\n"
+						"Error in matrix_adjust(%s, height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
+						",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
+						", transpose=%i ): ---\n", cudaGetErrorString(cuda_status), matrix_name_A,
+						height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
 		#endif
 		///////////////////////////////
 	}
 
 } // matrix_adjust
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Computes the maximum value of each row in d_A[] and stores its column index in d_Idx[].
@@ -1139,12 +1386,8 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
  *	d_A[i][ d_Idx[i] ] == max( d_A[i][...] ).
  *
  * size_of( d_Idx ) >= height
- *
- * 'pitch' must be a multiple of 'memory_alignment', and <= maxThreadsPerBlock.
- *
- * WARNING:
- *	- On Compute Capability 1.x:
- *		height < (threadsPerBlock/block_width) * (2**24)
+ * width <= pitch <= maxThreadsPerBlock
+ * In addition, "pitch" must be a multiple of 'memory_alignment'.
  */
 void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch, index_t height,
 			#if NMFGPU_DEBUG
@@ -1154,129 +1397,81 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
 			cudaStream_t stream_A, index_t *__restrict__ d_Idx )
 {
 
+	/* Kernel setup:
+	 *
+	 * Block Dimensions:
+	 *	Each thread processes <IDX_MAX__ITEMS_PER_THREAD> from the same row.
+	 *	(block_width * IDX_MAX__ITEMS_PER_THREAD) must be >= width
+	 *
+	 *	That is (using pitch, instead),
+	 *		block_width >= (pitch / IDX_MAX__ITEMS_PER_THREAD).
+	 *
+	 *	In addition, block_width must be a power of 2, and >= memory_alignment
+	 *
+	 *	If pitch <= (memory_alignment * IDX_MAX__ITEMS_PER_THREAD),
+	 *	then memory_alignment (which is a power of 2) is the required block_width
+	 *
+	 * Grid dimensions:
+	 *	"Grid extension" is required only if (height > (maxGridSizeX * abh)).
+	 *
+	 *	Note, however, it never happens on Compute Capability >= 3.0, if
+	 *		(sizeof(index_t) == sizeof(int)) && (IDX_MAX__ITEMS_PER_THREAD > 2).
+	 *
+	 *	On such architectures, maxGridSizeX >= INT_MAX, so if sizeof(index_t) == sizeof(int),
+	 *	then (IDX_MAX / maxGridSizeX) <= 2.
+	 *
+	 *	Therefore, if IDX_MAX__ITEMS_PER_THREAD > 2, then
+	 *		(maxGridSizeX * IDX_MAX__ITEMS_PER_THREAD) > IDX_MAX >= height
+	 *
+	 *	This condition will be checked on kernel compilation.
+	 */
+	index_t block_height;
+	dim3 dimGrid;
 	#if NMFGPU_PROFILING_KERNELS
-		index_t timing_index = 0;
+		index_t timing_index;		// Non-extended grid (0), extended grid (1).
 	#endif
 
-	index_t const matrix_size = pitch * height;
+	setup_matrix_operation( &matrix_idx_max_kparams, height, &dimGrid,
+				#if NMFGPU_PROFILING_KERNELS
+					&timing_index,
+				#endif
+				&block_height );
 
-	// ------------------------------------------
+	// HACK: Extracts block_width from matrix_idx_max_kparams.abm.
+	index_t const block_width = matrix_idx_max_kparams.abm;
 
-	/* Each thread processes up to <IDX_MAX__ITEMS_PER_THREAD> from the same row.
-	 * ('IDX_MAX__ITEMS_PER_THREAD' is a constant defined in "GPU_kernels.h").
-	 *
-	 * (block_width * IDX_MAX__ITEMS_PER_THREAD) must NOT be < width.
-	 * Therefore, block_width >= (width / IDX_MAX__ITEMS_PER_THREAD).
-	 * In addition, it must be a power of 2 <= width <= pitch.
-	 */
+	// Final block dimensions
+	dim3 const dimBlock( block_width, block_height );
 
-	// block_width = Next_power_2( width / IDX_MAX__ITEMS_PER_THREAD ) >= memory_alignment
-
-	index_t block_width = memory_alignment;
-	index_t block_height = maxBlockHeight_pitch;	// If width <= memory_alignment, then pitch == memory_alignment
-
-	if ( width > memory_alignment ) {
-
-		block_width = ( width / IDX_MAX__ITEMS_PER_THREAD );
-		block_width = prev_power_2( (block_width << 1) );	// prev_power_2( x*2 ) == next_power_2( x )
-		block_width = MIN( block_width, memory_alignment );	// Note that memory_alignment is also a power of 2.
-
-		block_height = threadsPerBlock_pitch / block_width;
-	}
-
-
-	// Grid dimensions
-	index_t grid_length = 1;	// <= maxGridSizeX
-	index_t grid_extension = 1;	// <= maxGridSizeY, and <= grid_length
-
-
-	/* "grid_extension" is required only if matrix_size > (maxGridSizeX * abh * pitch).
-	 *
-	 * On Compute Capability >= 3.0:
-	 *	It never happens if (IDX_MAX / maxGridSizeX) < memory_alignment
-	 *
-	 * On Compute Capability 1.x:
-	 *	"Grid extension" is also required if matrix_size >= 2**24
-	 */
-	uintmax_t max_size = maxGridSizeX * block_height * pitch;	// It may be > IDX_MAX on Compute Capability >= 3.0
-	if ( ( computeCapability == 1 ) * ( max_size >= (1 << 24) ) )
-		max_size = (1 << 24) - 1;
-
-
-	// No "grid extension" required
-	if ( (uintmax_t) matrix_size <= max_size ) {
-
-		grid_length = (height + block_height - 1) / block_height;
-
-		#if NMFGPU_PROFILING_KERNELS
-			timing_index = 0;
-		#endif
-
-	// "Extended" grid.
-	} else {
-
-		/* Grid geometry:
-		 *
-		 * (grid_extension * grid_length * block_height) >= height.
-		 *
-		 * That is,
-		 *	grid_extension * grid_length >= ceil( height / block_height ).
-		 *
-		 * So, we can use:
-		 *	grid_extension == grid_length == ceil( sqrt( ceil(height/block_height) ) ),
-		 *
-		 * but this may lead to an excessive number of idle thread blocks. That is,
-		 *	(grid_extension * grid_length * block_height) >> height.
-		 *
-		 * Instead,
-		 *	grid_extension	= ceil( height / (maxGridSizeX	 * block_height) ), which is << maxGridSizeY
-		 *	grid_length	= ceil( height / (grid_extension * block_height) ), which is <= maxGridSizeX
-		 *
-		 * is more accurate.
-		 *
-		 * Note that grid_extension <= grid_length
-		 */
-
-		// Grid "extension"
-		index_t const gh = maxGridSizeX * block_height;
-		grid_extension = ( height + gh - 1 ) / gh;	// << maxGridSizeY
-
-		// Grid "length"
-		index_t const gw = grid_extension * block_height;
-		grid_length = ( height + gw - 1 ) / gw;		// <= maxGridSizeX
-
-		#if NMFGPU_PROFILING_KERNELS
-			timing_index = 1;
-		#endif
-
-	} // If grid extension is required
-
-	// ---------------------------
+	// ---------------------------------------------
 
 	#if NMFGPU_PROFILING_KERNELS
 		start_cuda_timer();
 	#endif
 
-		idx_max( d_A, width, pitch, matrix_size, block_width, block_height, grid_extension, grid_length, stream_A, d_Idx );
+		idx_max( d_A, height, width, pitch, dimBlock, dimGrid, stream_A, d_Idx );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				printf("\n--- [GPU%" PRI_IDX "] Resulting %s[i] = max(%s[i][..]) (height=%" PRI_IDX ",width=%" PRI_IDX
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+		{
+			bool const shown_by_all = true;
+			print_message( shown_by_all, "--- Resulting %s[i] = max(%s[i][..]) (height=%" PRI_IDX ",width=%" PRI_IDX
 					", pitch=%" PRI_IDX ",block_width=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX
-					",grid_length=%" PRI_IDX ",transpose=%i): ---\n", device_id, matrix_name_Idx, matrix_name_A, height,
-					width, pitch, block_width, block_height, grid_extension, grid_length, transpose );
-				check_cuda_status();
-				show_device_matrix_int( d_Idx, 1, height, height, false, NULL );
-			#endif
-			///////////////////////////////
+					",grid_length=%" PRI_IDX ",transpose=%i): ---\n", matrix_name_Idx, matrix_name_A, height,
+					width, pitch, block_width, block_height, dimGrid.y, dimGrid.x, transpose );
+			check_cuda_status();
+			show_device_matrix_int( d_Idx, 1, height, height, false, shown_by_all, NULL );
+		}
+		#endif
+		///////////////////////////////
 
 	#if NMFGPU_PROFILING_KERNELS
-		stop_cuda_timer_cnt( &idx_max_timing[ timing_index ], matrix_size, 1 );
+		stop_cuda_timer_cnt( &idx_max_timing[ timing_index ], (height * pitch), 1 );
 	#endif
 
 } // matrix_idx_max
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Transfers a matrix from the HOST (CPU) to the DEVICE (GPU) as a row vector.
@@ -1284,6 +1479,8 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
  * d_A[1..height][1..pitch] <--- A[1..height][1..pitch],
  *
  * If 'event_A' is non-NULL, the operation is recorded as an event.
+ *
+ * NOTE: If host memory was mapped, the transfer operation is SKIPPED, but NOT the event record (if provided).
  */
 void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
@@ -1297,10 +1494,9 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 {
 
 	#if NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i, event %s)\n", matrix_name_A, matrix_name_dA, height, width, pitch, transpose,
-				( event_A ? "provided" : "NOT provided"));
+		print_message( false, "\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+				",transpose: %i, event %s, mapped memory: %i)\n", matrix_name_A, matrix_name_dA, height, width,
+				pitch, transpose, ( event_A ? "provided" : "NOT provided"), mappedHostMemory );
 	#endif
 
 	// ----------------------------------
@@ -1310,42 +1506,57 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 		check_cuda_status();
 	#endif
 
+	///////////////////////////////
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+		print_message( true, "--- Uploading matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+				",transpose: %i, event %s, mapped memory: %i): ---\n", matrix_name_A, matrix_name_dA, height,
+				width, pitch, transpose, ( event_A ? "provided" : "NOT provided"), mappedHostMemory );
+	#endif
+	/////////////////////////////
+
 	// ----------------------------------
 
-	// Starts the transfer...
+	if ( ! mappedHostMemory ) {	// If host memory was NOT mapped.
 
-	size_t const nitems = height * pitch;
+		// Starts the transfer...
 
-	#if NMFGPU_PROFILING_TRANSF
-		start_cuda_timer();
-	#endif
-	{
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-		cudaError_t cuda_status =
+		size_t const nitems = height * pitch;
+
+		#if NMFGPU_PROFILING_TRANSF
+			start_cuda_timer();
 		#endif
+		{
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+				cudaError_t cuda_status =
+			#endif
 
-			cudaMemcpyAsync( d_A, A, nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
+				cudaMemcpyAsync( d_A, A, nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
 
-			/* Same code using CUBLAS:
+			/* Same code using cuBLAS:
 			 *	cublasStatus cublas_status =
 			 *		cublasSetVectorAsync( nitems, sizeof(real), A, 1, d_A, 1, stream_A );
 			 */
 
 			///////////////////////////////
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-				printf("\n--- [GPU%" PRI_IDX "] Uploaded matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%"
-					PRI_IDX ",transpose: %i, event %s): ---\n", device_id, matrix_name_A, matrix_name_dA, height, width,
-					pitch, transpose, ( event_A ? "provided" : "NOT provided") );
-				check_cuda_status_st( cuda_status );
-				show_device_matrix( d_A, height, width, pitch, transpose, NULL );
-			#elif NMFGPU_SYNC_TRANSF
-				check_cuda_status_st( cuda_status );
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+				if ( check_cuda_status_st( cuda_status ) != EXIT_SUCCESS )
+					print_error( true, "Error uploading matrix %s\n", matrix_name_A );
 			#endif
 			/////////////////////////////
-	}
-	#if NMFGPU_PROFILING_TRANSF
-		stop_cuda_timer_cnt( upload_timing, nitems, 1 );
+		}
+		#if NMFGPU_PROFILING_TRANSF
+			stop_cuda_timer_cnt( upload_timing, nitems, 1 );
+		#endif
+
+	} // If host memory was NOT mapped.
+
+	// ----------------------------------
+
+	///////////////////////////////
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+		show_device_matrix( d_A, height, width, pitch, transpose, true, NULL );
 	#endif
+	/////////////////////////////
 
 	// ----------------------------------
 
@@ -1360,13 +1571,10 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in upload_matrix_event(%s to %s, "
-						"height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i).\n", device_id,
-						cudaGetErrorString(cuda_status), matrix_name_A, matrix_name_dA, height, width, pitch,
-						transpose );
-			}
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error recording CUDA event: %s\nError in upload_matrix_event(%s to %s, height=%" PRI_IDX
+						",width=%" PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i).\n", cudaGetErrorString(cuda_status),
+						matrix_name_A, matrix_name_dA, height, width, pitch, transpose );
 		#endif
 		///////////////////////////////
 
@@ -1375,15 +1583,14 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+		print_message( false, "\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i, event %s).. Done\n", matrix_name_A, matrix_name_dA, height, width, pitch,
 				transpose, ( event_A ? "provided" : "NOT provided") );
 	#endif
 
 } // upload_matrix
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Transfers (a portion of) a matrix from the HOST (CPU) to the DEVICE (GPU).
@@ -1405,6 +1612,8 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
  *
  * It also checks that (stcol + block_pitch) <= pitch,
  * and adjusts the width of the block to be transferred, if necessary.
+ *
+ * NOTE: If host memory was mapped, the transfer operation and ALL event action(s) are SKIPPED.
  */
 void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t pitch, index_t strow, index_t stcol,
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
@@ -1419,18 +1628,14 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 {
 
 	#if NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",stcol=%" PRI_IDX ",strow=%"
+		print_message( false, "\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",stcol=%" PRI_IDX ",strow=%"
 				PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ")\n", matrix_name_A, matrix_name_dA, height,
 				pitch, strow, stcol, block_width, block_pitch);
 	#endif
 
-
 	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
 		cudaError_t cuda_status = cudaSuccess;
 	#endif
-
-	index_t const nitems = height * pitch;
 
 	// ----------------------------------
 
@@ -1439,146 +1644,152 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 		check_cuda_status();
 	#endif
 
-	// ----------------------------------
-
-	// Delays the transfer until the event has completed all previous operations.
-
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-		cuda_status =
+	///////////////////////////////
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+		print_message( true, "--- Uploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%"
+				PRI_IDX ",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ", mappedHostMemory=%i)\n",
+				matrix_name_A, matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch, mappedHostMemory );
 	#endif
-
-		cudaStreamWaitEvent( stream_A, event_A, 0 );
-
-		///////////////////////////////
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error setting CUDA event to wait for (cudaStreamWaitEvent): %s\nError "
-						"in upload_matrix_partial(%s to %s, partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%"
-						PRI_IDX ",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ").\n",
-						device_id, cudaGetErrorString(cuda_status), matrix_name_A, matrix_name_dA, height, pitch,
-						strow, stcol, block_width, block_pitch);
-			}
-		#endif
-		///////////////////////////////
+	/////////////////////////////
 
 	// ----------------------------------
 
-	// Starts the transfer...
+	if ( ! mappedHostMemory ) {	// If host memory was NOT mapped.
 
-	#if NMFGPU_PROFILING_TRANSF
-	start_cuda_timer();
-	#endif
-
-	if ( (block_pitch < pitch) + (stcol > 0) ) {
-
-		/*
-		 * It must be transferred as a 2D matrix.
-		 */
-
-		/* If necessary, adjusts the width to avoid an out-of-bound failure in CPU memory,
-		 * but then, such width will NOT be a multiple of 'memory_alignment', resulting in a slower transfer.
-		 */
-		index_t const width = MIN( block_pitch, (pitch-stcol) );
+		// Delays the transfer until the event has completed all previous operations.
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
 			cuda_status =
 		#endif
 
-			cudaMemcpy2DAsync( d_A, block_pitch * sizeof(real), &A[ (strow * pitch) + stcol ], pitch * sizeof(real),
-						width * sizeof(real), height, cudaMemcpyHostToDevice, stream_A );
+		cudaStreamWaitEvent( stream_A, event_A, 0 );
 
-			/* Same code using CUBLAS:
-			 *	cublasStatus cublas_status =
-			 *		cublasSetMatrixAsync( width, height, sizeof(real), &A[ (strow * pitch) + stcol ], pitch,
-			 *					d_A, block_pitch, stream_A );
-			 */
+		///////////////////////////////
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error setting CUDA event to wait for (cudaStreamWaitEvent): %s\nError "
+						"in upload_matrix_partial(%s to %s, partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%"
+						PRI_IDX ",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX
+						", mappedHostMemory=%i).\n", cudaGetErrorString(cuda_status), matrix_name_A, matrix_name_dA,
+						height, pitch, strow, stcol, block_width, block_pitch, mappedHostMemory );
+		#endif
+		///////////////////////////////
 
+		// ----------------------------------
 
-	// ( block_pitch == pitch ) && ( stcol == 0 )
-	} else {
+		// Starts the transfer...
 
-		/*
-		 * It can be transferred as a row vector.
-		 */
+		size_t const nitems = height * pitch;
 
 		#if NMFGPU_PROFILING_TRANSF
-		start_cuda_timer();
+			start_cuda_timer();
 		#endif
 
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-				cuda_status =
-			#endif
+			if ( (block_pitch < pitch) + (stcol > 0) ) {
 
-				cudaMemcpyAsync( d_A, &A[ (strow * pitch) ], nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
+				/*
+				 * It must be transferred as a 2D matrix.
+				 */
 
-				/* Same code using CUBLAS:
+				/* If necessary, adjusts the width to avoid an out-of-bound failure in CPU memory,
+				 * but then, such width will NOT be a multiple of 'memory_alignment', resulting in a slower transfer.
+				 */
+				index_t const width = MIN( block_pitch, (pitch-stcol) );
+
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+					cuda_status =
+				#endif
+
+					cudaMemcpy2DAsync( d_A, block_pitch * sizeof(real), &A[ (strow * pitch) + stcol ], pitch * sizeof(real),
+								width * sizeof(real), height, cudaMemcpyHostToDevice, stream_A );
+
+				/* Same code using cuBLAS:
+				 *	cublasStatus cublas_status =
+				 *		cublasSetMatrixAsync( width, height, sizeof(real), &A[ (strow * pitch) + stcol ],
+				 *					pitch, d_A, block_pitch, stream_A );
+				 */
+
+			// ( block_pitch == pitch ) && ( stcol == 0 )
+			} else {
+
+				/*
+				 * It can be transferred as a row vector.
+				 */
+
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+					cuda_status =
+				#endif
+
+					cudaMemcpyAsync( d_A, &A[ (strow * pitch) ], nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
+
+				/* Same code using cuBLAS:
 				 *	cublasStatus cublas_status =
 				 *		cublasSetVectorAsync( nitems, sizeof(real), &A[ (strow * pitch) ], 1, d_A, 1, stream_A );
 				 */
 
+			} // if ( ( block_pitch < pitch ) || ( stcol > 0 ) )
 
-	} // if ( ( block_pitch < pitch ) || ( stcol > 0 ) )
+			///////////////////////////////
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+				if ( check_cuda_status_st( cuda_status ) != EXIT_SUCCESS )
+					print_error( true, "Error uploading matrix %s\n", matrix_name_A );
+			#endif
+			/////////////////////////////
 
+		#if NMFGPU_PROFILING_TRANSF
+			stop_cuda_timer_cnt( upload_timing, nitems, 1 );
+		#endif
+
+		// ----------------------------------
+
+		// Records this operation using the same event object.
+
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+			cuda_status =
+		#endif
+
+			cudaEventRecord( event_A, stream_A );
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			printf("\n--- [GPU%" PRI_IDX "] Uploaded Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%"
-				PRI_IDX ",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ")\n", device_id, matrix_name_A,
-				matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch );
-			check_cuda_status_st( cuda_status );
-			show_device_matrix( d_A, height, block_width, block_pitch, false, NULL );
-		#elif NMFGPU_SYNC_TRANSF
-			check_cuda_status_st( cuda_status );
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error recording CUDA: %s\nError in upload_matrix_partial(%s to %s, partial, height=%"
+						PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX ",stcol=%" PRI_IDX ",block_width=%" PRI_IDX
+						", block_pitch=%" PRI_IDX ", mappedHostMemory=%i).\n", cudaGetErrorString(cuda_status),
+						matrix_name_A, matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch,
+						mappedHostMemory );
 		#endif
 		///////////////////////////////
 
 
-	#if NMFGPU_PROFILING_TRANSF
-		stop_cuda_timer_cnt( upload_timing, nitems, 1 );
-	#endif
-
+	} // If host memory was NOT mapped.
 
 	// ----------------------------------
 
-	// Records this operation using the same event object.
-
+	///////////////////////////////
 	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-		cuda_status =
+		show_device_matrix( d_A, height, block_width, block_pitch, false, true, NULL );
 	#endif
-
-		cudaEventRecord( event_A, stream_A );
-
-		///////////////////////////////
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA: %s\nError in upload_matrix_partial(%s to %s, "
-					"partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX ",stcol=%" PRI_IDX ",block_width=%"
-					PRI_IDX ", block_pitch=%" PRI_IDX ").\n", device_id, cudaGetErrorString(cuda_status), matrix_name_A,
-					matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch);
-			}
-		#endif
-		///////////////////////////////
-
+	///////////////////////////////
 
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX ",stcol=%"
-				PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ")...Done.\n", matrix_name_A, matrix_name_dA,
-				height, pitch, strow, stcol, block_width, block_pitch);
+		print_message( false, "\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX
+				",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ", mappedHostMemory=%i)...Done.\n",
+				matrix_name_A, matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch, mappedHostMemory );
 	#endif
 
 } // upload_matrix_partial
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Transfers a matrix from the DEVICE (GPU) to HOST (CPU), as a row vector.
  *
- * A[1..height][1..pitch] <--- d_A[1..height][1..pitch],
+ * A[1..height][1..pitch] <--- d_A[1..height][1..pitch]
+ *
+ * NOTE: If host memory was mapped, the transfer operation is SKIPPED.
  */
 void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real const *__restrict__ d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
@@ -1592,9 +1803,9 @@ void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real 
 {
 
 	#if NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nDownloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i)\n", matrix_name_dA, matrix_name_A, height, width, pitch, transpose );
+		print_message( false, "\nDownloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%"
+				PRI_IDX ",transpose: %i, mappedHostMemory: %i)\n", matrix_name_dA, matrix_name_A, height, width,
+				pitch, transpose, mappedHostMemory );
 	#endif
 
 	// ----------------------------------
@@ -1604,62 +1815,79 @@ void download_matrix( real *__restrict__ A, index_t height, index_t pitch, real 
 		check_cuda_status();
 	#endif
 
+	///////////////////////////////
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+		print_message( true, "--- Downloading matrix %s to %s (no event, height=%" PRI_IDX ",width=%"
+				PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i, mappedHostMemory: %i): ---\n", matrix_name_dA,
+				matrix_name_A, height, width, pitch, transpose, mappedHostMemory);
+	#endif
+	/////////////////////////////
+
 	// ----------------------------------
 
-	// Starts the transfer...
+	if ( ! mappedHostMemory ) {	// If host memory was NOT mapped.
 
-	size_t const nitems = height * pitch;
+		// Starts the transfer...
 
-	#if NMFGPU_PROFILING_TRANSF
-	start_cuda_timer();
-	#endif
+		size_t const nitems = height * pitch;
 
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-		cudaError_t cuda_status =
+		#if NMFGPU_PROFILING_TRANSF
+			start_cuda_timer();
 		#endif
+		{
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+				cudaError_t cuda_status =
+			#endif
 
-			cudaMemcpyAsync( A, d_A, nitems * sizeof(real), cudaMemcpyDeviceToHost, stream_A );
+				cudaMemcpyAsync( A, d_A, nitems * sizeof(real), cudaMemcpyDeviceToHost, stream_A );
 
-			/* Same code using CUBLAS:
+			/* Same code using cuBLAS:
 			 *	cublasStatus cublas_status =
 			 *		cublasSetVectorAsync( nitems, sizeof(real), d_A, 1, A, 1, stream_A );
 			 */
 
 			///////////////////////////////
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-				printf("\n--- [GPU%" PRI_IDX "] Downloaded matrix %s to %s (no event, height=%" PRI_IDX ",width=%"
-					PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i): ---\n", device_id, matrix_name_dA, matrix_name_A,
-					height, width, pitch, transpose);
-				check_cuda_status_st( cuda_status );
-				if ( transpose )
-					matrix_show( A, width, height, pitch, true, NULL );
-				else
-					matrix_show( A, height, width, pitch, false, NULL );
-			#elif NMFGPU_SYNC_TRANSF
-				check_cuda_status_st( cuda_status );
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+				if ( check_cuda_status_st( cuda_status ) != EXIT_SUCCESS )
+					print_error( true, "Error downloading matrix %s\n", matrix_name_A );
 			#endif
 			/////////////////////////////
+		}
+		#if NMFGPU_PROFILING_TRANSF
+			stop_cuda_timer_cnt( download_timing, nitems, 1 );
+		#endif
 
-	#if NMFGPU_PROFILING_TRANSF
-	stop_cuda_timer_cnt( download_timing, nitems, 1 );
+	} // If host memory was NOT mapped.
+
+	// ----------------------------------
+
+	///////////////////////////////
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+		if ( transpose )
+			matrix_show( A, width, height, pitch, true, true, NULL );
+		else
+			matrix_show( A, height, width, pitch, false, true, NULL );
 	#endif
+	/////////////////////////////
 
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nDownloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i)...Done.\n", matrix_name_dA, matrix_name_A, height, width, pitch, transpose );
+		print_message( false, "\nDownloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+				",transpose: %i, mappedHostMemory: %i)...Done.\n", matrix_name_dA, matrix_name_A, height, width,
+				pitch, transpose, mappedHostMemory );
 	#endif
 
 } // download_matrix
 
-////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Transfers an INTEGER matrix from the DEVICE (GPU) to HOST (CPU), as a row vector.
  *
  * A[1..height][1..pitch] <--- d_A[1..height][1..pitch],
+ *
+ * NOTE: If host memory was mapped, the transfer operation is SKIPPED.
  */
 void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch, index_t const *__restrict__ d_A,
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
@@ -1673,9 +1901,9 @@ void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch
 {
 
 	#if NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nDownloading integer Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i)\n", matrix_name_dA, matrix_name_A, height, width, pitch, transpose );
+		print_message( false, "\nDownloading integer matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%"
+				PRI_IDX ",transpose: %i, mappedHostMemory: %i)\n", matrix_name_dA, matrix_name_A, height, width,
+				pitch, transpose, mappedHostMemory );
 	#endif
 
 	// ----------------------------------
@@ -1685,54 +1913,70 @@ void download_matrix_int( index_t *__restrict__ A, index_t height, index_t pitch
 		check_cuda_status();
 	#endif
 
+	///////////////////////////////
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+		print_message( true, "--- Downloading integer matrix %s to %s (no event, height=%" PRI_IDX ",width=%"
+				PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i, mappedHostMemory: %i): ---\n", matrix_name_dA,
+				matrix_name_A, height, width, pitch, transpose, mappedHostMemory);
+	#endif
+	/////////////////////////////
+
 	// ----------------------------------
 
-	// Starts the transfer...
+	if ( ! mappedHostMemory ) {	// If host memory was NOT mapped.
 
-	size_t const nitems = height * pitch;
+		// Starts the transfer...
 
-	#if NMFGPU_PROFILING_TRANSF
-	start_cuda_timer();
-	#endif
+		size_t const nitems = height * pitch;
 
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-		cudaError_t cuda_status =
+		#if NMFGPU_PROFILING_TRANSF
+			start_cuda_timer();
 		#endif
+		{
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+				cudaError_t cuda_status =
+			#endif
 
-			cudaMemcpyAsync( A, d_A, nitems * sizeof(index_t), cudaMemcpyDeviceToHost, stream_A );
+				cudaMemcpyAsync( A, d_A, nitems * sizeof(index_t), cudaMemcpyDeviceToHost, stream_A );
 
-			/* Same code using CUBLAS:
+			/* Same code using cuBLAS:
 			 *	cublasStatus cublas_status =
 			 *		cublasSetVectorAsync( nitems, sizeof(real), d_A, 1, A, 1, stream_A );
 			 */
 
 			///////////////////////////////
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-				printf("\n--- [GPU%" PRI_IDX "] Downloaded integer matrix %s to %s (no event, height=%" PRI_IDX ",width=%"
-					PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i): ---\n", device_id,  matrix_name_dA, matrix_name_A,
-					height, width, pitch, transpose);
-				check_cuda_status_st( cuda_status );
-				if ( transpose )
-					matrix_int_show( A, width, height, pitch, true, NULL );
-				else
-					matrix_int_show( A, height, width, pitch, false, NULL );
-			#elif NMFGPU_SYNC_TRANSF
-				check_cuda_status_st( cuda_status );
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+				if ( check_cuda_status_st( cuda_status ) != EXIT_SUCCESS )
+					print_error( true, "Error downloading integer matrix %s\n", matrix_name_A );
 			#endif
 			/////////////////////////////
+		}
+		#if NMFGPU_PROFILING_TRANSF
+			stop_cuda_timer_cnt( download_timing, nitems, 1 );
+		#endif
 
-	#if NMFGPU_PROFILING_TRANSF
-	stop_cuda_timer_cnt( download_timing, nitems, 1 );
+	} // If host memory was NOT mapped.
+
+	// ----------------------------------
+
+	///////////////////////////////
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
+		if ( transpose )
+			matrix_int_show( A, width, height, pitch, true, true, NULL );
+		else
+			matrix_int_show( A, height, width, pitch, false, true, NULL );
 	#endif
+	/////////////////////////////
 
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nDownloading integer Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i)...Done.\n", matrix_name_dA, matrix_name_A, height, width, pitch, transpose );
+		print_message( false, "\nDownloading integer matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+				",transpose: %i, mappedHostMemory: %i)...Done.\n", matrix_name_dA, matrix_name_A, height, width,
+				pitch, transpose, mappedHostMemory );
 	#endif
 
 } // download_matrix_int
 
-////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////

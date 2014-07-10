@@ -1,8 +1,11 @@
 /************************************************************************
- * Copyright (C) 2011-2013:
  *
- *	Edgardo Mejia-Roa(*), Carlos Garcia, Jose Ignacio Gomez,
- *	Manuel Prieto, Francisco Tirado and Alberto Pascual-Montano(**).
+ * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ *
+ * Copyright (C) 2011-2014:
+ *
+ *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
+ *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
  *
  *	(*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
  *	(**) Functional Bioinformatics Group, Biocomputing Unit,
@@ -12,20 +15,20 @@
  *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-mGPU..
+ * This file is part of bioNMF-GPU.
  *
- * BioNMF-mGPU is free software: you can redistribute it and/or modify
+ * BioNMF-GPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-mGPU is distributed in the hope that it will be useful,
+ * BioNMF-GPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-mGPU.  If not, see <http://www.gnu.org/licenses/>.
+ * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ***********************************************************************/
 /**********************************************************
@@ -35,19 +38,30 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
+ *	Data type:
+ *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
+ *
  *	Additional information:
- *		NMFGPU_VERBOSE: Shows some messages concerning the progress of the program, as well as some configuration parameters.
+ *		NMFGPU_VERBOSE: Shows some messages concerning the progress of the program, as well as
+ *				some configuration parameters.
  *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
  *
- *	Timing:
+ *	CPU timing:
+ *		NMFGPU_PROFILING_GLOBAL: Compute total elapsed time. If GPU time is NOT being computed,
+ *					the CPU thread performs active waiting (i.e., spins) on
+ *					synchronization calls, such as cudaDeviceSynchronize() or
+ *					cudaStreamSynchronize(). Otherwise, the CPU thread is blocked.
+ *
+ *	GPU timing (WARNING: They PREVENT asynchronous operations. The CPU thread is blocked on synchronization):
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
  *
  *	Debug / Testing:
+ *		NMFGPU_CPU_RANDOM: Uses the CPU (host) random generator (not the cuRAND library).
  *		NMFGPU_FIXED_INIT: Uses "random" values generated from a fixed seed (defined in common.h).
- *		NMFGPU_CPU_RANDOM: Uses the CPU (host) random generator (not the CURAND library).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_FORCE_BLOCKS: Forces the processing of the input matrix as four blocks.
+ *				     It also disables mapping of host memory into device address space.
  *		NMFGPU_TEST_BLOCKS: Just shows block information structure. No GPU memory is allocated.
  *
  **********************************************************
@@ -55,34 +69,48 @@
  **********************************************************
  *
  * Data matrices:
- * 	V (N rows, M columns): Input matrix,
- * 	K: Factorization Rank,
- * 	W (N,K): Output matrix,
- * 	H (K,M): Output matrix,
- * so that V ~ W*H
+ *	V (N rows, M columns): input matrix
+ *	W (N,K): output matrix
+ *	H (K,M): output matrix,
+ * such that: V  ~  W * H.
+ *
+ * Arguments:
+ *	Matrix V (and its dimensions)
+ *	K: Factorization Rank
+ *
  *
  * NOTE: In order to improve performance:
- *	- Matrix H is stored in memory as COLUMN-major (i.e., it is transposed).
  *
- *	- All matrices include useless data for padding. Padded dimensions
- *	  are denoted with the 'p' character, e.g., 'Mp' (i.e.,, M + padding)
- *	  or 'Kp' (factorization_rank + padding).
+ *	+ Matrix H is stored in memory as COLUMN-major (i.e., it is transposed).
  *
- *	- Padded dimensions are a multiple of memory_alignment
- *	  (a global variable which currently is equal to warpSize or warpSize/2).
+ *	+ All matrices include useless data for padding. Padded dimensions
+ *	  are denoted with the 'p' character. For instance:
+ *		Mp, which is equal to <M + padding>
+ *		Kp, which is equal to <K + padding>.
  *
- ***************
+ *	  Data alignment is controlled by the global variable: memory_alignment.
+ *
+ *	  This leads to the following limits:
+ *		- Maximum number of columns (padded or not): matrix_max_pitch.
+ *		- Maximum number of rows: matrix_max_non_padded_dim.
+ *		- Maximum number of items: matrix_max_num_items.
+ *
+ *	  All four GLOBAL variables must be initialized with the set_matrix_limits()
+ *	  function.
+ *
+ ****************
  *
  * Multi-GPU version:
  *
  * When the input matrix V is distributed among multiple devices each host thread processes
  * the following sets of rows and columns:
+ *
  *	Vrow[ 1..NnP ][ 1..M ] <-- V[ bN..(bN+NnP) ][ 1..M ]	(i.e., NnP rows, starting from bN)
  *	Vcol[ 1..N ][ 1..MnP ] <-- V[ 1..N ][ bM..(bM+MnP) ]	(i.e., MnP columns, starting from bM)
  *
  * Such sets allow to update the corresponding rows and columns of W and H, respectively.
  *
- * Note that each host thread has a private copy of matrices W and H, which must be synchronized
+ * Note that each host thread has a private full copy of matrices W and H, which must be synchronized
  * after being updated.
  *
  ****************
@@ -91,6 +119,7 @@
  *
  * If the input matrix (or the portion assigned to this device) is too large for the GPU memory,
  * it must be blockwise processed as follow:
+ *
  *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(i.e., BLN <= NnP rows)
  *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ offset_Vcol..(offset_Vcol + BLMp) ]	(i.e., BLM <= MnP columns)
  *
@@ -99,23 +128,35 @@
  * In any case, matrices W and H are fully loaded into the GPU memory.
  *
  * Information for blockwise processing is stored in two block_t structures (one for each dimension).
- * Such structures ('block_N' and 'block_M') are initialized in init_block_conf() routine.
+ * Such structures ('block_N' and 'block_M') are initialized in the init_block_conf() routine.
+ *
+ ****************
+ *
+ * Mapped Memory on integrated GPUs:
+ *
+ * On integrated systems, such as notebooks, where device memory and host memory are physically the
+ * same (but disjoint regions), any data transfer between host and device memory is superfluous.
+ * In such case, host memory is mapped into the address space of the device, and all transfer
+ * operations are skipped. Memory for temporary buffers (e.g., d_WH or d_Aux) is also allocated
+ * on the HOST and then mapped. This saves device memory, which is typically required for graphics/video
+ * operations.
+ *
+ * This feature is disabled if NMFGPU_FORCE_BLOCKS is non-zero.
  *
  *********************************************************/
 
 #if ! NMFGPU_GPU_SETUP_CUH
 #define NMFGPU_GPU_SETUP_CUH (1)
 
-///////////////////////////////////////////////////////
+#include "real_type.h"
+#include "index_type.h"
 
-#include <cuda.h>
 #include <cublas_v2.h>
 #include <curand.h>	/* Random values */
+#include <cuda_runtime_api.h>
 
-#include "index_type.h"
-#include "real_type.h"
-
-///////////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /* Selects the appropriate "restrict" keyword. */
 
@@ -126,9 +167,6 @@
 #else					/* C99 source code */
 	#define RESTRICT restrict
 #endif
-
-///////////////////////////////////////////////////////
-///////////////////////////////////////////////////////
 
 /* C linkage, not C++. */
 #ifdef __cplusplus
@@ -152,25 +190,17 @@ typedef struct {
 } block_t;
 
 // ---------------------------------------------
+// ---------------------------------------------
 
 /* HOST-ONLY GLOBAL variables */
 
-extern index_t device_id;			// Device ID number.
+extern cublasHandle_t cublas_handle;		// cuBLAS library context.
 
-extern index_t num_devices;			// Number of devices.
-
-extern cublasHandle_t cublas_handle;		// CUBLAS library context.
-
-extern curandGenerator_t curand_generator;	// CURAND Random values Generator.
+extern curandGenerator_t curand_generator;	// cuRAND Random values Generator.
 
 extern index_t computeCapability;		// Compute Capability (major).
 
 extern index_t computeCapability_minor;		// Compute Capability (minor).
-
-/* Alignment value for data to be stored in GPU memory: Typically 'warpSize/2' on compute capability 1.x, and 'warpSize' on 2.x and beyond.
- * It is similar to the DEVICE-only constant 'MEMORY_ALIGNMENT' defined on "GPU_kernels.h".
- */
-extern index_t memory_alignment;
 
 extern index_t maxThreadsPerBlock;		// Maximum number of threads per block.
 
@@ -179,8 +209,6 @@ extern index_t multiProcessorCount;		// Number of multiprocessors.
 extern index_t maxThreadsPerMultiProcessor;	// Maximum number of resident threads per multiprocessor (>= maxThreadsPerBlock)
 
 extern index_t maxGridSizeX, maxGridSizeY;	// Maximum number of thread blocks on dimensions X and Y.
-
-extern size_t defaultStackSize;			// Default stack size of each GPU thread ( Compute Capability >= 2.0 )
 
 // Typical number of threads per block. It should be a divisor of maxThreadsPerMultiProcessor.
 extern index_t threadsPerBlock;			// <= maxThreadsPerBlock
@@ -191,6 +219,8 @@ extern index_t threadsPerBlock_pitch;		// threadsPerBlock <= threadsPerBlock_pit
 // Maximum block height using <threadsPerBlock_pitch> threads.
 extern index_t maxBlockHeight_pitch;		// <= (threadsPerBlock_pitch / pitch)
 
+extern bool mappedHostMemory;			// Host memory is mapped into the address space of the device.
+
 extern block_t block_N, block_M;		// Information for blockwise processing on dimension N and M.
 
 // CUDA Events for synchronization:
@@ -200,7 +230,6 @@ extern cudaEvent_t event_W;			// d_W
 extern cudaEvent_t event_H;			// d_H
 extern cudaEvent_t event_reduction;		// Event to register matrix reduction operations.
 
-
 // CUDA Streams for synchronization:
 extern cudaStream_t stream_Vrow;		// d_Vrow
 extern cudaStream_t stream_Vcol;		// d_Vcol
@@ -209,35 +238,26 @@ extern cudaStream_t stream_H;			// d_H
 extern cudaStream_t *RESTRICT streams_NMF;	// Main-flow streams for blockwise processing.
 extern index_t num_streams_NMF;			// Number of main-flow streams: MAX( SUM(block_N.num_steps[i]), SUM(block_M.num_steps[i]) )
 
-// Matrix dimensions (host side):
-extern index_t N;	// Number of rows of input matrix V.
-extern index_t M;	// Number of columns of input matrix V.
-extern index_t K;	// Factorization rank.
+// Host matrices (used only with mapped host memory):
+extern real *RESTRICT h_accum;			// Accumulator. K-length vector (<Kp> with padding).
 
-// Dimensions for multi-GPU version:
-extern index_t NnP;	// Number of rows of V assigned to this GPU (NnP <= N).
-extern index_t MnP;	// Number of columns of V assigned to this GPU (MnP <= M).
-
-// Padded dimensions:
-extern index_t Mp;	// 'M' rounded up to the next multiple of <memory_alignment>.
-extern index_t Kp;	// 'K' rounded up to the next multiple of <memory_alignment>.
-extern index_t MnPp;	// 'MnP' rounded up to the next multiple of <memory_alignment> (MnPp <= Mp).
-
+// ---------------------------------------------
 // ---------------------------------------------
 
 /* DEVICE-ONLY GLOBAL Variables */
 
 // Data matrices (device side):
-extern real *RESTRICT d_Vrow;		// Block of BLN rows from input matrix V.
-extern real *RESTRICT d_Vcol;		// Block of BLM columns from input matrix V.
+extern real *RESTRICT d_Vrow;			// Block of BLN rows from input matrix V.
+extern real *RESTRICT d_Vcol;			// Block of BLM columns from input matrix V.
 extern real *RESTRICT d_H;			// Output matrix. Note that it is transposed.
 extern real *RESTRICT d_W;			// Output matrix.
 extern real *RESTRICT d_WH;			// Temporary matrix: d_WH = d_W * d_H
-extern real *RESTRICT d_Aux;		// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
-extern real *RESTRICT d_accum;		// Accumulator. K-length vector (<Kp> with padding).
-extern index_t  *RESTRICT d_classification;	// Classification vector.
+extern real *RESTRICT d_Aux;			// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
+extern real *RESTRICT d_accum;			// Accumulator. K-length vector (<Kp> with padding).
+extern index_t *RESTRICT d_classification;	// Classification vector.
+extern index_t *RESTRICT d_last_classification;	// Previous Classification vector (used only with mapped host memory).
+extern real const *RESTRICT d_scalars;		// Scalars for cuBLAS Library calls.
 
-extern real const *RESTRICT d_scalars;	// Scalars for CUBLAS Library calls.
 extern real const *RESTRICT d_zero;		// Pointer to d_scalar[0]
 extern real const *RESTRICT d_one;		// Pointer to d_scalar[1]
 
@@ -245,28 +265,28 @@ extern real const *RESTRICT d_one;		// Pointer to d_scalar[1]
 ////////////////////////////////////////////////
 
 /*
- * Prints an error message according to the provided CUBLAS status.
+ * Returns an error message according to the provided cuBLAS status.
  */
-void printCublasErrorString( cublasStatus_t cublas_status );
+char const *getCublasErrorString( cublasStatus_t cublas_status );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
- * Prints an error message according to the provided CURAND status.
+ * Returns an error message according to the provided cuRAND status.
  */
-void printCurandErrorString( curandStatus_t curand_status );
+char const *getCurandErrorString( curandStatus_t curand_status );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
- * Checks the provided CUBLAS status.
+ * Checks the provided cuBLAS status.
  * If it is NOT OK, it shows an error message.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int check_cublas_status_st( cublasStatus_t cublas_status );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
  * Waits to finish all GPU operations and checks CUDA status.
@@ -276,7 +296,7 @@ int check_cublas_status_st( cublasStatus_t cublas_status );
  */
 int check_cuda_status_st( cudaError_t cuda_status );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
  * Waits to finish all GPU operations and checks CUDA status.
@@ -287,72 +307,60 @@ int check_cuda_status_st( cudaError_t cuda_status );
  */
 int check_cuda_status( void );
 
-// ------------------------------------------
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
- * Initializes CUDA and CUBLAS on the specified device.
- * Stores in 'mem_size' the Global Memory size.
+ * Initializes CUDA and cuBLAS on the specified device.
+ *
+ * Updates "memory_alignment", the limits of matrix dimensions, and setups the
+ * padding for the factorization rank (K).
  *
  * WARNING:
- * 	This function must be called *BEFORE* any other CUDA-related routine (e.g., cudaMallocHost(), cudaHostAlloc()).
+ *	- This function must be called *BEFORE* any other CUDA-related routine.
  *
- * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ * Returns the amount of free global memory, or 0 on failure.
  */
-int init_GPU( index_t dev_id, index_t num_devs, size_t *RESTRICT const mem_size );
+size_t initialize_GPU( index_t dev_id, index_t num_devs, index_t factorization_rank );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
- * Computes the padded dimension.
- *
- * Returns the next multiple of 'memory_alignment'.
- */
-index_t get_padding( index_t dim );
-
-// ------------------------------------------
-
-/*
- * Computes the highest power of 2 <= x.
- * Returns the same value (x) if it is already a power of 2, or is zero.
- */
-index_t prev_power_2( index_t x );
-
-// ------------------------------------------
-
-/*
- * Initializes the GPU device.
- *
- * Initializes CUDA, CUBLAS and data structures.
- * Computes the required amount of memory and allocates memory for data matrices.
+ * Setups the GPU device:
+ *	- Checks matrix dimensions.
+ *	- Computes the required memory.
+ *	- Allocates memory for data matrices.
+ *	- Initializes associated GPU data, such as CUDA events/streams, and some kernel parameters.
  *
  * do_classf: Set to 'true' if classification vector will be computed.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int init_GPUdevice( size_t mem_size, bool do_classf );
+int setup_GPU( size_t mem_size, bool do_classf );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
- * Shuts-down current CUBLAS/CUDA context.
+ * Shuts down current cuBLAS/CUDA context.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int finalize_GPU( void );
+int shutdown_GPU( void );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
- * Shuts down the device.
+ * Finalizes the GPU device.
  *
  * Destroys associated GPU data, such as cudaStreams and/or cudaEvents,
- * frees all allocated device memory, and shuts-down current CUDA/CUBLAS context.
+ * frees all allocated device memory, and shuts-down current CUDA/cuBLAS context.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int finalize_GPUdevice( void );
+int finalize_GPU_device( void );
 
-// ------------------------------------------
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
  * Allocates PINNED HOST memory.
@@ -361,49 +369,47 @@ int finalize_GPUdevice( void );
  * increasing the speed of HOST-DEVICE transfers.
  *
  * size: Size of data IN BYTES.
+ *
  * wc: Set to 'true' to allocate the memory as 'write-combined' (WC).
  *	Useful ONLY for data to be transferred from the HOST to the DEVICE.
  *
+ * clear: Set to 'true' to initialize the memory area with zeros.
+ *
  * WARNING:
- *	- This function must be called AFTER init_GPU().
- * 	- Allocating excessive amounts of pinned memory may degrade system performance,
- * 	  since it reduces the amount of memory available to the system for paging.
- * 	- Memory allocated by this function must be freed with freeHostMemory().
+ *	- The GPU device must has been properly initialized through init_GPU().
+ *	- Allocating excessive amounts of pinned memory may degrade system performance,
+ *	  since it reduces the amount of memory available to the system for paging.
+ *	- Memory allocated by this function must be freed with freeHostMemory().
  *
  * Returns a pointer to the allocated memory, or NULL on error.
  */
-void *getHostMemory( size_t size, bool wc );
+void *getHostMemory( size_t size, bool wc, bool clear );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
  * Frees HOST memory previously allocated by getHostMemory().
  *
- * WARNING: This function must be called *BEFORE* finalize_GPU() or finalize_GPUdevice().
+ * WARNING:
+ *	This function must be called *BEFORE* finalize_GPU() or finalize_GPUdevice().
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int freeHostMemory( void *RESTRICT pHost );
+int freeHostMemory( void *RESTRICT pHost, char const *RESTRICT pHost_name );
 
-// ------------------------------------------
-
-/*
- * Blocks until GPU has completed all operations associated to 'stream'.
- */
-void sync_GPU( cudaStream_t stream );
-
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
- * Creates a Random-number Generator using the CURAND Library.
+ * Creates a Random-number Generator using the cuRAND Library.
  *
- * WARNING: Seed is NOT initialized. For that, please use set_randomGenerator_seed().
+ * WARNING:
+ *	The seed is NOT initialized. For that, please use set_randomGenerator_seed().
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int init_randomGenerator( void );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
  * Sets the seed value for an existing pseudo-random number generator.
@@ -412,17 +418,17 @@ int init_randomGenerator( void );
  */
 int set_randomGenerator_seed( unsigned long long seed );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
- * Creates a Random-number Generator using the CURAND Library.
+ * Creates a Random-number Generator using the cuRAND Library.
  * Sets the seed to the given parameter.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int init_GPU_random( unsigned long long seed );
 
-// ------------------------------------------
+////////////////////////////////////////////////
 
 /*
  * Destroys an existing generator and free all memory associated with its state.
@@ -431,18 +437,23 @@ int init_GPU_random( unsigned long long seed );
  */
 int finalize_randomGenerator( void );
 
-///////////////////////////////////////////////////////
-///////////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+/*
+ * Blocks until GPU has completed all operations associated to 'stream'.
+ */
+void sync_GPU( cudaStream_t stream );
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 #ifdef __cplusplus
 }
 #endif
 
-///////////////////////////////////////////////////////
-///////////////////////////////////////////////////////
-
 #undef RESTRICT
 
-///////////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 #endif /* NMFGPU_GPU_SETUP_CUH */

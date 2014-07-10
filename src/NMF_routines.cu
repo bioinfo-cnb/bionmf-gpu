@@ -1,8 +1,11 @@
 /************************************************************************
- * Copyright (C) 2011-2013:
  *
- *	Edgardo Mejia-Roa(*), Carlos Garcia, Jose Ignacio Gomez,
- *	Manuel Prieto, Francisco Tirado and Alberto Pascual-Montano(**).
+ * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ *
+ * Copyright (C) 2011-2014:
+ *
+ *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
+ *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
  *
  *	(*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
  *	(**) Functional Bioinformatics Group, Biocomputing Unit,
@@ -12,20 +15,20 @@
  *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-mGPU..
+ * This file is part of bioNMF-GPU.
  *
- * BioNMF-mGPU is free software: you can redistribute it and/or modify
+ * BioNMF-GPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-mGPU is distributed in the hope that it will be useful,
+ * BioNMF-GPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-mGPU.  If not, see <http://www.gnu.org/licenses/>.
+ * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ***********************************************************************/
 /**********************************************************
@@ -35,9 +38,12 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
- *	Timing (WARNING: They PREVENT asynchronous operations):
- *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers (should be used with NMFGPU_SYNC_TRANSF).
- *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels.
+ *	Data type:
+ *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
+ *
+ *	GPU timing (WARNING: They PREVENT asynchronous operations. The CPU thread is blocked on synchronization):
+ *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
+ *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
  *
  *	Additional information:
  *		NMFGPU_VERBOSE: Shows additional information such as the begin or end of a routine call.
@@ -48,75 +54,132 @@
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *		NMFGPU_DEBUG_TRANSF: Shows the result of each data transfer.
  *		NMFGPU_SYNC_TRANSF: Performs synchronous data transfers.
- *		NMFGPU_DEBUG_REDUCT: Shows partial results of the reduction operation.
- *		NMFGPU_FORCE_BLOCKS: Forces the processing of the input matrix as four blocks.
- *		NMFGPU_TEST_BLOCKS: Just shows block information structure. No GPU memory is allocated.
  *
  **********************************************************
  **********************************************************
  **********************************************************
  *
  * Data matrices:
- * 	V (N rows, M columns): Input matrix,
- * 	K: Factorization Rank,
- * 	W (N,K): Output matrix,
- * 	H (K,M): Output matrix,
- * such that V ~ W*H
+ *	V (N rows, M columns): input matrix
+ *	W (N,K): output matrix
+ *	H (K,M): output matrix,
+ * such that: V  ~  W * H.
+ *
+ * Arguments:
+ *	Matrix V (and its dimensions)
+ *	K: Factorization Rank
+ *
  *
  * NOTE: In order to improve performance:
- *	- Matrix H is stored in memory as COLUMN-major (ie. it is transposed).
  *
- *	- All matrices include unuseful data for padding. Padded dimensions
- *	  are denoted with the 'p' character, eg. 'Mp' (ie., M + padding)
- *	  or 'Kp' (factorization_rank + padding).
+ *	+ Matrix H is stored in memory as COLUMN-major (i.e., it is transposed).
  *
- *	- Padded dimensions are a multiple of memory_alignment
- *	  (a global variable which currently is equal to warpSize or warpSize/2).
+ *	+ All matrices include useless data for padding. Padded dimensions
+ *	  are denoted with the 'p' character. For instance:
+ *		Mp, which is equal to <M + padding>
+ *		Kp, which is equal to <K + padding>.
  *
- ***************
+ *	  Data alignment is controlled by the global variable: memory_alignment.
+ *
+ *	  This leads to the following limits:
+ *		- Maximum number of columns (padded or not): matrix_max_pitch.
+ *		- Maximum number of rows: matrix_max_non_padded_dim.
+ *		- Maximum number of items: matrix_max_num_items.
+ *
+ *	  All four GLOBAL variables must be initialized with the set_matrix_limits()
+ *	  function.
+ *
+ ****************
+ *
  * Multi-GPU version:
  *
  * When the input matrix V is distributed among multiple devices each host thread processes
  * the following sets of rows and columns:
- *	Vrow[ 1..NnP ][ 1..M ] <-- V[ bN..(bN+NnP) ][ 1..M ]	(ie. NnP rows, starting from bN)
- *	Vcol[ 1..N ][ 1..MnP ] <-- V[ 1..N ][ bM..(bM+MnP) ]	(ie. MnP columns, starting from bM)
+ *
+ *	Vrow[ 1..NnP ][ 1..M ] <-- V[ bN..(bN+NnP) ][ 1..M ]	(i.e., NnP rows, starting from bN)
+ *	Vcol[ 1..N ][ 1..MnP ] <-- V[ 1..N ][ bM..(bM+MnP) ]	(i.e., MnP columns, starting from bM)
  *
  * Such sets allow to update the corresponding rows and columns of W and H, respectively.
  *
- * Note that each host thread has a private copy of matrices W and H, which must be synchronized
+ * Note that each host thread has a private full copy of matrices W and H, which must be synchronized
  * after being updated.
  *
  ****************
+ *
  * Large input matrix (blockwise processing):
  *
  * If the input matrix (or the portion assigned to this device) is too large for the GPU memory,
  * it must be blockwise processed as follow:
- *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(ie. BLN <= NnP rows)
- *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ colIdx..(colIdx + BLMp) ]	(ie. BLM <= MnP columns)
  *
- * Note that padded dimensions are denoted with the suffix 'p' (eg. Mp, BLMp, etc).
+ *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(i.e., BLN <= NnP rows)
+ *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ offset_Vcol..(offset_Vcol + BLMp) ]	(i.e., BLM <= MnP columns)
+ *
+ * Note that padded dimensions are denoted with the suffix 'p' (e.g., Mp, BLMp, etc).
  *
  * In any case, matrices W and H are fully loaded into the GPU memory.
  *
  * Information for blockwise processing is stored in two block_t structures (one for each dimension).
- * Such structures (block_N and block_M) are initalized in init_block_conf() routine.
+ * Such structures ('block_N' and 'block_M') are initialized in the init_block_conf() routine.
+ *
+ ****************
+ *
+ * Mapped Memory on integrated GPUs:
+ *
+ * On integrated systems, such as notebooks, where device memory and host memory are physically the
+ * same (but disjoint regions), any data transfer between host and device memory is superfluous.
+ * In such case, host memory is mapped into the address space of the device, and all transfer
+ * operations are skipped. Memory for temporary buffers (e.g., d_WH or d_Aux) is also allocated
+ * on the HOST and then mapped. This saves device memory, which is typically required for graphics/video
+ * operations.
+ *
+ * This feature is disabled if NMFGPU_FORCE_BLOCKS is non-zero.
  *
  *********************************************************/
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>	/* strerror() */
-#include <math.h>	/* sqrtd() */
-
-#include <cublas_v2.h>
-
+#include "NMF_routines.cuh"
+#include "matrix/matrix_operations.cuh"
+#include "GPU_setup.cuh"
 #if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_CONV
 	#include "timing.cuh"
 #endif
-#include "GPU_setup.cuh"
-#include "matrix/matrix_operations.cuh"
-#include "NMF_routines.cuh"
+#include "common.h"
+
+#include <cublas_v2.h>
+
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>	/* strerror() */
+#include <stdlib.h>
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+/* Constants */
+
+// CUBLAS: General matrix-matrix product.
+#undef CUBLAS_R_GEMM
+#if NMFGPU_SINGLE_PREC		/* Single precision */
+	#define CUBLAS_R_GEMM cublasSgemm
+#else				/* Double precision */
+	#define CUBLAS_R_GEMM cublasDgemm
+#endif
+
+
+// CUBLAS: Dot product.
+#undef CUBLAS_R_DOT
+#if NMFGPU_SINGLE_PREC
+	#define CUBLAS_R_DOT cublasSdot
+#else
+	#define CUBLAS_R_DOT cublasDdot
+#endif
+
+// CUBLAS: Sum of absolute values.
+#undef CUBLAS_R_ASUM
+#if NMFGPU_SINGLE_PREC
+	#define CUBLAS_R_ASUM cublasSasum
+#else
+	#define CUBLAS_R_ASUM cublasDasum
+#endif
 
 // ---------------------------------------------
 // ---------------------------------------------
@@ -135,13 +198,8 @@ index_t psNMF_M = 0;	// Current index in streams_NMF[].
 index_t colIdx = 0;	// Current column index in Vcol, H and d_H (actually, row index, since H is transposed).
 index_t rowIdx = 0;	// Current row index in Vrow and W.
 
-// Data matrices (host side)
-real *Vcol = NULL;		// Pointer to V (actually, it is just an alias).
-real *Vrow = NULL;		// Pointer to V (actually, it is just an alias).
-
-
-/////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Initializes the GPU or the CPU random generator,
@@ -169,7 +227,7 @@ int init_random( index_t seed )
 
 } // init_random
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Finalizes the selected random generator.
@@ -185,7 +243,7 @@ void destroy_random( void )
 
 } // destroy_random
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Sets random values in d_A[] using the selected random generator and seed.
@@ -198,14 +256,14 @@ void destroy_random( void )
  * WARNING: Requires the random generator properly initialized, with a seed set.
  */
 void set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t height, index_t width, index_t padding,
-				#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-					bool transpose, char const *__restrict__ const matrix_name_A,
-					char const *__restrict__ const matrix_name_dA,
-				#endif
-				#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
-					timing_data_t *__restrict__ const upload_timing,
-				#endif
-				cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
+			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+				bool transpose, char const *__restrict__ const matrix_name_A,
+				char const *__restrict__ const matrix_name_dA,
+			#endif
+			#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
+				timing_data_t *__restrict__ const upload_timing,
+			#endif
+			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
 {
 
 	#if NMFGPU_CPU_RANDOM
@@ -224,21 +282,21 @@ void set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t he
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			printf( "\n--- [GPU%" PRI_IDX "] Random values on matrix %s --> %s (height=%" PRI_IDX ", width=%" PRI_IDX
-				", padding=%" PRI_IDX ", transpose=%i): ---\n", device_id, matrix_name_A, matrix_name_dA,
-				height, width, padding, transpose );
+			print_message( true, "--- Random values on matrix %s --> %s (height=%" PRI_IDX ", width=%" PRI_IDX
+					", padding=%" PRI_IDX ", transpose=%i): ---\n", matrix_name_A, matrix_name_dA,
+					height, width, padding, transpose );
 		#endif
 		/////////////////////////////
 
 		// Uploads the new values.
 		upload_matrix( A, height, padding, d_A,
-					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						width, transpose, matrix_name_A, matrix_name_dA,
-					#endif
-					#if NMFGPU_PROFILING_TRANSF
-						upload_timing,
-					#endif
-					stream_A, event_A );
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+					width, transpose, matrix_name_A, matrix_name_dA,
+				#endif
+				#if NMFGPU_PROFILING_TRANSF
+					upload_timing,
+				#endif
+				stream_A, event_A );
 
 	// ---------------------------------
 
@@ -257,7 +315,7 @@ void set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t he
 
 } // set_random_values
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * WH(N,BLMp) = W * H(BLM,Kp)
@@ -271,8 +329,7 @@ static void get_H_BLM( index_t const BLM, index_t const BLMp )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t\t-----get_H_BLM(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX ")-----\n",
+		print_message( true, "\n\t\t\t\t-----get_H_BLM(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX ")-----\n",
 				BLM, BLMp, colIdx );
 	#endif
 
@@ -290,20 +347,23 @@ static void get_H_BLM( index_t const BLM, index_t const BLMp )
 	// WH(N,BLMp) = W * H(BLM,Kp)
 
 	#ifdef NMFGPU_DEBUG
-	cublas_status =
+		cublas_status =
 	#endif
 		// streams_NMF[ psNMF_M ]
 		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, BLM, N, K, d_one, &d_H[ colIdx*Kp ], Kp, d_W, Kp, d_zero, d_WH, BLMp );
 
-			#ifdef NMFGPU_DEBUG
-			///////////////////////////////
-				printf("\n--- [GPU%" PRI_IDX "] Resulting WHcol=W*H (BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX
-					"): ---\n", device_id, BLM, BLMp, colIdx );
-				check_cublas_status_st( cublas_status );
-				check_cuda_status();
-				show_device_matrix( d_WH, N, BLM, BLMp, false, NULL );
-			/////////////////////////////
-			#endif
+	#ifdef NMFGPU_DEBUG
+	///////////////////////////////
+	{
+		bool const shown_by_all = true;
+		print_message( shown_by_all, "--- Resulting WHcol=W*H (BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX
+				"): ---\n", BLM, BLMp, colIdx );
+		check_cublas_status_st( cublas_status );
+		check_cuda_status();
+		show_device_matrix( d_WH, N, BLM, BLMp, false, shown_by_all, NULL );
+	}
+	/////////////////////////////
+	#endif
 
 	// ---------------------------
 
@@ -324,19 +384,22 @@ static void get_H_BLM( index_t const BLM, index_t const BLMp )
         // Haux(BLM,Kp) = W' * WH(N,BLMp)
 
 	#ifdef NMFGPU_DEBUG
-	cublas_status =
+		cublas_status =
 	#endif
 		// streams_NMF[ psNMF_M ]
 		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, K, BLM, N, d_one, d_W, Kp, d_WH, BLMp, d_zero, d_Haux, Kp );
 
-		#ifdef NMFGPU_DEBUG
-		///////////////////////////////
-			printf("\n--- [GPU%" PRI_IDX "] Resulting d_Haux (BLM=%" PRI_IDX "): ---\n", device_id, BLM );
-			check_cublas_status_st( cublas_status );
-			check_cuda_status();
-			show_device_matrix( d_Haux, BLM, K, Kp, true, NULL );
-		/////////////////////////////
-		#endif
+	#ifdef NMFGPU_DEBUG
+	///////////////////////////////
+	{
+		bool const shown_by_all = true;
+		print_message( shown_by_all, "--- Resulting d_Haux (BLM=%" PRI_IDX "): ---\n", BLM );
+		check_cublas_status_st( cublas_status );
+		check_cuda_status();
+		show_device_matrix( d_Haux, BLM, K, Kp, true, shown_by_all, NULL );
+	}
+	/////////////////////////////
+	#endif
 
 	// ----------------------------
 
@@ -351,14 +414,13 @@ static void get_H_BLM( index_t const BLM, index_t const BLMp )
 	// ----------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t\t-----End of get_H_BLM(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX ")-----\n",
+		print_message( true, "\n\t\t\t\t-----End of get_H_BLM(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX ")-----\n",
 				BLM, BLMp, colIdx );
 	#endif
 
 } // get_H_BLM
 
-// =======================================================================
+// ---------------------------------------------
 
 /*
  * WH(N,BLMp) = W * pH(BLM,Kp)
@@ -376,9 +438,8 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t----- getH_loop(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepM=%i"
-			", colIdx=%" PRI_IDX ") -----\n", BLM, BLMp, num_steps, stepM, colIdx );
+		print_message( true, "\n\t\t----- getH_loop(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepM=%i"
+				", colIdx=%" PRI_IDX ") -----\n", BLM, BLMp, num_steps, stepM, colIdx );
 	#endif
 
 	// -------------------------------
@@ -403,9 +464,8 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 	for ( index_t st = 1 ; st < num_steps ; st++ ) {
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t-----getH_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", stepM=%i"
-				", colIdx=%" PRI_IDX ")-----\n", st, num_steps, BLM, BLMp, stepM, colIdx );
+			print_message( true, "\n\t\t\t-----getH_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
+					", stepM=%i, colIdx=%" PRI_IDX ")-----\n", st, num_steps, BLM, BLMp, stepM, colIdx );
 		#endif
 
 		// ----------------
@@ -416,11 +476,12 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 		colIdx += (stepM * BLM);
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			///////////////////////////////
-			printf("\n--- [GPU%" PRI_IDX "]: Vcol processed (N=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", new colIdx=%"
-				PRI_IDX ", pitch=%" PRI_IDX "): ---\n", device_id, N, BLM, BLMp, colIdx, MnPp);
-			//////////////////////////////
+		///////////////////////////////
+			print_message( true, "--- Vcol processed (N=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", new colIdx=%"
+					PRI_IDX ", pitch=%" PRI_IDX "): ---\n", N, BLM, BLMp, colIdx, MnPp);
+		//////////////////////////////
 		#endif
+
 		upload_matrix_partial( Vcol, N, MnPp, 0, colIdx,	// Starting row: 0
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 						BLM, "Vcol", "d_Vcol",
@@ -449,9 +510,8 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 		get_H_BLM( BLM, BLMp );
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t-----getH_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
-				", stepM=%i, colIdx=%" PRI_IDX ")-----\n", st, num_steps, BLM, BLMp, stepM, colIdx );
+			print_message( true, "\n\t\t\t-----getH_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLM=%" PRI_IDX
+					", BLMp=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n", st, num_steps, BLM, BLMp, stepM, colIdx );
 		#endif
 
 	} // for ( st=1 ; st<num_steps ; st++ )
@@ -459,14 +519,13 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 	// -------------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t-----End of getH_loop(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepM=%i"
+		print_message( true, "\n\t\t-----End of getH_loop(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepM=%i"
 				", colIdx=%" PRI_IDX ")-----\n", BLM, BLMp, num_steps, stepM, colIdx );
 	#endif
 
 } // getH_loop
 
-// =======================================================================
+// ---------------------------------------------
 
 /*
  * WH(N,BLMp) = W * pH(BLM,Kp)
@@ -484,8 +543,7 @@ void update_H( void )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n-----update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n", pBLM, stepM, colIdx );
+		print_message( true, "\n-----update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n", pBLM, stepM, colIdx );
 	#endif
 
 	// ----------------------------------
@@ -535,12 +593,10 @@ void update_H( void )
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error: could not delay operations until d_W is ready: %s\n"
-					"Error in update_H(psNMF_M=%" PRI_IDX ", pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX
-					").\n", device_id, cudaGetErrorString(cuda_status), psNMF_M, pBLM, stepM, colIdx );
-			}
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error: could not delay operations until d_W is ready: %s\n"
+						"Error in update_H(psNMF_M=%" PRI_IDX ", pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX
+						").\n", cudaGetErrorString(cuda_status), psNMF_M, pBLM, stepM, colIdx );
 		#endif
 		///////////////////////////////
 	}
@@ -561,9 +617,8 @@ void update_H( void )
 	if ( block_M.num_steps[1] ) {	// There are more blocks in dimension "M" to process.
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t-----update_H(pBLM=%" PRI_IDX ",stepM=%i,colIdx=%" PRI_IDX ",psNMF_M=%" PRI_IDX
-				"): New block-----\n", pBLM, stepM, colIdx, psNMF_M );
+			print_message( true, "\n\t-----update_H(pBLM=%" PRI_IDX ",stepM=%i,colIdx=%" PRI_IDX ",psNMF_M=%" PRI_IDX
+					"): New block-----\n", pBLM, stepM, colIdx, psNMF_M );
 		#endif
 
 		// Updates pointers to Vcol (HOST matrix) and d_H (DEVICE matrix) and changes block information.
@@ -611,18 +666,18 @@ void update_H( void )
 		// Transfers (asynchronously) a new <N x BLM> block from Vcol to d_Vcol.
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t-----update_H: New block (pBLM=%" PRI_IDX ", stepM=%i, BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
-				", num_steps=%" PRI_IDX ", colIdx=%" PRI_IDX ", psNMF_M=%" PRI_IDX ")-----\n", pBLM, stepM, BLM, BLMp,
-				num_steps, colIdx, psNMF_M );
+			print_message( true, "\n\t-----update_H: New block (pBLM=%" PRI_IDX ", stepM=%i, BLM=%" PRI_IDX ", BLMp=%"
+					PRI_IDX ", num_steps=%" PRI_IDX ", colIdx=%" PRI_IDX ", psNMF_M=%" PRI_IDX ")-----\n", pBLM,
+					stepM, BLM, BLMp, num_steps, colIdx, psNMF_M );
 		#endif
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			///////////////////////////////
-			printf("\n--- [GPU%" PRI_IDX "]: Vcol processed (N=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ") (offset=%"
-				PRI_IDX ", pitch=%" PRI_IDX "): ---\n", device_id, N, BLM, BLMp, colIdx, MnPp);
-			//////////////////////////////
+		///////////////////////////////
+			print_message( true, "--- Vcol processed (N=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ") (offset=%"
+					PRI_IDX ", pitch=%" PRI_IDX "): ---\n", N, BLM, BLMp, colIdx, MnPp);
+		//////////////////////////////
 		#endif
+
 		upload_matrix_partial( Vcol, N, MnPp, 0, colIdx,	// Starting row: 0
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 						BLM, "Vcol", "d_Vcol",
@@ -650,9 +705,9 @@ void update_H( void )
 		stepM *= (-1);
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\n\t-----update_H: End of new block (pBLM=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", num_steps=%"
-				PRI_IDX ", colIdx=%" PRI_IDX "). New StepM=%i -----\n", pBLM, BLM, BLMp, num_steps, colIdx, stepM );
+			print_message( true, "\n\t-----update_H: End of new block (pBLM=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%"
+					PRI_IDX ", num_steps=%" PRI_IDX ", colIdx=%" PRI_IDX "). New StepM=%i -----\n", pBLM, BLM, BLMp,
+					num_steps, colIdx, stepM );
 		#endif
 
 	} // if ( block_M.num_steps[1] > 0 )
@@ -667,16 +722,13 @@ void update_H( void )
 
 			cudaEventRecord( event_H, streams_NMF[ psNMF_M ] );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess ) {
-					fflush(stdout);
-					fprintf(stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in update_H(pBLM=%"
-						PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ").\n", device_id, cudaGetErrorString(cuda_status),
-						pBLM, stepM, colIdx );
-				}
-			#endif
-			///////////////////////////////
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error recording CUDA event: %s\nError in update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%"
+						PRI_IDX ").\n", cudaGetErrorString(cuda_status), pBLM, stepM, colIdx );
+		#endif
+		///////////////////////////////
 	}
 
 	// ------------------------
@@ -689,29 +741,26 @@ void update_H( void )
 
 			cudaStreamWaitEvent( stream_H, event_H, 0 );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess ) {
-					fflush(stdout);
-					fprintf(stderr, "\n[GPU%" PRI_IDX "] Error: could not delay operations until event_H completes: %s\n"
-						"Error in update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ").\n", device_id,
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error: could not delay operations until event_H completes: %s\n"
+						"Error in update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ").\n",
 						cudaGetErrorString(cuda_status), pBLM, stepM, colIdx );
-				}
-			#endif
-			///////////////////////////////
+		#endif
+		///////////////////////////////
 	}
 
 	// ------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n-----End of update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n",
+		print_message( true, "\n-----End of update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n",
 				pBLM, stepM, colIdx );
 	#endif
 
 } // update_H
 
-////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////
 
 /*
  * WH(BLN,Mp) = W(BLN,Kp) * H
@@ -725,8 +774,7 @@ static void get_W_BLN( index_t const BLN )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t\t-----get_W_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
+		print_message( true, "\n\t\t\t\t-----get_W_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
 	#endif
 
 	// ---------------------------------
@@ -743,20 +791,23 @@ static void get_W_BLN( index_t const BLN )
 	// WH(BLN,Mp) = W(BLN,Kp) * H
 
 	#ifdef NMFGPU_DEBUG
-	cublas_status =
+		cublas_status =
 	#endif
 		// streams_NMF[ psNMF_N ]
 		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, &d_W[ rowIdx * Kp ], Kp, d_zero, d_WH, Mp );
 
-			#ifdef NMFGPU_DEBUG
-			///////////////////////////////
-				printf("\n--- [GPU%" PRI_IDX "] Resulting WHrow=W*H (BLN=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%" PRI_IDX
-					"): ---\n", device_id, BLN, Mp, rowIdx );
-				check_cublas_status_st( cublas_status );
-				check_cuda_status();
-				show_device_matrix( d_WH, BLN, M, Mp, false, NULL );
-			/////////////////////////////
-			#endif
+	#ifdef NMFGPU_DEBUG
+	///////////////////////////////
+	{
+		bool const shown_by_all = true;
+		print_message( shown_by_all, "--- Resulting WHrow=W*H (BLN=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%" PRI_IDX "): ---\n",
+				BLN, Mp, rowIdx );
+		check_cublas_status_st( cublas_status );
+		check_cuda_status();
+		show_device_matrix( d_WH, BLN, M, Mp, false, shown_by_all, NULL );
+	}
+	/////////////////////////////
+	#endif
 
 	// ---------------------------
 
@@ -777,19 +828,22 @@ static void get_W_BLN( index_t const BLN )
 	// Waux(BLN,Kp) = WH(BLN,Mp) * H'
 
 	#ifdef NMFGPU_DEBUG
-	cublas_status =
+		cublas_status =
 	#endif
 
-	CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, K, BLN, M, d_one, d_H, Kp, d_WH, Mp, d_zero, d_Waux, Kp );
+		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, K, BLN, M, d_one, d_H, Kp, d_WH, Mp, d_zero, d_Waux, Kp );
 
-		#ifdef NMFGPU_DEBUG
-		///////////////////////////////
-			printf("\n--- [GPU%" PRI_IDX "] Resulting d_Waux (BLN=%" PRI_IDX "): ---\n", device_id, BLN );
-			check_cublas_status_st( cublas_status );
-			check_cuda_status();
-			show_device_matrix( d_Waux, BLN, K, Kp, false, NULL );
-		/////////////////////////////
-		#endif
+	#ifdef NMFGPU_DEBUG
+	///////////////////////////////
+	{
+		bool const shown_by_all = true;
+		print_message( shown_by_all, "--- Resulting d_Waux (BLN=%" PRI_IDX "): ---\n", BLN );
+		check_cublas_status_st( cublas_status );
+		check_cuda_status();
+		show_device_matrix( d_Waux, BLN, K, Kp, false, shown_by_all, NULL );
+	}
+	/////////////////////////////
+	#endif
 
 
 	// ----------------------------
@@ -808,12 +862,12 @@ static void get_W_BLN( index_t const BLN )
 
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) ) printf( "\n\t\t\t\t-----End of get_W_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
+		print_message( true, "\n\t\t\t\t-----End of get_W_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
 	#endif
 
 } // getWrow
 
-// =======================================================================
+// ---------------------------------------------
 
 /*
  * WH(BLN,Mp) = W(BLN,Kp) * H
@@ -831,8 +885,7 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t-----getW_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( true, "\n\t\t-----getW_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
 				BLN, num_steps, stepN );
 	#endif
 
@@ -858,9 +911,8 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 	for ( index_t st = 1 ; st < num_steps ; st++ ) {
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t-----getW_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX
-				", stepN=%i)-----\n", st, num_steps, BLN, rowIdx, stepN );
+			print_message( true, "\n\t\t\t-----getW_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLN=%" PRI_IDX ", rowIdx=%"
+					PRI_IDX ", stepN=%i)-----\n", st, num_steps, BLN, rowIdx, stepN );
 		#endif
 
 		// ----------------
@@ -871,11 +923,11 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 		rowIdx += (stepN * BLN);
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			///////////////////////////////
-			printf("\n--- [GPU%" PRI_IDX "]: Vrow processed (BLN=%" PRI_IDX ", new rowIdx=%" PRI_IDX "): ---\n",
-				device_id, BLN,  rowIdx );
-			//////////////////////////////
+		///////////////////////////////
+			print_message( true, "--- Vrow processed (BLN=%" PRI_IDX ", new rowIdx=%" PRI_IDX "): ---\n", BLN,  rowIdx );
+		//////////////////////////////
 		#endif
+
 		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 						M, "Vrow", "d_Vrow",
@@ -906,9 +958,8 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 		// ----------------
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t-----getW_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLN=%" PRI_IDX ", stepN=%i"
-				")-----\n", st, num_steps, BLN, stepN );
+			print_message( true, "\n\t\t\t-----getW_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLN=%"
+					PRI_IDX ", stepN=%i)-----\n", st, num_steps, BLN, stepN );
 		#endif
 
 	} // for ( st=1 ; st<num_steps ; st++ )
@@ -916,14 +967,13 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 	// --------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t-----End of getW_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( true, "\n\t\t-----End of getW_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
 				BLN, num_steps, stepN );
 	#endif
 
 } // getW_loop
 
-// =======================================================================
+// ---------------------------------------------
 
 /*
  * WH(BLN,Mp) = W(BLN,Kp) * H
@@ -941,8 +991,7 @@ void update_W( void )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n-----update_W(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n", pBLN, rowIdx, stepN );
+		print_message( true, "\n-----update_W(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n", pBLN, rowIdx, stepN );
 	#endif
 
 	// ----------------------------------
@@ -992,12 +1041,10 @@ void update_W( void )
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error: Could not delay operations until d_H is ready: %s\n"
-					"Error in update_W(psNMF_N=%" PRI_IDX ", pBLN=%" PRI_IDX ", stepN=%i).\n", device_id,
-					cudaGetErrorString(cuda_status), psNMF_N, pBLN, stepN );
-			}
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error: Could not delay operations until d_H is ready: %s\n"
+						"Error in update_W(psNMF_N=%" PRI_IDX ", pBLN=%" PRI_IDX ", stepN=%i).\n",
+						cudaGetErrorString(cuda_status), psNMF_N, pBLN, stepN );
 		#endif
 		///////////////////////////////
 	}
@@ -1018,9 +1065,8 @@ void update_W( void )
 	if ( block_N.num_steps[1] ) {  // There are more blocks in dimension "N" to process.
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t-----update_W(pBLN=%" PRI_IDX ",stepN=%i, psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX "): New block-----\n",
-				pBLN, stepN, psNMF_N, rowIdx );
+			print_message( true, "\n\t-----update_W(pBLN=%" PRI_IDX ",stepN=%i, psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX
+					"): New block-----\n", pBLN, stepN, psNMF_N, rowIdx );
 		#endif
 
 		// Updates pointers to Vrow (HOST matrix) and d_W (DEVICE matrix) and changes block information.
@@ -1067,17 +1113,17 @@ void update_W( void )
 		// Transfers (asynchronously) a new <BLN x M> block from Vrow to d_Vrow.
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t-----update_W: New block (pBLN=%" PRI_IDX ", stepN=%i, BLN=%" PRI_IDX ", num_steps=%" PRI_IDX
-				", psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", pBLN, stepN, BLN, num_steps, psNMF_N, rowIdx );
+			print_message( true, "\n\t-----update_W: New block (pBLN=%" PRI_IDX ", stepN=%i, BLN=%" PRI_IDX ", num_steps=%" PRI_IDX
+					", psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", pBLN, stepN, BLN, num_steps, psNMF_N, rowIdx );
 		#endif
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			///////////////////////////////
-			printf("\n--- [GPU%" PRI_IDX "]: Vrow processed (BLN=%" PRI_IDX ", M=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%"
-				PRI_IDX "): ---\n", device_id, BLN, M, Mp, rowIdx );
-			//////////////////////////////
+		///////////////////////////////
+			print_message( true, "--- Vrow processed (BLN=%" PRI_IDX ", M=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%"
+					PRI_IDX "): ---\n", BLN, M, Mp, rowIdx );
+		//////////////////////////////
 		#endif
+
 		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 						M, "Vrow", "d_Vrow",
@@ -1105,9 +1151,8 @@ void update_W( void )
 		stepN *= (-1);
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\n\t-----update_W: End of new block (pBLN=%" PRI_IDX ", BLN=%" PRI_IDX ", num_steps=%" PRI_IDX
-				"). New StepN=%i -----\n", pBLN, BLN, num_steps, stepN );
+			print_message( true, "\n\t-----update_W: End of new block (pBLN=%" PRI_IDX ", BLN=%" PRI_IDX ", num_steps=%"
+					PRI_IDX "). New StepN=%i -----\n", pBLN, BLN, num_steps, stepN );
 		#endif
 
 	} // if ( block_N.num_steps[1] > 0 )
@@ -1122,15 +1167,13 @@ void update_W( void )
 
 			cudaEventRecord( event_W, streams_NMF[ psNMF_N ] );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess ) {
-					fflush(stdout);
-					fprintf( stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in update_W(pBLN=%"
-						PRI_IDX ", stepN=%i).\n", device_id, cudaGetErrorString(cuda_status), pBLN, stepN );
-				}
-			#endif
-			///////////////////////////////
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error recording CUDA event: %s\nError in update_W(pBLN=%"
+						PRI_IDX ", stepN=%i).\n", cudaGetErrorString(cuda_status), pBLN, stepN );
+		#endif
+		///////////////////////////////
 	}
 
 	// -----------------------
@@ -1143,41 +1186,35 @@ void update_W( void )
 
 			cudaStreamWaitEvent( stream_W, event_W, 0 );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess ) {
-					fflush(stdout);
-					fprintf(stderr, "\n[GPU%" PRI_IDX "] Error: could not delay operations until event_H completes: %s\n"
-						"Error in update_W(pBLN=%" PRI_IDX ", stepN=%i).\n", device_id, cudaGetErrorString(cuda_status),
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error: could not delay operations until event_H completes: %s\n"
+						"Error in update_W(pBLN=%" PRI_IDX ", stepN=%i).\n", cudaGetErrorString(cuda_status),
 						pBLN, stepN );
-				}
-			#endif
-			///////////////////////////////
+		#endif
+		///////////////////////////////
 	}
 
 	// -----------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n-----End of update_W(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n", pBLN, rowIdx, stepN );
+		print_message( true, "\n-----End of update_W(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n", pBLN, rowIdx, stepN );
 	#endif
 
 } // update_W
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Computes classification vector from matrix d_H (full size).
- * Result is downloaded from the GPU and stored in 'classification[]'.
+ * Computes classification vector from matrix d_H (full size), and stores it in "ld_classification[]".
+ * Then it is downloaded from the GPU and stored in "lh_classification[]".
  */
-void get_classification( index_t *__restrict__ classification )
+void get_classification( index_t *__restrict__ ld_classification, index_t *__restrict__ lh_classification )
 {
 
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-		printf("\n[GPU%" PRI_IDX "] get_classification()...\n", device_id );
-	#elif defined(NMFGPU_VERBOSE_2)
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nget_classification()...\n");
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+		print_message( true, "get_classification()...\n" );
 	#endif
 
 	// ---------------------------------
@@ -1193,13 +1230,13 @@ void get_classification( index_t *__restrict__ classification )
 			#if NMFGPU_DEBUG
 				true, "d_H", "d_classification",
 			#endif
-			stream_A, d_classification );
+			stream_A, ld_classification );
 
 	// ------------------------------
 
 	// Downloads output vector.
 
-	download_matrix_int( classification, 1, Mp, d_classification,
+	download_matrix_int( lh_classification, 1, Mp, ld_classification,
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 					M, false, "classification", "d_classification",
 				#endif
@@ -1216,16 +1253,13 @@ void get_classification( index_t *__restrict__ classification )
 
 	// -----------------------------
 
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-		printf("\n[GPU%" PRI_IDX "] get_classification()... Done.\n",device_id);
-	#elif defined(NMFGPU_VERBOSE_2)
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\nget_classification()... Done.\n");
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+		print_message( true, "get_classification()... Done.\n" );
 	#endif
 
 } // get_classification
 
-/////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * WH(BLN,Mp) = W(BLN,Kp) * H(M,Kp)
@@ -1239,8 +1273,7 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t\t-----get_dot_VWH_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
+		print_message( true, "\n\t\t\t\t-----get_dot_VWH_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
 	#endif
 
 	// ---------------------------------
@@ -1260,18 +1293,22 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 	#ifdef NMFGPU_DEBUG
 		cublas_status =
 	#endif
+
 		// streams_NMF[ psNMF_N ]
 		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, &d_W[ rowIdx * Kp ], Kp, d_zero, d_WH, Mp );
 
-			#ifdef NMFGPU_DEBUG
-			///////////////////////////////
-				printf("\n--- [GPU%" PRI_IDX "] Resulting WHrow=W*H (BLN=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%" PRI_IDX
-					"): ---\n", device_id, BLN, Mp, rowIdx );
-				check_cublas_status_st( cublas_status );
-				check_cuda_status();
-				show_device_matrix( d_WH, BLN, M, Mp, false, NULL );
-			/////////////////////////////
-			#endif
+	#ifdef NMFGPU_DEBUG
+	///////////////////////////////
+	{
+		bool const shown_by_all = true;
+		print_message( shown_by_all, "--- Resulting WHrow=W*H (BLN=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%" PRI_IDX
+				"): ---\n", BLN, Mp, rowIdx );
+		check_cublas_status_st( cublas_status );
+		check_cuda_status();
+		show_device_matrix( d_WH, BLN, M, Mp, false, shown_by_all, NULL );
+	}
+	/////////////////////////////
+	#endif
 
 	// ---------------------------
 
@@ -1304,10 +1341,10 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 		#endif
 			CUBLAS_R_DOT( cublas_handle, M, pd_WH, 1, pd_WH, 1, pd_dot_VWH );
 
-			#ifdef NMFGPU_DEBUG
-				if ( cs != CUBLAS_STATUS_SUCCESS );
-					cublas_status = cs;
-			#endif
+		#ifdef NMFGPU_DEBUG
+			if ( cs != CUBLAS_STATUS_SUCCESS );
+				cublas_status = cs;
+		#endif
 
 		// --------------------
 
@@ -1332,22 +1369,23 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 
 			cudaStreamWaitEvent( streams_NMF[ stream_idx ], event_Vrow, 0 );
 
-			#ifdef NMFGPU_DEBUG
-				if ( ce != cudaSuccess );
-					cuda_status = ce;
-			#endif
+		#ifdef NMFGPU_DEBUG
+			if ( ce != cudaSuccess );
+				cuda_status = ce;
+		#endif
 
 		// --------------------
 
 		#ifdef NMFGPU_DEBUG
-		cublasStatus_t cs =
+			cublasStatus_t cs =
 		#endif
+
 			CUBLAS_R_DOT( cublas_handle, M, pd_WH, 1, pd_WH, 1, pd_dot_VWH );
 
-			#ifdef NMFGPU_DEBUG
-				if ( cs != CUBLAS_STATUS_SUCCESS );
-					cublas_status = cs;
-			#endif
+		#ifdef NMFGPU_DEBUG
+			if ( cs != CUBLAS_STATUS_SUCCESS );
+				cublas_status = cs;
+		#endif
 
 		// --------------------
 
@@ -1360,13 +1398,16 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 
 	#ifdef NMFGPU_DEBUG
 	///////////////////////////////
-		printf("\n--- [GPU%" PRI_IDX "] Resulting d_dot_VWH[] in get_dot_VWH_BLN(BLN=%" PRI_IDX ", Mp=%" PRI_IDX
-			", rowIdx=%" PRI_IDX "): ---\n", device_id, BLN, Mp, rowIdx );
+	{
+		bool const shown_by_all = true;
+		print_message( shown_by_all, "--- Resulting d_dot_VWH[] in get_dot_VWH_BLN(BLN=%" PRI_IDX ", Mp=%" PRI_IDX
+				", rowIdx=%" PRI_IDX "): ---\n", BLN, Mp, rowIdx );
 		check_cublas_status_st( cublas_status );
 		check_cuda_status_st( cuda_status );
-		show_device_matrix( &d_dot_VWH[ rowIdx ], 1, BLN, BLN, false, NULL );
+		show_device_matrix( &d_dot_VWH[ rowIdx ], 1, BLN, BLN, false, shown_by_all, NULL );
 		cublas_status = CUBLAS_STATUS_SUCCESS;	// Resets status values.
 		cuda_status = cudaSuccess;
+	}
 	/////////////////////////////
 	#endif
 
@@ -1394,22 +1435,23 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 
 			cudaStreamWaitEvent( streams_NMF[ stream_idx ], event_Vrow, 0 );
 
-			#ifdef NMFGPU_DEBUG
-				if ( ce != cudaSuccess );
-					cuda_status = ce;
-			#endif
+		#ifdef NMFGPU_DEBUG
+			if ( ce != cudaSuccess );
+				cuda_status = ce;
+		#endif
 
 		// --------------------
 
 		#ifdef NMFGPU_DEBUG
 			cublasStatus_t cs =
 		#endif
+
 			CUBLAS_R_DOT( cublas_handle, M, pd_Vrow, 1, pd_Vrow, 1, pd_dot_V );
 
-			#ifdef NMFGPU_DEBUG
-				if ( cs != CUBLAS_STATUS_SUCCESS );
-					cublas_status = cs;
-			#endif
+		#ifdef NMFGPU_DEBUG
+			if ( cs != CUBLAS_STATUS_SUCCESS );
+				cublas_status = cs;
+		#endif
 
 		// --------------------
 
@@ -1423,17 +1465,20 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 
 	#ifdef NMFGPU_DEBUG
 	///////////////////////////////
-		printf("\n--- [GPU%" PRI_IDX "] Resulting d_dot_V[] in get_dot_VWH_BLN(BLN=%" PRI_IDX ", Mp=%" PRI_IDX
-			", rowIdx=%" PRI_IDX "): ---\n", device_id, BLN, Mp, rowIdx );
+	{
+		bool const shown_by_all = true;
+		print_message( shown_by_all, "--- Resulting d_dot_V[] in get_dot_VWH_BLN(BLN=%" PRI_IDX ", Mp=%" PRI_IDX
+				", rowIdx=%" PRI_IDX "): ---\n", BLN, Mp, rowIdx );
 		check_cublas_status_st( cublas_status );
 		check_cuda_status_st( cuda_status );
-		show_device_matrix( &d_dot_V[ rowIdx ], 1, BLN, BLN, false, NULL );
+		show_device_matrix( &d_dot_V[ rowIdx ], 1, BLN, BLN, false, shown_by_all, NULL );
+	}
 	/////////////////////////////
 	#endif
 
 } // get_dot_VWH_BLN
 
-// =======================================================================
+// ---------------------------------------------
 
 /*
  * WH(BLN,Mp) = W(BLN,Kp) * H(M,Kp)
@@ -1447,8 +1492,7 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t-----get_dot_VWH_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( true, "\n\t\t-----get_dot_VWH_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
 				BLN, num_steps, stepN );
 	#endif
 
@@ -1474,9 +1518,8 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 	for ( index_t st = 1 ; st < num_steps ; st++ ) {
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t-----get_dot_VWH_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLN=%" PRI_IDX ", stepN=%i)-----\n",
-				st, num_steps, BLN, stepN );
+			print_message( true, "\n\t\t\t-----get_dot_VWH_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLN=%" PRI_IDX
+					", stepN=%i)-----\n", st, num_steps, BLN, stepN );
 		#endif
 
 		// ----------------
@@ -1487,10 +1530,9 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 		rowIdx += (stepN * BLN);
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			///////////////////////////////
-			printf("\n--- [GPU%" PRI_IDX "]: Vrow processed (BLN=%" PRI_IDX ", new rowIdx=%" PRI_IDX "): ---\n",
-				device_id, BLN, rowIdx);
-			//////////////////////////////
+		///////////////////////////////
+			print_message( true, "--- Vrow processed (BLN=%" PRI_IDX ", new rowIdx=%" PRI_IDX "): ---\n", BLN, rowIdx );
+		//////////////////////////////
 		#endif
 
 		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
@@ -1521,9 +1563,8 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 		get_dot_VWH_BLN( BLN, d_dot_VWH, d_dot_V );
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t\t-----get_dot_VWH_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLN=%" PRI_IDX
-				", stepN=%i)-----\n", st, num_steps, BLN, stepN );
+			print_message( true, "\n\t\t\t-----get_dot_VWH_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLN=%"
+					PRI_IDX ", stepN=%i)-----\n", st, num_steps, BLN, stepN );
 		#endif
 
 	} // for ( st=1 ; st<num_steps ; st++ )
@@ -1531,14 +1572,13 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 	// --------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t\t-----End of get_dot_VWH_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( true, "\n\t\t-----End of get_dot_VWH_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
 				BLN, num_steps, stepN );
 	#endif
 
 } // get_dot_VWH_loop
 
-// =======================================================================
+// ---------------------------------------------
 
 /*
  * WH(BLN,Mp) = W(BLN,Kp) * H(M,Kp)
@@ -1556,8 +1596,7 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n-----get_dot_VWH_N(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n", pBLN, rowIdx, stepN);
+		print_message( true, "\n-----get_dot_VWH_N(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n", pBLN, rowIdx, stepN);
 	#endif
 
 	// ----------------------------------
@@ -1597,12 +1636,10 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess ) {
-				fflush(stdout);
-				fprintf(stderr, "\n[GPU%" PRI_IDX "] Error: Could not delay operations until d_H is ready: %s\n"
-					"Error in get_dot_VWH_N(psNMF_N=%" PRI_IDX ", pBLN=%" PRI_IDX ", stepN=%i).\n", device_id,
-					cudaGetErrorString(cuda_status), psNMF_N, pBLN, stepN );
-			}
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error: Could not delay operations until d_H is ready: %s\n"
+						"Error in get_dot_VWH_N(psNMF_N=%" PRI_IDX ", pBLN=%" PRI_IDX ", stepN=%i).\n",
+						cudaGetErrorString(cuda_status), psNMF_N, pBLN, stepN );
 		#endif
 		///////////////////////////////
 	}
@@ -1623,9 +1660,8 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 	if ( block_N.num_steps[1] ) {  // There are more blocks in dimension "N" to process.
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t-----get_dot_VWH_N(pBLN=%" PRI_IDX ",stepN=%i,psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX
-				"): New block-----\n", pBLN, stepN, psNMF_N, rowIdx );
+			print_message( true, "\n\t-----get_dot_VWH_N(pBLN=%" PRI_IDX ",stepN=%i,psNMF_N=%" PRI_IDX ", rowIdx=%"
+					PRI_IDX "): New block-----\n", pBLN, stepN, psNMF_N, rowIdx );
 		#endif
 
 		// Updates pointers to Vrow (HOST matrix) and d_W (DEVICE matrix) and changes block information.
@@ -1672,17 +1708,18 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 		// Transfers (asynchronously) a new <BLN x M> block from Vrow to d_Vrow.
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n\t-----get_dot_VWH_N: New block (pBLN=%" PRI_IDX ", stepN=%i, BLN=%" PRI_IDX ", num_steps=%" PRI_IDX
-				", psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", pBLN, stepN, BLN, num_steps, psNMF_N, rowIdx );
+			print_message( true, "\n\t-----get_dot_VWH_N: New block (pBLN=%" PRI_IDX ", stepN=%i, BLN=%" PRI_IDX
+					", num_steps=%" PRI_IDX ", psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", pBLN,
+					stepN, BLN, num_steps, psNMF_N, rowIdx );
 		#endif
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			///////////////////////////////
-			printf("\n--- [GPU%" PRI_IDX "]: Vrow processed (BLN=%" PRI_IDX ", M=%" PRI_IDX ", Mp=%" PRI_IDX
-				", rowIdx=%" PRI_IDX "): ---\n", device_id, BLN, M, Mp, rowIdx );
-			//////////////////////////////
+		///////////////////////////////
+			print_message( true, "--- Vrow processed (BLN=%" PRI_IDX ", M=%" PRI_IDX ", Mp=%" PRI_IDX
+				", rowIdx=%" PRI_IDX "): ---\n", BLN, M, Mp, rowIdx );
+		//////////////////////////////
 		#endif
+
 		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 						M, "Vrow", "d_Vrow",
@@ -1710,9 +1747,8 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 		stepN *= (-1);
 
 		#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf("\n\t-----get_dot_VWH_N: End of new block (pBLN=%" PRI_IDX ", BLN=%" PRI_IDX ", num_steps=%" PRI_IDX
-				"). New StepN=%i -----\n", pBLN, BLN, num_steps, stepN );
+			print_message( true, "\n\t-----get_dot_VWH_N: End of new block (pBLN=%" PRI_IDX ", BLN=%" PRI_IDX
+					", num_steps=%" PRI_IDX "). New StepN=%i -----\n", pBLN, BLN, num_steps, stepN );
 		#endif
 
 	} // if ( block_N.num_steps[1] > 0 )
@@ -1727,15 +1763,13 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 
 			cudaEventRecord( event_W, 0 );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess ) {
-					fflush(stdout);
-					fprintf( stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in get_dot_VWH_N(pBLN=%"
-						PRI_IDX ", stepN=%i).\n", device_id, cudaGetErrorString(cuda_status), pBLN, stepN );
-				}
-			#endif
-			///////////////////////////////
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error recording CUDA event: %s\nError in get_dot_VWH_N(pBLN=%"
+						PRI_IDX ", stepN=%i).\n", cudaGetErrorString(cuda_status), pBLN, stepN );
+		#endif
+		///////////////////////////////
 	}
 
 	// -----------------------
@@ -1748,29 +1782,26 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 
 			cudaStreamWaitEvent( stream_W, event_W, 0 );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess ) {
-					fflush(stdout);
-					fprintf(stderr, "\n[GPU%" PRI_IDX "] Error: could not delay operations until event_H completes: %s\n"
-							"Error in get_dot_VWH_N(pBLN=%" PRI_IDX ", stepN=%i).\n", device_id,
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error: could not delay operations until event_H completes: %s\n"
+						"Error in get_dot_VWH_N(pBLN=%" PRI_IDX ", stepN=%i).\n",
 						cudaGetErrorString(cuda_status), pBLN, stepN );
-				}
-			#endif
-			///////////////////////////////
+		#endif
+		///////////////////////////////
 	}
 
 	// -----------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n-----End of get_dot_VWH_N(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( true, "\n-----End of get_dot_VWH_N(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
 				pBLN, rowIdx, stepN);
 	#endif
 
 } // get_dot_VWH_N
 
-// =======================================================================
+// ---------------------------------------------
 
 /*
  * WH(BLN,Mp) = W(BLN,Kp) * H(M,Kp)
@@ -1787,8 +1818,8 @@ static void get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n-----get_dot_VWH(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n", pBLN, rowIdx, stepN);
+		print_message( true, "\n-----get_dot_VWH(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
+				pBLN, rowIdx, stepN);
 	#endif
 
 	#ifdef NMFGPU_DEBUG
@@ -1815,10 +1846,10 @@ static void get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_
 		#endif
 			CUBLAS_R_ASUM( cublas_handle, N, d_dot_VWH, 1, d_scalars_VWH );	// streams_NMF[ psNMF_N ]
 
-			#ifdef NMFGPU_DEBUG
-				if ( cs != CUBLAS_STATUS_SUCCESS );
-					cublas_status = cs;
-			#endif
+		#ifdef NMFGPU_DEBUG
+			if ( cs != CUBLAS_STATUS_SUCCESS );
+				cublas_status = cs;
+		#endif
 	}
 
 	// -----------------------
@@ -1840,20 +1871,23 @@ static void get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_
 			// streams_NMF[ (psNMF_N + 1) % num_streams_NMF ]
 			CUBLAS_R_ASUM( cublas_handle, N, d_dot_V, 1, &d_scalars_VWH[1] );
 
-			#ifdef NMFGPU_DEBUG
-				if ( cs != CUBLAS_STATUS_SUCCESS );
-					cublas_status = cs;
-			#endif
+		#ifdef NMFGPU_DEBUG
+			if ( cs != CUBLAS_STATUS_SUCCESS );
+				cublas_status = cs;
+		#endif
 	}
 
 	// -----------------------
 
 	#ifdef NMFGPU_DEBUG
 	///////////////////////////////
-		printf("\n--- [GPU%" PRI_IDX "] Resulting scalars in get_dot_VWH(): ---\n", device_id );
+	{
+		bool const shown_by_all = true;
+		print_message( shown_by_all, "--- Resulting scalars in get_dot_VWH(): ---\n" );
 		check_cublas_status_st( cublas_status );
 		check_cuda_status();
-		show_device_matrix( d_scalars_VWH, 1, 2, 2, false, NULL );
+		show_device_matrix( d_scalars_VWH, 1, 2, 2, false, shown_by_all, NULL );
+	}
 	/////////////////////////////
 	#endif
 
@@ -1867,15 +1901,13 @@ static void get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_
 
 			cudaEventRecord( event_W, 0 );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess ) {
-					fflush(stdout);
-					fprintf( stderr, "\n[GPU%" PRI_IDX "] Error recording CUDA event: %s\nError in get_dot_VWH(pBLN=%"
-						PRI_IDX ", stepN=%i).\n", device_id, cudaGetErrorString(cuda_status), pBLN, stepN );
-				}
-			#endif
-			///////////////////////////////
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error recording CUDA event: %s\nError in get_dot_VWH(pBLN=%"
+						PRI_IDX ", stepN=%i).\n", cudaGetErrorString(cuda_status), pBLN, stepN );
+		#endif
+		///////////////////////////////
 	}
 
 	// -----------------------
@@ -1888,29 +1920,26 @@ static void get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_
 
 			cudaStreamWaitEvent( stream_W, event_W, 0 );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess ) {
-					fflush(stdout);
-					fprintf(stderr, "\n[GPU%" PRI_IDX "] Error: could not delay operations until event_H completes: %s\n"
-							"Error in get_dot_VWH(pBLN=%" PRI_IDX ", stepN=%i).\n", device_id,
+		///////////////////////////////
+		#if NMFGPU_DEBUG
+			if ( cuda_status != cudaSuccess )
+				print_error( true, "Error: could not delay operations until event_H completes: %s\n"
+						"Error in get_dot_VWH(pBLN=%" PRI_IDX ", stepN=%i).\n",
 						cudaGetErrorString(cuda_status), pBLN, stepN );
-				}
-			#endif
-			///////////////////////////////
+		#endif
+		///////////////////////////////
 	}
 
 	// -----------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n-----End of get_dot_VWH(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( true, "\n-----End of get_dot_VWH(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
 				pBLN, rowIdx, stepN);
 	#endif
 
 } // get_dot_VWH
 
-// =======================================================================
+// ---------------------------------------------
 
 /*
  * Computes the following dot products:
@@ -1925,21 +1954,32 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		if ( (! device_id) + (num_devices == 1) )
-			printf( "\n-----Starting dot_product_VWH( rowIdx=%" PRI_IDX " )-----\n", rowIdx);
+		print_message( true, "\n-----Starting dot_product_VWH( rowIdx=%" PRI_IDX " )-----\n", rowIdx);
 	#endif
 
-	/* Sets pointers to be used as data matrix.
-	 * We can use "d_Aux", since we need memory for two N-length vectors,
-	 * and size(d_Aux) == (MAX(N,M) * Kp), (with Kp >= memory_alignment).
+	/* Sets pointers to be used as data matrix. We can use "d_Aux", since we need memory for two
+	 * N-length vectors, and size(d_Aux) == (MAX(N,M) * Kp), (with Kp >= memory_alignment).
 	 */
 	real *d_dot_VWH = d_Aux;
 	real *d_dot_V = &d_Aux[ N ];
 
-	/* Such vectors will be later reduced. Resulting scalars will be
-	 * stored in d_scalars_VWH[2]. We can use d_accum[2] for that.
+	/* Such vectors will be later reduced. Resulting scalars will be stored in d_scalars_VWH[2]
+	 * (we can reuse d_accum[Kp] for that). Then, the scalars will be downloaded to h_scalars_VWH[2].
+	 *
+	 * HACK:
+	 *	When host memory is mapped into the address space of the device, d_scalars_VWH[] is actually
+	 *	a pointer to a vector stored in host memory. So, we just need to set h_scalars_VWH to point
+	 *	such array.
+	 *	On the other hand, if memory was NOT mapped, we need a local vector to store the values
+	 *	downloaded from d_scalars_VWH[2].
 	 */
-	real *d_scalars_VWH = d_accum;
+
+	real *d_scalars_VWH = d_accum;		// Results in DEVICE memory.
+	real *h_scalars_VWH = h_accum;		// Results in HOST memory (if it WAS mapped).
+
+	real scalars_VWH[ 2 ];			// Results in HOST memory (if it was NOT mapped).
+	if ( ! mappedHostMemory )
+		h_scalars_VWH = &scalars_VWH[0];
 
 	// ----------------------------------------
 
@@ -1956,17 +1996,14 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 
 	// Downloads partial results.
 
-	// Size = 2: d_dot_VWH and d_dot_V
-	real h_dot_VWH[ 2 ];
-
-	download_matrix( h_dot_VWH, 1, 2, d_scalars_VWH,
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				2, false, "h_dot_VWH", "d_scalars_VWH",
-			#endif
-			#if NMFGPU_PROFILING_TRANSF
-			NULL,
-			#endif
-			stream_W );
+	download_matrix( h_scalars_VWH, 1, 2, d_scalars_VWH,
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+					2, false, "h_dot_VWH", "d_scalars_VWH",
+				#endif
+				#if NMFGPU_PROFILING_TRANSF
+					NULL,
+				#endif
+				stream_W );
 
 	// Waits for the results...
 	sync_GPU( stream_W );
@@ -1974,16 +2011,17 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 	// ----------------------------------------
 
 	#if NMFGPU_DEBUG || NMFGPU_VERBOSE
-		///////////////////////////////
-		printf("\n[GPU%" PRI_IDX "] dot_product_VWH: dot_VWH=%g dot_V=%g\n", device_id, h_dot_VWH[0], h_dot_VWH[1] );
-		///////////////////////////////
+	///////////////////////////////
+		print_message( true, "dot_product_VWH: dot_VWH=%g dot_V=%g\n", h_scalars_VWH[0], h_scalars_VWH[1] );
+	///////////////////////////////
 	#endif
 
-	*dot_VWH = h_dot_VWH[0];
-	*dot_V = h_dot_VWH[1];
+	*dot_VWH = h_scalars_VWH[0];
+	*dot_V = h_scalars_VWH[1];
 
 	return EXIT_SUCCESS;
 
 } // dot_product_VWH
 
-////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////

@@ -1,8 +1,11 @@
 /************************************************************************
- * Copyright (C) 2011-2013:
  *
- *	Edgardo Mejia-Roa(*), Carlos Garcia, Jose Ignacio Gomez,
- *	Manuel Prieto, Francisco Tirado and Alberto Pascual-Montano(**).
+ * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ *
+ * Copyright (C) 2011-2014:
+ *
+ *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
+ *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
  *
  *	(*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
  *	(**) Functional Bioinformatics Group, Biocomputing Unit,
@@ -12,25 +15,25 @@
  *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-mGPU..
+ * This file is part of bioNMF-GPU.
  *
- * BioNMF-mGPU is free software: you can redistribute it and/or modify
+ * BioNMF-GPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-mGPU is distributed in the hope that it will be useful,
+ * BioNMF-GPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-mGPU.  If not, see <http://www.gnu.org/licenses/>.
+ * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ***********************************************************************/
 /**********************************************************
  * matrix_io.c
- *	I/O methods for working with (labeled) matrices.
+ *	I/O methods for working with tagged matrices.
  *
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
@@ -39,64 +42,946 @@
  *		NMFGPU_DEBUG_READ_MATRIX: Shows information about the matrix being read (e.g., dimensions, labels, etc).
  *		NMFGPU_DEBUG_READ_MATRIX2: Shows detailed information of every datum read.
  *		NMFGPU_TESTING: When set, methods matrix_show() and matrix_int_show() show *ALL* data in matrix (not just a portion).
- *				It also uses the default decimal precision of "%g" format in printf(3) calls.
+ *
+ **********************************************************
+ **********************************************************
+ **********************************************************
+ *
+ * NOTE: In order to improve performance:
+ *
+ *	+ The number of columns is rounded up to a multiple of <memory_alignment>.
+ *	  The padded dimension is referred as "pitch".
+ *
+ *	  This leads to the following limits:
+ *		- Maximum number of columns (padded or not): matrix_max_pitch.
+ *		- Maximum number of rows: matrix_max_non_padded_dim.
+ *		- Maximum number of items: matrix_max_num_items.
+ *
+ *	  All four GLOBAL variables must be initialized with the
+ *	  set_matrix_limits() function.
+ *
+ **********************************************************
+ *
+ * Matrix tags:
+ *
+ * Any matrix may include the following "tag" elements:
+ *
+ *	+ A short description string, referred as "name".
+ *	+ A list of column headers.
+ *	+ A list of row labels.
+ *
+ * Each list is stored in a "struct tag_t" structure, which is composed by:
+ *	+ All tokens stored as a (large) single string.
+ *	+ An array of pointers to such tokens.
+ *
+ * All three elements (the "name" string, and the two tag_t structures) are
+ * then stored in a "struct matrix_tags_t" structure.
+ *
+ * Both types of structure are defined in "matrix_io_routines.h".
+ *
+ ****************
  *
  * WARNING:
- *	- Requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
+ *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
  *
  **********************************************************/
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
+// Required by <inttypes.h>
 #ifndef __STDC_FORMAT_MACROS
-	#define __STDC_FORMAT_MACROS
+	#define __STDC_FORMAT_MACROS (1)
 #endif
-#include <inttypes.h>	/* PRIuMAX, uintmax_t */
-#include <unistd.h>	/* unlink */
-#include <math.h>	/* isfinite */
-#include <ctype.h>	/* isblank, isprint */
-
+#ifndef __STDC_CONSTANT_MACROS
+	#define __STDC_CONSTANT_MACROS (1)
+#endif
 #include "matrix/matrix_io.h"
+#include "common.h"
 
-//////////////////////////////////////////////////
+#include <stdlib.h>
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>	/* unlink */
+#include <ctype.h>	/* isprint */
+#include <inttypes.h>	/* PRIxxx, xxx_C, uintxxx_t */
+#include <math.h>	/* isless */
 
-// Precision used in printf() functions.
-#ifndef DECIMAL_PRECISION
-	#if NMFGPU_TESTING
-		#define DECIMAL_PRECISION ""
-	#else
-		#define DECIMAL_PRECISION ".8"
-	#endif
-#endif
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+/* Constants */
+
+// Signature for binary files.
+#undef BIN_FILE_SIGNATURE
+#define BIN_FILE_SIGNATURE ( 0xB1023F )
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* Data types */
+
+// Data type used on "generic" I/O functions.
+typedef union generic_data_t {
+	real r;
+	index_t i;
+} data_t;
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* Global variables */
+
+// Simple variable and macro to test Endiannes.
+int const endiannes_test = 1;
+#undef IS_BIG_ENDIAN
+#define IS_BIG_ENDIAN() ( ! *((unsigned char const *restrict) &endiannes_test) )
+
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Helper function used by matrix_load_ascii() and matrix_load_ascii_verb().
- *
  * Returns 'true' if the given number is valid (i.e., is NOT 'NaN' or '+/- infinite').
  */
-static inline bool is_valid( real value )
+static bool is_valid( real value )
 {
 
-	// Includes FP_SUBNORMAL numbers as valid values.
+	int const value_type = fpclassify( value );
 
-	return (bool)isfinite( value );
+	return (bool) ( (value_type == FP_ZERO) + (value_type == FP_NORMAL) );
 
 } // is_valid
 
-// -----------------------------------------------
+// ---------------------------------------------
 
 /*
- * Helper function used by matrix_load_ascii() and matrix_load_ascii_verb().
+ * Reads a single line from an ASCII-text file.
+ * It is stored in pmatrix[ 0...((ncols-1)*incr_ncols) ].
  *
- * Returns 'true' if 'str' represents one or more numbers, or an empty string.
- * Returns 'false' otherwise.
+ * If "real_data" is 'true', data are read as 'real' type. Otherwise, they are read as index_t values.
+ *
+ * If "haslabels" is 'true', a label string is read at the beginning of the line. In addition, if "skip_labels" is 'false',
+ * it is appended to *labels, and "labels_length" is updated. If more memory was allocated, "max_labels_length" is also updated.
+ * On the other hand, if "haslabels" is 'false' or "skip_labels" is 'true', "labels" is not referenced.
+ *
+ * Consecutive newline characters and/or an end of file are valid only at the end of the line, in a non-empty file.
+ * Otherwise, they are reported as "invalid file format".
+ *
+ * Finally, sets psum_row, sum_cols, and min_value, if they are non-NULL.
+ *
+ * NOTE: Although some arguments are redundant (e.g., delimiter, delimiter_scn_format, data_scn_format), it is much
+ * faster to pass them as parameters, than using snprintf(3) on every call to generate the same formats strings for scanf(3).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static bool isnumbers( char const *restrict str )
+static int matrix_read_line( FILE *restrict file, index_t current_line, index_t ncols, index_t incr_ncols, bool haslabels, bool skip_labels,
+				int delimiter, char const *restrict delimiter_scn_format, char const *restrict data_scn_format, bool real_data,
+				void *restrict pmatrix, void *restrict psum_row, void *restrict sum_cols, void *restrict min_value,
+				char *restrict *restrict labels, size_t *restrict labels_length, size_t *restrict max_labels_length )
+{
+
+	// Datatype-dependent parameters.
+
+	// Formats strings to be used with fscanf().
+
+	// Format string for delimiter/missing data.
+	size_t const delim_scnfmt_size = 2;
+	char delimiter_scn_format[ delim_scnfmt_size ];
+	sprintf( delimiter_scn_format, "%c", delimiter );
+
+	// Format string for numeric data: data + delimiter
+	size_t const data_scnfmt_size = 8;
+	char data_scn_format[ data_scnfmt_size ];
+	sprintf( data_scn_format, "%%" SCNgREAL "%c", delimiter );
+
+	#if NMFGPU_DEBUG_READ_MATRIX
+		print_message( false, "Format delimiter: '%s' (len=%zu)\nFormat data: '%s' (len=%zu)\n\n", delimiter_scn_format,
+				strlen(delimiter_scn_format), data_scn_format, strlen(data_scn_format) );
+	#endif
+
+
+
+	// Size of data.
+	size_t const data_size = ( real_data ? sizeof(real) : sizeof(index_t) );
+
+
+
+
+
+	if ( haslabels ) {
+
+		#if NMFGPU_DEBUG_READ_MATRIX
+			print_message( false, "\tReading label (skip=%i)...\n", skip_labels );
+		#endif
+
+		// Reads a token.
+		char *restrict data = NULL;
+		int last_char = (int) '\0';
+		size_t const len_data = read_token( file, delimiter, &data, &last_char );
+		if ( ! data ) {
+			if ( len_data )
+				print_error( true, "Error in matrix_read_line()\n" );
+			else
+				print_error( false, "\nError reading input file:\nPremature end-of-file detected at line %" PRI_IDX
+						". Invalid file format.\n", current_line );
+			return EXIT_FAILURE;
+		}
+
+		#if NMFGPU_DEBUG_READ_MATRIX
+			print_message( false, "\t\tLabel(len=%zu): '%s'. Last_char=", len_data, data );
+			if ( last_char == (int) '\n' ) print_message( false, "'\\n'.\n");
+			else if ( last_char == (int) '\r' ) print_message( false, "'\\r'.\n");
+			else if ( isprint(last_char) + isblank(last_char) ) print_message( false, "'%c'.\n", last_char );
+			else if ( last_char == EOF ) print_message( false, "EOF.\n", last_char );
+			else print_message( false, "'\\x%X'.\n", last_char );
+		#endif
+
+		if ( last_char != delimiter ) {	// Blank line.
+			print_error( false, "\nError reading input file: No matrix data at line %" PRI_IDX ". Invalid file format.\n",
+					current_line );
+			free(data);
+			return EXIT_FAILURE;
+		}
+
+		// ---------------------------
+
+		if ( ! skip_labels ) {
+
+			char *labels_str = *labels;			// String where labels are stored.
+			size_t len_labels = *labels_length;		// Current number of characters stored in labels_str.
+			size_t max_len_labels = *max_labels_length;	// Current size of labels_str, in number of characters, not in bytes.
+
+			// Before setting the new label, checks if there is enough memory available.
+			size_t const len = len_labels + len_data + 1;
+
+			if ( len > max_len_labels ) {	// Allocates more memory
+
+				// Sets to the next power of 2.
+				max_len_labels = prev_power_2( len ) * 2;
+
+				#if NMFGPU_DEBUG_READ_MATRIX
+					print_message( false, "\t\tExpanding size of labels to %zu chars.\n", max_len_labels );
+				#endif
+
+				char *restrict const tmp = (char *restrict) realloc( labels_str, max_len_labels * sizeof(char) );
+				if ( ! tmp ) {
+					print_errnum( true, errno, "Error in matrix_read_line(): realloc( labels, max_labels_length=%zu ) ",
+							max_len_labels );
+					free(data);
+					return EXIT_FAILURE;
+				}
+				labels_str = tmp;
+				*labels = tmp;
+				*max_labels_length = max_len_labels;
+
+			} // If allocate more memory for labels
+
+			// Sets the new label
+			strcpy( &labels_str[ len_labels ], data );	// Copies from 'data' the new token.
+			len_labels = len;				// len == (len_labels + len_data + 1)
+			*labels_length = len;
+
+		} // If set the label
+
+		free( data );
+
+	} // if haslabels
+
+	// ----------------------------
+
+	// Reads the data matrix
+
+	#if NMFGPU_DEBUG_READ_MATRIX
+		print_message( false, "\tReading data matrix (ncols=%" PRI_IDX ", incr_ncols=%" PRI_IDX ")...\n", ncols, incr_ncols );
+	#endif
+
+	void *pmatrix_r = pmatrix;
+
+	// First ncols-1 columns
+	for ( index_t col = 0 ; col < (ncols-1) ; col++, pmatrix_r += (incr_ncols * data_size) ) {
+
+		char const fmt
+		char c[2] = { 0, 0 };			// Delimiter to be read.
+		int conv = 0;				// Number of matched items.
+		data_t value;				// Value to be read.
+		memset( &value, 0, sizeof(value) );
+
+
+		// Tries to read a value and a delimiter.
+		errno = 0;
+		conv = fscanf( file, data_scn_format, &value, c );
+
+		#if NMFGPU_DEBUG_READ_MATRIX2
+		{
+			int const err = errno;
+			bool const shown_by_all = false;
+			print_message( shown_by_all, "\tconv=%i,c=", conv );	// conv: number of tokens read.
+			if ( ! c[0] ) print_message( shown_by_all, "(empty)" );
+			else if ( (int) c[0] == delimiter ) print_message( shown_by_all, "delim ('%c')", c[0] );
+			else print_message( shown_by_all, (isgraph(c[0]) ? "%c" : "'\\0x%X'"), c[0] );
+			if ( real_data )
+				print_message( shown_by_all, ",value=%g", value.r );
+			else
+				print_message( shown_by_all, ",value=%" PRI_IDX, value.i );
+			errno = err;
+		}
+		#endif
+
+		/* If no conversion was performed, it might be a missing data,
+		 * so tries to just read the delimiter.
+		 */
+		if ( ! conv ) {
+			char const fmt[2] = { delimiter, '\0' };
+			c[1] = c[0] = 0
+			errno = 0;
+			conv = fscanf( file, fmt, c );
+
+			#if NMFGPU_DEBUG_READ_MATRIX2
+			{
+				int const err = errno;
+				bool const shown_by_all = false;
+				print_message( shown_by_all, " (missing data) ; conv2=%i,c2=", conv );
+				if ( ! c[0] ) print_message( shown_by_all, "(empty)" );
+				else if ( (int) c[0] == delimiter ) print_message( shown_by_all, "delim ('%c')", c[0] );
+				else print_message( shown_by_all, (isgraph(c) ? "%c" : "'\\0x%X'"), c[0] );
+				errno = err;
+			}
+			#endif
+		}
+
+		// Fails on error or premature EOF/EOL.
+		if ( (int) c[0] != delimiter ) {
+			if ( ferror(file) )	// Error.
+				print_errnum( true, errno, "Error in matrix_read_line() reading line %" PRI_IDX
+						", column %" PRI_IDX ": fscanf()", current_line, col + haslabels + 1 );
+			else if ( feof(file) )
+				print_error( false, "\nError reading input file:\nPremature end of file detected in line %" PRI_IDX
+						" (%" PRI_IDX " columns found, %" PRI_IDX " expected).\nInvalid file format.\n",
+						current_line, col + haslabels, ncols + haslabels );
+			else {	// Invalid data or premature EOL.
+				bool const shown_by_all = false;
+				int const chr = ( c[0] ? c[0] : fgetc( file ) );		// (First) Illegal character.
+				if ( (chr == (int) '\n') + (chr == (int) '\r') )	// Premature EOL.
+					print_error( shown_by_all, "\nError reading input file:\nPremature end of line detected at line %"
+							PRI_IDX " (%" PRI_IDX " columns found, %" PRI_IDX " expected).\nInvalid file format.\n",
+							current_line, col + haslabels, ncols + haslabels );
+				else {
+					print_error( shown_by_all, "\nError reading input file at line %" PRI_IDX ", column %" PRI_IDX
+								". Unexpected character: ", current_line, col + haslabels + 1 );
+					print_error( shown_by_all, (isgraph(chr) ? "'%c'\n" : "'\\0x%X'\n"), chr );
+				}
+			}
+			return EXIT_FAILURE;
+		}
+
+		// Sets the new value.
+		memcpy( pmatrix_r, &value, data_size );
+
+	} // for (0 <= col < ncols-1)
+
+	// last file column: col = ncols-1
+	{
+		index_t const col = ncols - 1;
+
+		char c[3] = { 0, 0, 0 };		// Newline to be read ("\r\n" or "\n"), followed by '\0'.
+		int conv = 0;				// Number of matched items.
+		data_t value;				// Value to be read.
+		memset( &value, 0, sizeof(value) );
+
+		// Tries to read a value and the newline.
+		errno = 0;
+		conv = fscanf( file, data_eol_scn_fmt, &value, c );
+
+		#if NMFGPU_DEBUG_READ_MATRIX2
+		{
+			bool const shown_by_all = false;
+			int const err = errno;
+			print_message( shown_by_all, "\tconv(last)=%i,c(last)=", conv );	// conv: number of tokens read.
+			if ( c[0] ) {
+				for ( size_t i = 0 ; i < 2 ; i++ )
+					switch( c[i] ) {
+						case '\0': break;
+						case '\r': { print_message( shown_by_all, "\\r" ); } break;
+						case '\n': { print_message( shown_by_all, "\\n" ); } break;
+						case '\t': { print_message( shown_by_all, "\\t" ); } break;
+						case  ' ': { print_message( shown_by_all, "' '" ); } break;
+						default  : { print_message( shown_by_all, (isgraph(c[0]) ? "'%c'" : "'\\0x%X'"), c[i] ); } break;
+					}
+			} else print_message( shown_by_all, "(empty)" );
+			if ( real_data )
+				print_message( shown_by_all, ",value(last)=%g", value.r );
+			else
+				print_message( shown_by_all, ",value(last)=%" PRI_IDX, value.i );
+			errno = err;
+		}
+		#endif
+
+		/* If no conversion was performed, it might be a missing data,
+		 * so tries to just read the newline.
+		 */
+		if ( ! conv ) {
+			c[2] = c[1] = c[0] = 0;
+			errno = 0;
+			conv = fscanf( file, "%2[\r\n]", c );
+
+			#if NMFGPU_DEBUG_READ_MATRIX2
+			{
+				int const err = errno;
+				bool const shown_by_all = false;
+				print_message( shown_by_all, " (missing data) ; conv2(last)=%i,c2(last)=", conv );
+				if ( c[0] ) {
+					for ( size_t i = 0 ; i < 2 ; i++ )
+						switch( c[i] ) {
+							case '\0': break;
+							case '\r': { print_message( shown_by_all, "\\r" ); } break;
+							case '\n': { print_message( shown_by_all, "\\n" ); } break;
+						}
+				} else print_message( shown_by_all, "(empty)" );
+				errno = err;
+			}
+			#endif
+		}
+
+		// Fails on error, or if neither EOL nor EOF was read.
+		if ( ferror(file) + (! (c[0] + feof(file))) + ((c[0] == '\r') * (c[1] != '\n')) ) {
+			if ( ferror(file) )	// Error.
+				print_errnum( true, errno, "Error in matrix_read_line() at line %" PRI_IDX
+						", column %" PRI_IDX ": fscanf()", current_line, col + haslabels + 1 );
+
+			else if ( c[0] == '\r' ) {  // (c[0] == '\r' && c[1] != '\r')
+				print_error( shown_by_all, "\nError reading input file at line %" PRI_IDX ", column %" PRI_IDX
+						". Unexpected end-of-line: '\\r", current_line, col + haslabels + 1 );
+				print_error( shown_by_all, ( isgraph(chr) ? ("%c'\n") : ("\\0x%X'\n") ), chr );
+
+			} else { // Invalid datum: (!c[0] && !EOF)
+				bool const shown_by_all = false;
+				int const chr = fgetc( file );		// (First) Illegal character.
+				if ( chr == delimiter )			// There are more than <ncols> columns.
+					print_error( shown_by_all, "\nError reading input file at line %" PRI_IDX ": Invalid file format.\n"
+							"There are more than %" PRI_IDX " columns.\n", current_line, ncols + haslabels );
+				else {
+					print_error( shown_by_all, "\nError reading input file at line %" PRI_IDX ", column %" PRI_IDX
+							". Unexpected character: ", current_line, col + haslabels + 1 );
+					print_error( shown_by_all, ( isgraph(chr) ? ("'%c'\n") : ("'\\0x%X'\n") ), chr );
+				}
+			}
+			return EXIT_FAILURE;
+		}
+
+		// Returns any character that belongs to the next line.
+		if ( ((c[0] == '\n') * c[1]) && (ungetc(c[1], file) == EOF) ) {
+			print_errnum( true, errno, "Error in matrix_read_line() at line %" PRI_IDX
+					", column %" PRI_IDX ": ungetc()", current_line, col + haslabels + 1 );
+			return EXIT_FAILURE;
+		}
+
+		// Finally, sets the new value.
+		memcpy( pmatrix_r, &value, data_size );
+
+	} // last column.
+
+	// -----------------------------
+
+
+		// If the last character read was a CR ('\r'), reads the corresponding LF ('\n') character.
+		if ( c[0] == '\r' ) {
+
+			int const chr = fgetc(file);
+
+			#if NMFGPU_DEBUG_READ_MATRIX2
+				print_message( false, "c_final=" );
+				if ( ! chr ) print_message( false, "(empty)\n" );
+				else if ( chr == (int) '\n' ) print_message( false, "'\\n'\n" );
+				else if ( chr == (int) '\r' ) print_message( false, "'\\r'\n" );
+				else if ( chr == EOF ) print_message( false, "EOF\n", chr);
+				else print_message( false, ( (isprint(chr) + isblank(chr)) ? "'%c'\n" : "'\\x%X'\n"), chr );
+			#endif
+
+			// Fails on error, or if it is not an LF or an EOF character.
+			if ( ferror(file) + ( (chr != (int)'\n') * (chr != EOF) ) ) {
+				if ( ferror(file) )
+					print_error( true, "\nError in matrix_read_line() reading line %" PRI_IDX ": fgetc('\\n').\n",
+							current_line );
+				else {
+					print_error( false, "\nError reading input file in line %" PRI_IDX ", column %" PRI_IDX
+							": unexpected character after a CR ('\\r'): ", current_line, col + haslabels + 1 );
+					print_error( false, ( (isprint(chr) + isblank(chr)) ?
+							("'%c'.\nInvalid file format.\n") : ("'\\x%X'.\nInvalid file format.\n") ), chr );
+				}
+				return EXIT_FAILURE;
+			}
+
+		} // if last character read was a CR ('\r').
+
+	// -----------------------------
+
+
+	void *psum_cols = sum_cols;
+
+			// It also checks for invalid format on 'real'-type data.
+			bool const invalid_real_value = real_data * ( ! is_valid( value.r ) );
+
+					else if ( invalid_real_value )
+						print_error( false, ": %g\n", value.r );
+
+
+			// Sets some of the output values, if they are non-NULL.
+			if ( real_data ) {
+
+				real *const psr = (real *) psum_row;
+				if ( psr )
+					*psr += value.r;
+
+				real *const psc = (real *) psum_cols;
+				if ( psc )
+					*psc += value.r;
+
+			} else {
+
+				index_t *const psr = (index_t *) psum_row;
+				if ( psr )
+					*psr += value.i;
+
+				index_t *const psc = (index_t *) psum_cols;
+				if ( psc )
+					*psc += value.i;
+			}
+
+
+		// ... and updates the minimum, if non-NULL.
+		if ( min_value ) {
+			if ( real_data ) {
+				real *const pmv = (real *) min_value;
+				*pmv = MIN( *pmv, value.r );	// value.r has been checked already.
+			} else {
+				index_t *const pmv = (index_t *) min_value;
+				*pmv = MIN( *pmv, value.i );
+			}
+		}
+
+		if ( psum_cols )
+			psum_cols += (incr_ncols * data_size);
+
+
+
+
+
+	return EXIT_SUCCESS;
+
+} // matrix_read_line
+
+// ---------------------------------------------
+
+/*
+ * Loads a matrix from an ASCII-text file.
+ *
+ * If "real_data" is 'true', data are read as 'real' type. Otherwise, they are read as index_t values.
+ *
+ * Skips name, headers and labels if 'mt' is NULL.
+ *
+ * If (*matrix)  is non-NULL, do not allocates memory but uses the supplied one.
+ * WARNING: In such case, THERE MUST BE ENOUGH MEMORY ALREADY ALLOCATED.
+ *
+ * Detects the symbol used as delimiter (tab or white space).
+ *
+ * If "transpose" is 'true', transposes matrix in memory as follows:
+ *	- Reads from file <nrows> rows, and <ncols> columns.
+ *	- Writes to memory: <ncols> rows, and <nrows> columns (padded to <pitch>).
+ *	- Reads <ncols> column headers (set as mt->headers) and <nrows> row labels (set as mt->labels).
+ *
+ * WARNING:
+ *	- If "transpose" is 'true', nrows must be <= pitch. Else, ncols must be <= pitch
+ *	- NO error checking is performed to detect negative data or empty rows/columns.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+static int matrix_read_ascii( char const *restrict filename, index_t nrows, index_t ncols, index_t pitch, bool hasname, bool hasheaders,
+			bool haslabels, bool transpose, bool real_data, void *restrict *restrict matrix, struct matrix_tags_t *restrict mt )
+{
+
+	// Size of data
+	size_t const data_size = ( real_data ? sizeof(real) : sizeof(index_t) );
+
+	// Limits on matrix dimensions
+	size_t const max_num_items = matrix_max_num_items;
+	index_t const max_pitch = matrix_max_pitch;
+	index_t const max_non_padded_dim = matrix_max_non_padded_dim;
+
+	// Name and headers
+	char *restrict name = NULL;
+	struct tag_t headers = new_empty_tag();
+
+	// Labels
+	struct tag_t labels = new_empty_tag();
+	size_t max_len_labels = 0;		// Allocated memory for labels.tokens
+	size_t len_labels = 0;			// Memory currently used in labels.tokens.
+
+	// Skips name, headers and labels if mt is NULL.
+	bool const skip = ! mt;	// ( mt == NULL )
+
+	// Delimiter character (TAB by default).
+	int delimiter = (int) '\t';
+
+	// Line number to be read.
+	index_t nlines = 1;
+
+	////////////////////////////////
+
+	// Checks for NULL pointers
+	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix ) ) {
+		int const errnum = EFAULT;
+		bool const shown_by_all = false;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_read_ascii( filename )" );
+		if ( ! matrix ) print_errnum( shown_by_all, errnum, "\nmatrix_read_ascii( matrix )" );
+		return EXIT_FAILURE;
+	}
+
+	// Checks matrix dimensions
+	{
+		index_t const dim_major = ( transpose ? ncols : nrows );
+		uintmax_t const nitems = (uintmax_t) dim_major * (uintmax_t) pitch;
+
+		if ( (nrows <= 0) + (ncols <= 0) + (pitch <= 0) ) {
+			print_error( false, "\nError in matrix_read_ascii( rows=%" PRI_IDX ", columns=%" PRI_IDX ", pitch=%" PRI_IDX
+					"transpose=%i ): Invalid matrix dimensions.\n", nrows, ncols, pitch, transpose );
+			return EXIT_FAILURE;
+		}
+
+		if ( (pitch > max_pitch) + (dim_major > max_non_padded_dim) + (nitems > (uintmax_t) max_num_items) ) {
+			print_error( false, "\nSorry, but your matrix exceeds the limits for matrix dimensions.\n"
+					"On this system and with the given input arguments, data matrices are limited to:\n"
+					"\t* %" PRI_IDX " rows.\n\t*%" PRI_IDX " columns.\n\t*%zu items.\n",
+					max_non_padded_dim, max_pitch, max_num_items );
+			return EXIT_FAILURE;
+		}
+
+		if ( transpose ) {
+			if ( nrows > pitch ) {
+				print_error( false, "\nError in matrix_read_ascii( rows=%" PRI_IDX ", pitch=%" PRI_IDX
+						", transpose: yes ): Invalid values.\n", nrows, pitch );
+				return EXIT_FAILURE;
+			}
+		} else if ( ncols > pitch ) {
+			print_error( false, "\nError in matrix_read_ascii( columns=%" PRI_IDX ", pitch=%" PRI_IDX " ): Invalid values.\n",
+					ncols, pitch );
+				return EXIT_FAILURE;
+		}
+	}
+
+	// -----------------------------
+
+	// Starts Reading ...
+
+	FILE *restrict const file = fopen( filename, "r" );
+	if ( ! file ) {
+		print_errnum( true, errno, "Error in matrix_read_ascii(): fopen( %s )", filename );
+		return EXIT_FAILURE;
+	}
+
+	// ----------------------------
+
+	// Name and/or headers.
+
+	if ( hasname + hasheaders ) {
+
+		size_t ntokens = 0;
+
+		#if NMFGPU_DEBUG_READ_MATRIX
+			print_message( false, "\t\tReading name/headers...\n" );
+		#endif
+
+		int const status = read_tag( file, delimiter, &headers, NULL, &ntokens );
+
+		#if NMFGPU_DEBUG_READ_MATRIX
+			print_message( false, "\t\t\tstatus=%i, ntokens=%zu\n", status, ntokens );
+		#endif
+
+		if ( status ) {	// EOF, error, or invalid format
+			if ( status == 1 )	// EOF
+				print_error( false, "\nError reading input file: file is empty?\n" );
+			else if ( status == 2 )	// Internal error.
+				print_error( true, "Error in matrix_read_ascii( line 1 ).\n" );
+			else	// 3: Maximum line length
+				print_error( false, "Is your data matrix stored in a single text line?\nPlease check also for "
+						"any invalid line terminator. Only LF ('\\n') and CR+LF ('\\r\\n') are accepted.\n" );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+
+		if ( skip ) {
+			clean_tag( headers );
+			headers = new_empty_tag();
+		} else {
+
+			// Checks for proper number of tokens.
+
+			// If only one token, and there should be more, "retokenizes" using space as delimiter.
+			if ( (ntokens == 1) * hasheaders * (hasname + ncols - 1) ) {	// (hasname || ncols > 1)
+
+				// Sets the new delimiter.
+				delimiter = (int) ' ';
+
+				#if NMFGPU_DEBUG_READ_MATRIX
+					print_message( false, "\t\t\t\"Retokenizing\" data on line 1 (hasname=%i, hasheaders=%i, ncols=%"
+							PRI_IDX ")...\n", hasname, hasheaders, ncols );
+				#endif
+
+				// Removes previous array of pointers to tokens.
+				char *restrict data = (char *restrict) headers.tokens;
+				free( (void *) headers.ptokens );
+				ntokens = 0;
+
+				headers = tokenize( data, delimiter, &ntokens );
+
+				#if NMFGPU_DEBUG_READ_MATRIX
+					print_message( false, "\t\t\tLine 1 (headers): %s, num_tokensL1=%zu\n",
+						       ( headers.tokens ? "non-NULL" : "NULL" ), ntokens );
+				#endif
+
+				if ( ! headers.tokens ) {
+					print_error( true, "Error in matrix_read_ascii(): re-tokenize line 1 (hasname=%i, hasheaders=%i, "
+							"ncols=%" PRI_IDX ").\n", hasname, hasheaders, ncols );
+					free( (void *) data );
+					fclose(file);
+					return EXIT_FAILURE;
+				}
+
+			} // If only one token
+
+			if ( ntokens != (size_t) ((hasheaders * ncols) + hasname) ) {
+				print_error( false, "\nError reading input file: Invalid number of items in line 1: %zu read, %"
+						PRI_IDX " expected.\nInvalid file format.\n", ntokens, (hasheaders * ncols) + hasname );
+				clean_tag(headers);
+				fclose(file);
+				return EXIT_FAILURE;
+			}
+
+			// ------------------------
+
+			if ( hasname * hasheaders ) {	// Name and headers
+
+				/* The first token is the 'name' field, and the rest are column headers.
+				 * size_of(headers.ptokens): ncols + 1
+				 */
+
+				char *restrict data = (char *restrict) headers.tokens;
+				char **restrict pdata = (char **restrict) headers.ptokens;
+
+				// Name: copies the first token.
+				name = (char *restrict) malloc( (strlen(data) + 1) * sizeof(char) );
+				if ( ! name ) {
+					print_errnum( true, errno, "Error in matrix_read_ascii(): malloc( name, size=%zu )",
+							strlen(data) + 1 );
+					clean_tag(headers);
+					fclose(file);
+					return EXIT_FAILURE;
+				}
+				strcpy( name, data );
+
+				#if NMFGPU_DEBUG_READ_MATRIX
+					print_message( false, "\t\tName (len=%zu):'%s'\n", strlen(name), name );
+				#endif
+
+				/* Headers: Sets remaining tokens as column headers.
+				 *
+				 * Moves the second token to the beginning of "data", overwriting the first token (which was already
+				 * copied into "name"). Remaining tokens are kept untouched, and the previous place of the second
+				 * token is left as "garbage".
+				 *
+				 * Therefore, data == pdata[0], and it is possible to call free(3) on them.
+				 */
+				if ( ! memmove( data, pdata[1], (strlen(pdata[1]) + 1) * sizeof(char) ) ) {
+					print_errnum( true, errno, "Error in matrix_read_ascii(): memmove( headers, size=%zu )",
+							strlen(pdata[1]) + 1 );
+					free((void *)name); clean_tag(headers);
+					fclose(file);
+					return EXIT_FAILURE;
+				}
+
+				// Adjusts pdata[] to <ncols> tokens
+				pdata[ 0 ] = data;
+				for ( index_t i = 1 ; i < ncols ; i++ )
+					pdata[ i ] = pdata[ i+1 ];
+
+				pdata = (char **restrict) realloc( pdata, ncols * sizeof(char *) );
+				if ( ! pdata ) {
+					print_errnum( true, errno, "Error in matrix_read_ascii(): realloc( pheaders, ncols=%" PRI_IDX
+							" )", ncols );
+					free((void *)name); clean_tag(headers);
+					fclose(file);
+					return EXIT_FAILURE;
+				}
+
+				headers = new_tag( data, pdata );
+
+			} else if ( hasname ) { // No headers, name only.
+
+				name = (char *restrict) headers.tokens;	// The only token.
+
+				if ( headers.ptokens )
+					free( (void *)headers.ptokens );
+
+				headers = new_empty_tag();
+			}
+			// Else, headers only
+
+		} // if skip labels.
+
+		// Now, reading line 2...
+		nlines = 2;
+
+	} // if has name and/or headers
+
+
+	// ----------------------------
+
+
+	// Labels
+
+	if ( haslabels * ( ! skip ) ) {
+
+		max_len_labels = 64 * prev_power_2( nrows );	// Initial size. It will be adjusted later.
+
+		char *restrict const labels_str = (char *restrict) malloc( max_len_labels * sizeof(char) );
+		if ( ! labels_str ) {
+			print_errnum( true, errno, "Error in matrix_read_ascii(): malloc( labels_str, size=%zu )", max_len_labels );
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );	// labels == NULL
+			clean_matrix_tags(l_mt);
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+		labels.tokens = (char const *restrict) labels_str;
+
+		char **restrict const plabels = (char **restrict) malloc( (size_t) nrows * sizeof(char *) );
+		if ( ! plabels ) {
+			print_errnum( true, errno, "Error in matrix_read_ascii(): malloc( plabels, nrows=%" PRI_IDX " )", nrows );
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			clean_matrix_tags(l_mt);
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+		labels.ptokens = (char const *const *restrict) plabels;
+
+	} // if has labels.
+
+
+	// ----------------------------
+
+
+	// Data matrix.
+
+	void *restrict l_matrix = (*matrix);
+	if ( ! l_matrix ) {	// Allocates memory
+		index_t const dim_major = ( transpose ? ncols : nrows );
+		l_matrix = (void *restrict) malloc( (size_t) dim_major * (size_t) pitch * data_size );
+		if ( ! l_matrix ) {
+			print_errnum( true, errno, "Error in matrix_read_ascii(): malloc( l_matrix, nrows=%" PRI_IDX ", ncols=%"
+					PRI_IDX ", pitch= %" PRI_IDX ", transpose: %i, real_data: %i, data_size=%zu )",
+					nrows, ncols, pitch, transpose, real_data, data_size );
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			clean_matrix_tags(l_mt);
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+	}
+
+
+	// ----------------------------
+
+
+	// Format strings to be used with fscanf().
+
+	// Format string for delimiter/missing data.
+	size_t const delim_scnfmt_size = 8;
+	char delimiter_scn_format[ delim_scnfmt_size ];
+	sprintf( delimiter_scn_format, "%%1[%c\n\r]", delimiter );
+
+	// Format string for numeric data: data + delimiter
+	size_t const data_scnfmt_size = 2 * delim_scnfmt_size;
+	char data_scn_format[ data_scnfmt_size ];
+	sprintf( data_scn_format, ( real_data ? "%%" SCNgREAL "%s" : "%%" SCN_IDX "%s" ), delimiter_scn_format );
+
+	#if NMFGPU_DEBUG_READ_MATRIX
+		print_message( false, "Format delimiter: '%s' (len=%zu)\nFormat data: '%s' (len=%zu)\n\n", delimiter_scn_format,
+				strlen(delimiter_scn_format), data_scn_format, strlen(data_scn_format) );
+	#endif
+
+
+	// ----------------------------
+
+
+	// Reading file...
+
+	// Step sizes for outer and inner loops.
+	index_t incr_outer_loop = pitch;	// Step size for outer loop
+	index_t incr_inner_loop = 1;		// Step size for inner loop.
+	if ( transpose ) {
+		incr_outer_loop = 1;
+		incr_inner_loop = pitch;
+	}
+
+	void *pmatrix = l_matrix;	// &matrix[row][0] (or &matrix[0][row] if transpose)
+
+	for ( index_t r = 0 ; r < nrows ; r++, nlines++, pmatrix += (incr_outer_loop * data_size) ) {
+
+		// WARNING: Does NOT check negative values or empty rows/columns.
+		void *const psum_row = NULL;
+		void *const psum_cols = NULL;
+		void *const pmin_value = NULL;
+
+		// Reads the row label (if any) and a full matrix row (in file).
+		int const status = matrix_read_line( file, nlines, ncols, incr_inner_loop, haslabels, skip, delimiter, delimiter_scn_format,
+							data_scn_format, real_data, pmatrix, psum_row, psum_cols, pmin_value,
+							(char *restrict *restrict) &(labels.tokens), &len_labels, &max_len_labels );
+
+		if ( status != EXIT_SUCCESS ) {
+			print_error( false, "\nError reading input file.\n" );
+			if (! (*matrix)) free( (void *) l_matrix );
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			clean_matrix_tags(l_mt);
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+
+	} // for ( 0 <= r < nrows )
+
+	// -----------------------------
+
+	// Resizes labels.tokens
+	if ( haslabels * (! skip) ) {
+
+		#if NMFGPU_DEBUG_READ_MATRIX
+			print_message( false, "Resizing labels from %zu to %zu\n", max_len_labels, len_labels );
+		#endif
+
+		char *restrict data = (char *restrict) realloc( (void *) labels.tokens, len_labels * sizeof(char) );
+		if ( ! data ) {
+			print_errnum( true, errno, "Error in matrix_read_ascii(): realloc( labels, len=%zu )", len_labels );
+			if (! (*matrix)) free( (void *) l_matrix );
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			clean_matrix_tags(l_mt);
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+	}
+
+	fclose(file);
+
+	// Sets output values.
+	*matrix = l_matrix;
+	if ( ! skip )
+		*mt = new_matrix_tags( name, headers, labels );
+
+	return EXIT_SUCCESS;
+
+} // matrix_read_ascii
+
+////////////////////////////////////////////////
+
+/*
+ * Returns 'true' if "str" represents one or more numbers, or an empty string.
+ */
+static bool isnumber( char const *restrict str )
 {
 
 	if ( ! str )
@@ -121,106 +1006,111 @@ static bool isnumbers( char const *restrict str )
 	return ( isvalid * (! c) );	// isvalid && (c == '\0')
 	// Note: add "&& (p > str)" to return 'false' on empty strings.
 
-} // isnumbers
+} // isnumber
 
-// -----------------------------------------------
+// ---------------------------------------------
 
 /*
- * Loads a matrix from an ASCII file.
+ * Loads a real-type matrix from an ASCII-text file.
  *
- * Detects automatically if matrix has name, column headers and/or row labels, as well as data delimiter (space or tab characters).
+ * Detects automatically if matrix has name, column headers and/or row labels,
+ * as well as the employed delimiter symbol (space or tab character).
  *
- * Both matrix dimensions must be >= 2.
+ * In addition, outputs information messages, and performs error checking.
  *
- * In addition:
- *	- Outputs information messages.
- *	- Performs error checking.
+ * The number of columns is rounded up to a multiple of <memory_alignment>.
+ *
+ * WARNING:
+ *	- Both matrix dimensions must be >= 2.
+ *	- All rows and columns must have at least one positive value (i.e., greater than 0).
+ *	- Negative values are NOT allowed.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bool numeric_lbls, real *restrict *restrict const matrix,
-			index_t *restrict nrows, index_t *restrict ncols, struct matrix_labels *restrict ml )
+int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bool numeric_lbls, real *restrict *restrict matrix,
+				index_t *restrict nrows, index_t *restrict ncols, index_t *restrict pitch, struct matrix_tags_t *restrict mt )
 {
 
 	// Local values and pointers to output parameters.
-	index_t numcols = 0, numrows = 0;
-	bool hasname = false, hasheaders = false, haslabels = false;
+	index_t numcols = INDEX_C(0), numrows = INDEX_C(0), l_pitch = INDEX_C(0);
+	bool hasheaders = false, haslabels = false;
 
-	// Name, headers and labels
-	char *name = NULL; char const *headers = NULL; char *labels = NULL;
-	char *p_labels = NULL;	// Pointer to 'labels'
-	size_t max_len_labels = 0, len_labels = 0;
+	// Limits on matrix dimensions
+	size_t const max_num_items = matrix_max_num_items;
+	index_t const max_pitch = matrix_max_pitch;
+	index_t const max_non_padded_dim = matrix_max_non_padded_dim;
 
-	// Array of pointers to headers and labels
-	char **pheaders = NULL; char **plabels = NULL;	// Array of pointers to 'headers' and 'labels'
-	char **p_plabels = NULL;			// Pointer to 'plabels[]'
+	// Name and headers
+	char *restrict name = NULL;
+	struct tag_t headers = new_empty_tag();
 
+	// Labels
+	struct tag_t labels = new_empty_tag();
+	size_t max_len_labels = 0;			// Allocated memory for labels.tokens
+	size_t len_labels = 0;				// Memory currently used in labels.tokens.
+
+	// Data matrix
 	real *restrict data_matrix = NULL;
-	real *pmatrix = NULL;
+	index_t max_numrows = MIN( INDEX_C(512), max_non_padded_dim );	// Initial size for data_matrix
+	index_t nlines = 0;				// Number of lines processed.
 
-	index_t max_numrows = 512;		// Initial size of plabels and data_matrix
+	int delimiter = (int) '\t';			// Delimiter for tokens (TAB by default).
 
-	index_t nlines = 0;			// Number of lines processed.
+	int status = 0;
 
-	int delimiter = (int) '\t';		// Delimiter for tokens (TAB by default).
+	// Sums of columns: used to check that all columns have at least one positive value.
+	real *restrict sum_cols = NULL;			// Size: numcols
 
-	// Data in line 1 (first non-blank line): Name and/or columns headers.
-	char *restrict dataL1 = NULL;
-	char **restrict pdataL1 = NULL;
-	size_t len_dataL1 = 0;
-	size_t ntokensL1 = 0;		// Number of tokens in line 1.
-
+	// Data in line 1: Name and/or columns headers.
+	struct tag_t tokensL1 = new_empty_tag();
+	size_t len_tokensL1 = 0;			// Length of line 1.
+	size_t num_tokensL1 = 0;			// Number of tokens in line 1.
 
 	// Data in line 2 (first line to have numeric data)
-	char *dataL2 = NULL;
-	char **pdataL2 = NULL;
-	size_t len_dataL2 = 0;
-	size_t ntokensL2 = 0;		// Number of tokens in line 2.
-	char **p_pdataL2 = NULL;	// Pointer to pdataL2
+	struct tag_t tokensL2 = new_empty_tag();
+	size_t len_tokensL2 = 0;			// Length of line 2.
+	size_t num_tokensL2 = 0;			// Number of tokens in line 2.
+
+	/////////////////////////////////
+
+	// Checks for NULL parameters
+	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) pitch * (uintptr_t) mt ) ) {
+		int const errnum = EFAULT;
+		bool const shown_by_all = false;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_load_ascii_verb( filename )" );
+		if ( ! matrix )	print_errnum( shown_by_all, errnum, "\nmatrix_load_ascii_verb( matrix )" );
+		if ( ! nrows )	print_errnum( shown_by_all, errnum, "\nmatrix_load_ascii_verb( nrows )" );
+		if ( ! ncols )	print_errnum( shown_by_all, errnum, "\nmatrix_load_ascii_verb( ncols )" );
+		if ( ! pitch )	print_errnum( shown_by_all, errnum, "\nmatrix_load_ascii_verb( pitch )" );
+		if ( ! mt )	print_errnum( shown_by_all, errnum, "\nmatrix_load_ascii_verb( mt )" );
+		return EXIT_FAILURE;
+	}
+
+	/////////////////////////////////
+
+	// Starts Reading ...
+
+	FILE *restrict const file = fopen( filename, "r" );
+	if ( ! file ) {
+		print_errnum( true, errno, "Error in matrix_load_ascii_verb(): fopen( %s )", filename );
+		return EXIT_FAILURE;
+	}
 
 
 	/////////////////////////////////
 
 
-	// Checks for NULL parameters
-	if ( ! ( (size_t) matrix * (size_t) nrows * (size_t) ncols * (size_t) ml ) ) {
-		fflush( stdout );
-		errno = EFAULT;
-		if ( ! matrix )	perror("\nmatrix_load_ascii_verb( matrix )");
-		if ( ! nrows )	perror("\nmatrix_load_ascii_verb( nrows )");
-		if ( ! ncols )	perror("\nmatrix_load_ascii_verb( ncols )");
-		if ( ! ml )	perror("\nmatrix_load_ascii_verb( ml )");
-		return EXIT_FAILURE;
-	}
-
-
-	// Starts Reading ...
-
-	FILE *restrict const file = fopen( filename, "r" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf( stderr, "Error in matrix_load_ascii_verb().\n" );
-		return EXIT_FAILURE;
-	}
-
-
 	// Reads line 1
-	len_dataL1 = read_line( file, &dataL1 );
-	if ( ! dataL1 ) {
-		if ( len_dataL1 )
-			fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-		else
-			fprintf(stderr, "\nError reading input file: file is empty?\n\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
 
-	// Divides into tokens by replacing all <delimiter> characters by '\0'.
-	ntokensL1 = tokenize( dataL1, &pdataL1, delimiter );
-	if ( ! ntokensL1 ) {
-		fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-		free(dataL1);
+	status = read_tag( file, delimiter, &tokensL1, &len_tokensL1, &num_tokensL1 );
+	if ( status ) {	// EOF, error, or invalid format
+		if ( status == 1 )	// EOF
+			print_error( false, "\nError reading input file: file is empty?\n" );
+		else if ( status == 2 )	// Internal error.
+			print_error( true, "Error in matrix_load_ascii_verb( line 1 ).\n" );
+		else	// 3: Maximum line length
+			print_error( false, "Is your data matrix stored in a single text line?\nPlease check also for "
+					"any invalid line terminator. Only LF ('\\n') and CR+LF ('\\r\\n') are accepted.\n" );
 		fclose(file);
 		return EXIT_FAILURE;
 	}
@@ -230,20 +1120,19 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 
 	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("ntokensL1=%zu\n",ntokensL1);
-		fflush(stdout);
+		print_message( false, "Line1: len=%zu, ntokens=%zu\n", len_tokensL1, num_tokensL1 );
 	#endif
 
 
-	// Checks for overflow.
-	if ( (ntokensL1-1) > (IDX_MAX/2) ) {	// -1 because the file may have a "name" field.
-		printf( "\t\tNumber of items read on line 1: %zu.", ntokensL1);
-		fflush(stdout);
-		fprintf(stderr,"\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\nData matrices are limited to:\n"
-				"\t* %" PRI_IDX " rows.\n\t*%" PRI_IDX " columns.\n\t*%" PRI_IDX " items.\n",
-				IDX_MAX/2, IDX_MAX/2, IDX_MAX);
-		fprintf(stderr, "\nPlease check also for any invalid line terminator. Only LF ('\\n') and CR+LF ('\\r\\n') are accepted.\n");
-		free(pdataL1); free(dataL1);
+	// Checks for overflow (compares with <max_pitch> to make sure that padding will not overflow).
+	if ( (num_tokensL1-1) > (size_t) max_pitch ) {	// - 1, because the file may have a "name" field.
+		print_message( false, "\n\t\tNumber of items read on line 1: %zu.\n", num_tokensL1 );
+		print_error( false, "\nSorry, but your matrix exceeds the limits for matrix dimensions.\n"
+				"On this system and with the given input arguments, data matrices are limited to:\n"
+				"\t* %" PRI_IDX " rows.\n\t*%" PRI_IDX " columns.\n\t*%zu items.\n\nPlease check also for any "
+				"invalid line terminator. Only LF ('\\n') and CR+LF ('\\r\\n') are accepted.\n\n",
+				max_non_padded_dim, max_pitch, max_num_items );
+		clean_tag(tokensL1);
 		fclose(file);
 		return EXIT_FAILURE;
 	} // if overflows.
@@ -258,169 +1147,171 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 	bool has_name_headers = false;	// File might have name and/or headers
 	{
-		index_t nt = (index_t) ntokensL1;
+
+		char const *const *pdataL1 = tokensL1.ptokens;
+
+		index_t nt = (index_t) num_tokensL1;
 
 		index_t i = 1;
-		while ( (i < nt) && isnumbers(pdataL1[i]) )
+		while ( (i < nt) && isnumber(pdataL1[i]) )
 			i++;
 
 		// File might have name and/or headers if:
-		has_name_headers = (	(i < nt) +				// Not all tokens, from the second one, are numeric, <OR>
-					numeric_hdrs +				// input matrix has numeric column headers, <OR>
-					((nt == 1) && !isnumbers(dataL1) ) );	// It has only one (non-numeric) token.
+		has_name_headers = (	(i < nt) +				   // Not all tokens, from the second one, are numeric, <OR>
+					numeric_hdrs +				   // input matrix has numeric column headers, <OR>
+					( (nt == 1) && (! isnumber(pdataL1[0])) ) ); // It has only one (non-numeric) token.
 	}
 
 	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("has_name_headers=%i\n",has_name_headers);
-		fflush(stdout);
+		print_message( false, "has_name_headers=%i\n", has_name_headers );
 	#endif
 
 	if ( has_name_headers ) {
 
 		// File may have name and/or headers
 
-		// Reads the second line.
-		len_dataL2 = read_line( file, &dataL2 );
-		if ( ! dataL2 ) {
-			fflush(stdout);
-			if ( len_dataL2 )
-				fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-			else {
-				fprintf(stderr,"\nError reading input file:\nPremature end of file detected.\n"
-						"Is your data matrix stored in a single text line?\n");
-				fprintf(stderr, "\nPlease check also for any invalid line terminator. "
-						"Only LF ('\\n') and CR+LF ('\\r\\n') are accepted.\n");
+		// Reads line 2.
+		status = read_tag( file, delimiter, &tokensL2, &len_tokensL2, &num_tokensL2 );
+
+		if ( status ) {	// EOF, error, or invalid format
+			if ( status == 2 )	// Internal error.
+				print_error( true, "Error in matrix_load_ascii_verb( line 2 ).\n" );
+			else {	// EOF or maximum line length
+				if ( status == 1 )	// EOF
+					print_error( false, "\nError reading input file: premature end of file.\n" );
+				print_error( false, "Is your data matrix stored in a single text line?\nPlease check also for "
+						"any invalid line terminator; only LF ('\\n') and CR+LF ('\\r\\n') are accepted.\n" );
 			}
-			free(pdataL1); free(dataL1);
+			clean_tag(tokensL1);
 			fclose(file);
 			return EXIT_FAILURE;
 		}
-
-		// 'Tokenizes' it
-		ntokensL2 = tokenize( dataL2, &pdataL2, delimiter );
-		if ( ! ntokensL2 ) {
-			fflush(stdout);
-			fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-			free(pdataL1); free(dataL1); free(dataL2);
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-		// If only one token in line 2.
-		if ( ntokensL2 == 1 ) {
-
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("ntokensL2=1\n");
-				fflush(stdout);
-			#endif
-
-			/* If line 1 has also only one token, "retokenizes" both L1 and L2 using a space character (' ') as delimiter. */
-			if ( ntokensL1 == 1 ) {
-
-				// Sets the new delimiter.
-				delimiter = (int) ' ';
-
-				#if NMFGPU_DEBUG_READ_MATRIX
-					printf("Retokenizing dataL1...\n");
-					fflush(stdout);
-				#endif
-				free(pdataL1);
-				pdataL1 = NULL;
-				ntokensL1 = tokenize( dataL1, &pdataL1, delimiter );
-				if ( ! ntokensL1 ) {
-					fflush(stdout);
-					fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-					free(dataL1); free(dataL2); free(pdataL2);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-
-				#if NMFGPU_DEBUG_READ_MATRIX
-					printf("ntokensL1=%zu\n",ntokensL1);
-					fflush(stdout);
-				#endif
-
-				// Checks for overflow.
-				if ( (ntokensL1-1) > (IDX_MAX/2) ) {	// '-1' because the file may have a "name" field.
-					printf( "\t\tNumber of items read on line 1: %zu.", ntokensL1);
-					fflush(stdout);
-					fprintf(stderr, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
-							"Data matrices are limited to:\n\t* %" PRI_IDX " rows.\n\t*%" PRI_IDX
-							" columns.\n\t*%" PRI_IDX " items.\n", IDX_MAX/2, IDX_MAX/2, IDX_MAX);
-					fprintf(stderr, "\nPlease check also for any invalid line terminator. "
-							"Only LF ('\\n') and CR+LF ('\\r\\n') are accepted.\n");
-					free(pdataL2); free(dataL2); free(pdataL1); free(dataL1);
-					fclose(file);
-					return EXIT_FAILURE;
-
-				} // if overflows.
-
-				#if NMFGPU_DEBUG_READ_MATRIX
-					printf("Retokenizing dataL2...\n");
-					fflush(stdout);
-				#endif
-				free(pdataL2);
-				pdataL2 = NULL;
-				ntokensL2 = tokenize( dataL2, &pdataL2, delimiter );
-				if ( ! ntokensL2 ) {
-					fflush(stdout);
-					fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-					free(dataL2); free(pdataL1); free(dataL1);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-			}
-
-		} // If retokenize dataL2.
 
 		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("ntokensL2=%zu\n",ntokensL2);
-			fflush(stdout);
+			print_message( false, "num_tokensL2=%zu\n", num_tokensL2 );
 		#endif
 
-		// Number of lines processed.
-		nlines = 2;
-
-
-	} else {  // No name and no headers.
-
-		// Token2 is matrix[0][0] or matrix[0][1]
-		hasname = false;
-		hasheaders = false;
-
-		// If line 1 has only one token, "retokenizes" it using the space character (' ') as delimiter.
-		if ( ntokensL1 == 1 ) {
+		// If both L1 and L2 have only one token, "retokenizes" them using a space character (' ') as delimiter.
+		if ( (num_tokensL2 * num_tokensL1) == 1 ) {
 
 			// Sets the new delimiter.
 			delimiter = (int) ' ';
 
+			char *restrict data = NULL;
+
 			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("Retokenizing dataL1...\n");
-				fflush(stdout);
+				print_message( false, "Retokenizing dataL1...\n" );
 			#endif
-			free(pdataL1);
-			pdataL1 = NULL;
-			ntokensL1 = tokenize( dataL1, &pdataL1, delimiter );
-			if ( ! ntokensL1 ) {
-				fflush(stdout);
-				fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-				free(dataL1);
+
+			// Removes previous array of pointers to tokens.
+			data = (char *restrict) tokensL1.tokens;
+			free( (void *) tokensL1.ptokens );
+			num_tokensL1 = 0;
+
+			tokensL1 = tokenize( data, delimiter, &num_tokensL1 );
+
+			#if NMFGPU_DEBUG_READ_MATRIX
+				print_message( false, "tokensL1: %s, num_tokensL1=%zu\n", ( tokensL1.tokens ? "non-NULL" : "NULL" ),
+						num_tokensL1 );
+			#endif
+
+			if ( ! tokensL1.tokens ) {
+				print_error( true, "Error in matrix_load_ascii_verb(): re-tokenize line 1.\n" );
+				clean_tag(tokensL2);
+				free( (void *) data );
 				fclose(file);
 				return EXIT_FAILURE;
 			}
 
+			// Checks for overflow.
+			if ( (num_tokensL1-1) > (size_t) max_pitch ) {	// '-1' because the file may have a "name" field.
+				print_message( false, "\n\t\tNumber of items read on line 1: %zu.\n", num_tokensL1 );
+				print_error( false, "\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
+						"On this system and with the given input arguments, data matrices are limited to:\n\t* %"
+						PRI_IDX " rows.\n\t*%" PRI_IDX " columns.\n\t*%zu items.\n\nPlease check also for any invalid "
+						"line terminator. Only LF ('\\n') and CR+LF ('\\r\\n') are accepted.\n\n",
+						max_non_padded_dim, max_pitch, max_num_items );
+				clean_tag(tokensL2);
+				clean_tag(tokensL1);
+				fclose(file);
+				return EXIT_FAILURE;
+			}
+
+			// ----------------------
+
 			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("ntokensL1=%zu\n",ntokensL1);
-				fflush(stdout);
+				print_message( false, "Retokenizing dataL2...\n" );
 			#endif
+
+			// Removes previous array of pointers to tokens.
+			data = (char *restrict) tokensL2.tokens;
+			free( (void *) tokensL2.ptokens );
+			num_tokensL2 = 0;
+
+			tokensL2 = tokenize( data, delimiter, &num_tokensL2 );
+
+			#if NMFGPU_DEBUG_READ_MATRIX
+				print_message( false, "tokensL2: %s, num_tokensL2=%zu\n", ( tokensL2.tokens ? "non-NULL" : "NULL" ),
+						num_tokensL2 );
+			#endif
+
+			if ( ! tokensL2.tokens ) {
+				print_error( true, "Error in matrix_load_ascii_verb(): re-tokenize line 2.\n" );
+				free( (void *) data );
+				clean_tag(tokensL1);
+				fclose(file);
+				return EXIT_FAILURE;
+			}
+
+		} // If "retokenize" both L1 and L2.
+
+		// Number of lines processed.
+		nlines = 2;
+
+	} else {  // No name and no headers.
+
+		// tokensL2 is matrix[0][0] or matrix[0][1]
+		hasheaders = false;
+
+		// If line 1 has only one token, "retokenizes" it using the space character (' ') as delimiter.
+		if ( num_tokensL1 == 1 ) {
+
+			#if NMFGPU_DEBUG_READ_MATRIX
+				print_message( false, "Retokenizing dataL1...\n" );
+			#endif
+
+			// New delimiter.
+			delimiter = (int) ' ';
+
+			// Removes previous array of pointers to tokens.
+			char *restrict data = (char *restrict) tokensL1.tokens;
+			free( (void *) tokensL1.ptokens );
+			num_tokensL1 = 0;
+
+			tokensL1 = tokenize( data, delimiter, &num_tokensL1 );
+
+			#if NMFGPU_DEBUG_READ_MATRIX
+				print_message( false, "tokensL1: %s, num_tokensL1=%zu\n", ( tokensL1.tokens ? "non-NULL" : "NULL" ),
+						num_tokensL1 );
+			#endif
+
+			if ( ! tokensL1.tokens ) {
+				print_error( true, "Error in matrix_load_ascii_verb( re-tokenize line 1 ).\n" );
+				clean_tag(tokensL2);
+				free( (void *) data );
+				fclose(file);
+				return EXIT_FAILURE;
+			}
 
 		} // if retokenizes L1.
 
-		// Sets L1 as L2 (first non-tag row).
-		dataL2 = dataL1;
-		len_dataL2 = len_dataL1;
-		pdataL2 = pdataL1;
-		ntokensL2 = ntokensL1;
+		// Sets L1 as L2 (first row with numeric data).
+		tokensL2 = tokensL1;
+		len_tokensL2 = len_tokensL1;
+		num_tokensL2 = num_tokensL1;
+
+		tokensL1 = new_empty_tag();
+		len_tokensL1 = num_tokensL1 = 0;
 
 		// Number of lines processed.
 		nlines = 1;
@@ -431,805 +1322,484 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 	/////////////////////////////////
 
 
-	// Detects if file might have row labels and sets ntokensL2 (or ntokensL2-1) as the number of columns.
-	if ( (! isnumbers(dataL2)) + numeric_lbls ) {	// First token in L2 is not numeric, <OR> Input matrix has numeric row labels.
+	// Detects if file may have row labels and sets num_tokensL2 (or num_tokensL2-1) as the number of columns.
+
+	if ( (! isnumber(tokensL2.tokens)) + numeric_lbls ) {	// First token in L2 is not numeric, or input matrix has numeric row labels.
 
 		// File contains row labels.
-		printf("\t\tRow labels detected.\n");
+		numcols = (index_t) (num_tokensL2 - 1);
 		haslabels = true;
-
-		// numcols = ntokensL2 - 1
-
-		// Checks for invalid number of columns.
-		if ( ( ntokensL2-1 <= 1 ) + ( ntokensL2-1 > (IDX_MAX/2) ) ) {
-			printf("\t\tNumber of data columns detected (excluding row labels): %zu.\n",ntokensL2-1);
-			fflush(stdout);
-			if ( ntokensL2-1 <= 1 )
-				fprintf( stderr, "\nError reading input file:\nInvalid file format or the number of columns is less than 2.\n"
-						"Please remember that columns must be separated by TAB characters (or by single space "
-						"characters under certain conditions).\nFinally, please check for any invalid decimal "
-						"symbol (e.g., ',' instead of '.').\n\n");
-			else
-				fprintf( stderr, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\nData matrices "
-						"are limited to:\n\t* %" PRI_IDX " rows\n\t*%" PRI_IDX " columns.\n\t* %" PRI_IDX
-						" items.\n", IDX_MAX/2, IDX_MAX/2, IDX_MAX );
-			free(pdataL1); free(dataL1);
-			if ( dataL2 != dataL1 ) { free(pdataL2); free(dataL2); }
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-		numcols = (index_t) (ntokensL2 - 1);
-
-		// Uses dataL2 to store row labels (numeric data will be copied to 'data_matrix' later).
-		max_len_labels = len_dataL2 + 1;	// Initial size of labels[].
-		labels = dataL2;
-		len_labels = strlen(dataL2) + 1;	// Length of first label.
-
-		// Uses pdataL2 as plabels. Resizes pdataL2 or max_numrows if necessary.
-
-		if ( (index_t) ntokensL2 < max_numrows ) {
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("Resizing plabels from %zu to %" PRI_IDX "...\n",ntokensL2,max_numrows);
-				fflush(stdout);
-			#endif
-			char **const tmp = (char **) realloc( pdataL2, max_numrows * sizeof(char *) );
-			if ( ! tmp ) {
-				int const err = errno; fflush(stdout); errno = err;
-				perror("\nrealloc( pdataL2 )");
-				fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-				free(pdataL1); free(dataL1);
-				if ( dataL2 != dataL1 ) { free(pdataL2); free(dataL2); }
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-			pdataL2 = tmp;
-			if ( dataL1 == dataL2 )
-				pdataL1 = tmp;
-
-		} else {
-
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("Setting max_numrows from %" PRI_IDX " to %zu...\n",max_numrows,ntokensL2);
-				fflush(stdout);
-			#endif
-
-			max_numrows = (index_t) ntokensL2;
-		}
-
-		plabels = pdataL2;
-		p_pdataL2 = pdataL2 + 1;	// Numeric data will be copied from the second token.
-
-		// Pointers to place for future second label
-		p_plabels = p_pdataL2;	// plabels + 1
-		p_labels = labels + len_labels;	// It should be equal to: *p_pdataL2
-
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("p_labels=%p, (*p_pdataL2)=%p (they should be equal)\n",p_labels,*p_pdataL2);
-			fflush(stdout);
-		#endif
-
-		printf("\t\tNumber of data columns detected (excluding row labels): %" PRI_IDX ".\n",numcols);
+		print_message( false, "\t\tRow labels detected.\n\t\tNumber of data columns detected (excluding row labels): %"
+				PRI_IDX ".\n", numcols );
 
 	} else {
-
-		// No labels. numcols = ntokensL2
-		haslabels = false;
-		p_pdataL2 = pdataL2;
+		// No labels: numcols = num_tokensL2
 
 		// If data matrix seems to be numeric only.
 		if ( ! has_name_headers )
-			printf("\t\tNumeric data only.\n");
+			print_message( false, "\t\tNumeric-only data.\n" );
 
-		// Checks for invalid number of columns.
-		if ( ( ntokensL2 <= 1 ) + ( ntokensL2 > (IDX_MAX/2) ) ) {
-			printf("\t\tNumber of data columns detected: %zu.\n",ntokensL2);
-			fflush(stdout);
-			if ( ntokensL2 <= 1 )
-				fprintf( stderr, "\nError reading input file:\nInvalid file format or the number of columns is less than 2.\n"
-						"Please remember that columns must be separated by TAB characters (or by single space "
-						"characters under certain conditions).\nFinally, please check for any invalid decimal "
-						"symbol (e.g., ',' instead of '.').\n\n");
-			else
-				fprintf( stderr, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\nData matrices "
-						"are limited to:\n\t* %" PRI_IDX " rows\n\t*%" PRI_IDX " columns.\n\t* %" PRI_IDX
-						" items.\n", IDX_MAX/2, IDX_MAX/2, IDX_MAX );
-			free(pdataL1); free(dataL1);
-			if ( dataL2 != dataL1 ) { free(pdataL2); free(dataL2); }
-			fclose(file);
-			return EXIT_FAILURE;
-		}
+		numcols = (index_t) num_tokensL2;
 
-		numcols = (index_t) ntokensL2;
-
-		printf("\t\tNumber of data columns detected: %" PRI_IDX ".\n",numcols);
+		print_message( false, "\t\tNumber of data columns detected: %" PRI_IDX ".\n", numcols );
 
 	} // If file contains row labels
 
+	// Checks for invalid number of columns.
+	if ( ( numcols <= 1 ) + ( (num_tokensL2 - haslabels) > (size_t) max_pitch ) ) {
+		if ( numcols <= 1 )
+			print_error( false, "\nError reading input file:\nInvalid file format or the number of columns is less than 2.\n"
+					"Please remember that columns must be separated by TAB characters (or by single space "
+					"characters under certain conditions).\nFinally, please check for any invalid decimal "
+					"symbol (e.g., ',' instead of '.').\n\n" );
+		else
+			print_error( false, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
+					"On this system and with the given input arguments, data matrices are limited to:\n\t* %" PRI_IDX
+					" rows\n\t*%" PRI_IDX " columns.\n\t* %zu items.\n\n", max_non_padded_dim, max_pitch, max_num_items );
+		clean_tag(tokensL2);
+		clean_tag(tokensL1);
+		fclose(file);
+		return EXIT_FAILURE;
+	}
+
+	// Padded dimension
+	l_pitch = get_padding( numcols );
+
 	/////////////////////////////////
+
 
 	// Compares length of L1 and numcols to definitely know if there are name/headers or not.
 
 	// File might have name and/or headers
 	if ( has_name_headers ) {
 
-		// dataL1 != dataL2
+		// tokensL1 != tokensL2
 
-		if ( (index_t)(ntokensL1 - 1) == numcols ) {	// Name and headers
+		if ( (num_tokensL1 - 1) == (size_t) numcols ) {	// Name and headers
 
-			printf("\t\tName (i.e., description string) detected.\n");
-			hasname = true;
+			print_message( false, "\t\tName (i.e., description string) detected.\n" );
+
+			// Splits tokensL1 as name and headers.
+
+			char *restrict data = (char *restrict) tokensL1.tokens;
+			char **restrict pdata = (char **restrict) tokensL1.ptokens;
 
 			// Copies the first token.
-			name = (char *restrict) malloc( (strlen(dataL1) + 1) * sizeof(char) );
+			name = (char *restrict) malloc( (strlen(data) + 1) * sizeof(char) );
 			if ( ! name ) {
-				int const err = errno; fflush(stdout); errno = err;
-				perror("\nmalloc( dataL1 )");
-				fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-				free(pdataL2); free(dataL2); free(pdataL1); free(dataL1);
+				print_errnum( true, errno, "Error in matrix_load_ascii_verb(): malloc( name, size=%zu )", strlen(data) + 1 );
+				clean_tag(tokensL2); clean_tag(tokensL1);
 				fclose(file);
 				return EXIT_FAILURE;
 			}
-			strcpy( name, dataL1 );
+			strcpy( name, data );
 
 			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("Name (len=%zu):'%s'\n",strlen(name),name);
-				fflush(stdout);
+				print_message( false, "\t\tName (len=%zu):'%s'\n", strlen(name), name );
 			#endif
 
 			// Headers
-			printf("\t\tColumn headers detected.\n");
+			print_message( false, "\t\tColumn headers detected.\n" );
 			hasheaders = true;
 
-			/* Moves the first header to the beginning of dataL1 in order to
-			 * have <dataL1> (i.e., the address returned by malloc(3)) as the address
-			 * of the first header, so that it is possible to free(3) "headers".
+			/* Headers: Sets remaining tokens as column headers.
+			 *
+			 * Moves the second token to the beginning of "tokensL1.tokens", overwriting the first token (which was already
+			 * copied into 'name'). Remaining tokens are kept untouched, and the previous place of the second token is left
+			 * as "garbage".
+			 *
+			 * Therefore, headers.tokens == headers.ptokens[0], and it is possible to call clean_tag(headers).
 			 */
-			char *p = pdataL1[1];
-			headers = memmove( dataL1, p, (strlen(p) + 1) * sizeof(char) ); // Overwrites first token L1.
-			if ( ! headers ) {
-				int const err = errno; fflush(stdout); errno = err;
-				perror("\nmemmove( dataL1 )");
-				fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-				free(name);
-				free(pdataL2); free(dataL2); free(pdataL1); free(dataL1);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-			pdataL1[1] = dataL1;	// pdataL1[0] == pdataL1[1] == dataL1
-
-			pheaders = (char **restrict) malloc( numcols * sizeof(char *) );
-			if ( ! pheaders ) {
-				int const err = errno; fflush(stdout); errno = err;
-				perror("\nmalloc( pheaders )");
-				fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-				free(name);
-				free(pdataL2); free(dataL2); free(pdataL1); free(dataL1);
+			if ( ! memmove( data, pdata[1], (strlen(pdata[1]) + 1) * sizeof(char) ) ) {
+				print_errnum( true, errno, "Error in matrix_load_ascii_verb(): memmove( headers, size=%zu )",
+						strlen(pdata[1]) + 1 );
+				struct matrix_tags_t l_mt = new_matrix_tags( name, tokensL2, tokensL1 );
+				clean_matrix_tags(l_mt);
 				fclose(file);
 				return EXIT_FAILURE;
 			}
 
-			// Copies pdataL1 to pheaders.
-			memcpy( pheaders, &pdataL1[1], numcols * sizeof(char *) );	// pheaders[i] = pdataL1[i+1]
-			free(pdataL1);
-			pdataL1 = pheaders;
+			// Adjusts pdata[] to <numcols> tokens
+			pdata[ 0 ] = data;
+			for ( index_t j = 0 ; j < numcols ; j++ )
+				pdata[ j ] = pdata[ j+1 ];
 
-		} else if ( (index_t) ntokensL1 == numcols ) {	// No name. Headers only.
+			pdata = (char **restrict) realloc( pdata, numcols * sizeof(char *) );
+			if ( ! pdata ) {
+				print_errnum( true, errno, "Error in matrix_load_ascii_verb(): realloc( pheaders, numcols=%" PRI_IDX " )",
+						numcols );
+				struct matrix_tags_t l_mt = new_matrix_tags( name, tokensL2, tokensL1 );
+				clean_matrix_tags(l_mt);
+				fclose(file);
+				return EXIT_FAILURE;
+			}
 
-			printf("\t\tColumn headers detected.\n");
+			headers = new_tag( data, pdata );
+
+		} else if ( num_tokensL1 == (size_t) numcols ) {	// No name, headers only.
+
+			print_message( false, "\t\tColumn headers detected.\n" );
 			hasheaders = true;
-			headers = dataL1;
-			pheaders = pdataL1;
+			headers = tokensL1;
 
-		} else if ( ntokensL1 == 1 ) {	// No headers, name only
+		} else if ( num_tokensL1 == 1 ) {	// No headers, name only
 
-			printf("\t\tName (i.e., description string) detected.\n");
-			hasname = true;
-			name = dataL1;
+			print_message( false, "\t\tName (i.e., description string) detected.\n" );
+			name = (char *restrict) tokensL1.tokens;
+			if ( tokensL1.ptokens )
+				free( (void *)tokensL1.ptokens );
 
 		} else {	// Error.
-			fflush(stdout);
-			fprintf(stderr, "\nError reading input file:\nLength of lines 1 (%zu) and 2 (%" PRI_IDX ") mismatch.\n"
-					"Invalid file format or data is not separated.\nFinally, please check for any invalid "
-					"decimal symbol.\n\n", ntokensL1, numcols );
-			free(dataL2); free(pdataL2); free(pdataL1); free(dataL1);
+
+			print_error( false, "\nError reading input file: length of lines 1 (%zu) and 2 (%" PRI_IDX ") mismatch.\n"
+					"Invalid file format or data are not separated.\nFinally, please check for any invalid "
+					"decimal symbol.\n", num_tokensL1, numcols );
+			clean_tag(tokensL2);
+			clean_tag(tokensL1);
 			fclose(file);
 			return EXIT_FAILURE;
+
 		} // If there are name and/or headers
+
+		tokensL1 = new_empty_tag();
 
 	} // If there can be name or headers
 
+	// From here: tokensL1 == NULL
+
+
 	/////////////////////////////////
+
 
 	// Sets (the rest of) L2 as the first row of data matrix.
 
-	data_matrix = (real *restrict) malloc( max_numrows * numcols * sizeof(real) );
+
+	data_matrix = (real *restrict) malloc( (size_t) max_numrows * (size_t) l_pitch * sizeof(real) );
 	if ( ! data_matrix ) {
-		int const err = errno; fflush(stdout); errno = err;
-		perror("\nmalloc( data_matrix ): ");
-		fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-		if ( hasname * hasheaders ) free(name);
-		free(pdataL1); free(dataL1);
-		if ( dataL2 != dataL1 ) { free(pdataL2); free(dataL2); }
+		print_errnum( true, errno, "Error in matrix_load_ascii_verb(): malloc( data_matrix, max_numrows=%" PRI_IDX ", numcols=%"
+				PRI_IDX ", l_pitch=%" PRI_IDX " )", max_numrows, numcols, l_pitch );
+		struct matrix_tags_t l_mt = new_matrix_tags( name, headers, tokensL2 );
+		clean_matrix_tags(l_mt);
+		fclose(file);
+		return EXIT_FAILURE;
+	}
+
+	// Sums of columns: used to check that all columns have at least one positive value.
+	sum_cols = (real *restrict) malloc( (size_t) l_pitch * sizeof(real) );
+	if ( ! sum_cols ) {
+		print_errnum( true, errno, "Error in matrix_load_ascii_verb(): malloc( sum_cols, l_pitch=%" PRI_IDX " )", l_pitch );
+		struct matrix_tags_t l_mt = new_matrix_tags( name, headers, tokensL2 );
+		matrix_clean(data_matrix, l_mt);
 		fclose(file);
 		return EXIT_FAILURE;
 	}
 
 	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("Setting first data line (file line %" PRI_IDX ")...\n",nlines);
-		fflush(stdout);
+		print_message( false, "Setting first data line (file line %" PRI_IDX ")...\n", nlines );
 	#endif
 
+	{
+		real sum_row = REAL_C( 0.0 );
+		real min_value = R_MAX;
 
-	pmatrix = data_matrix;
-	index_t i;
-	for ( i=0; i<numcols; i++,pmatrix++,p_pdataL2++ ) {
+		for ( index_t j = 0 ; j < numcols; j++ ) {
 
-		// Token (data) to read.
-		char *const val_str = *p_pdataL2;
-		char *endptr = NULL;
+			// Token (data) to read.
+			char const *const val_str = tokensL2.ptokens[ j + haslabels ];
+			char *endptr = NULL;
 
-		#if NMFGPU_DEBUG_READ_MATRIX2
-			printf("\tstr='%s'",val_str);
-			fflush(stdout);
-		#endif
+			#if NMFGPU_DEBUG_READ_MATRIX2
+				print_message( false, "\tstr='%s'", val_str );
+			#endif
 
-		// Transforms char* to real.
-		real const value = STRTOREAL( val_str, &endptr ) ;
+			// Transforms char* to real.
+			errno = 0;
+			real const value = STRTOREAL( val_str, &endptr );
 
-		#if NMFGPU_DEBUG_READ_MATRIX2
-		{
-			printf("val=%g,endptr=",value);
-			char const c = *endptr;
-			if ( isprint(c) + isblank(c) )
-				printf("'%c'\n",c);
+			#if NMFGPU_DEBUG_READ_MATRIX2
+			{
+				int const err = errno;
+				print_message( false, "val=%g,endptr=", value );
+				char const c = *endptr;
+				print_message( false, ( (isprint(c) + isblank(c)) ? ("'%c'\n") : ("'\\x%X'\n") ), c );
+				errno = err;
+			}
+			#endif
+
+			// No numeric characters <OR> NaN, inf, underflow/overflow, etc
+			if ( errno + (! is_valid(value)) + (*endptr) ) {	// (errno != 0) || (*endptr != '\0') || (! is_valid(value))
+				print_errnum( false, errno, "\nError reading line %" PRI_IDX ", column %" PRI_IDX
+						". Invalid numeric value: '%s'", nlines, (j + haslabels + 1), val_str );
+				if ( ! errno )
+					print_error( false, "Please, check also for invalid decimal symbols (if any).\n" );
+				free(sum_cols);
+				struct matrix_tags_t l_mt = new_matrix_tags( name, headers, tokensL2 );
+				matrix_clean(data_matrix, l_mt);
+				fclose(file);
+				return EXIT_FAILURE;
+			}
+
+			// Stores the new value.
+			data_matrix[ j ] = value;
+			sum_cols[ j ] = value;
+			sum_row += value;
+			min_value = MIN( min_value, value );	// value has been checked already.
+
+		} // for 0..numcols
+
+		// Fails on "empty" row or there is a negative value.
+		if ( (sum_row < R_MIN) + (min_value < REAL_C(0.0)) ) {
+			print_error( false, "\nError in input file at line %" PRI_IDX ": ", nlines );
+			if ( min_value < REAL_C( 0.0 ) )
+				print_error( false, "negative value(s) detected (e.g., %g).\n", min_value );
 			else
-				printf("'\\x%X'\n",c);
-			fflush(stdout);
-		}
-		#endif
-
-		// No numeric characters <OR> NaN, inf, underflow/overflow, etc
-		if ( !is_valid(value) + (*endptr) ) {	// (*endptr != '\0') || (! is_valid(value))
-			fflush(stdout);
-			fprintf( stderr, "\nError reading line %" PRI_IDX ", column %" PRI_IDX ". Invalid numeric format: '%s'.\n"
-					"Please, check also for invalid decimal symbol (if any).\n\n", nlines, (i + hasheaders + 1), val_str );
-			free( data_matrix );
-			if ( hasname * hasheaders ) free(name);
-			free(pdataL1); free(dataL1);
-			if ( dataL2 != dataL1 ) { free(pdataL2); free(dataL2); }
+				print_error( false, "\"empty\" row detected.\nAll rows and columns must "
+						"have at least one value greater than or equal to %" PRI_IDX "\n", R_MIN );
+			free(sum_cols);
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, tokensL2 );
+			matrix_clean(data_matrix, l_mt);
 			fclose(file);
 			return EXIT_FAILURE;
 		}
-
-		// Stores new value.
-		*pmatrix = value;
-
-	} // for
-
-	// One matrix row read.
-	numrows = 1;
-
-	/////////////////////////////////
-
-	if ( name == dataL1 )	// hasname && (! hasheaders)
-		free(pdataL1);
-
-	/////////////////////////////////
-
-	// Reads the rest of matrix data (and possibly labels)
-
-	// Reads the next character.
-	int c = fgetc(file);
-	if ( c != EOF ) {
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("Line %" PRI_IDX "+1: char=",nlines);
-			if ( c == (int) '\n' ) printf("'\\n'.\n");
-			else if ( c == (int) '\r' ) printf("'\\r'.\n");
-			else if ( isprint(c) + isblank(c) ) printf("'%c'.\n",c);
-			else printf("'\\x%X'.\n",c);
-			fflush(stdout);
-		#endif
-		ungetc( c, file);
 	}
 
+	numrows = 1;				  // One matrix row was read.
+	size_t nitems = numcols;		  // Current number of data elements: numrows * numcols
+	size_t nitems_p = l_pitch;		  // Similar to "nitems", but using "l_pitch" instead of "numcols"
+	real *pmatrix = &data_matrix[ nitems_p ]; // Pointer to next row (numrows * l_pitch)
 
-	// Fails on (premature) End-Of-File (EOF) or error.
-	if ( (c == (int) '\r') + (c == (int) '\n') + feof(file) + ferror(file) ) {
-		fflush(stdout);
-		if ( ferror(file) )
-			fprintf(stderr,"\nInternal error in fgetc().\nError in matrix_load_ascii_verb().\n");
-		else if ( ( c == (int) '\r') + (c == (int) '\n') )	// EOL
-			fprintf(stderr,"\nError reading input file: unexpected end of line.\n"
-				"The number of rows is less than 2 or invalid file format.\n\n" );
-		else	// EOF
-			fprintf(stderr,"\nError reading input file: unexpected end of file.\n"
-				"The number of rows is less than 2 or invalid file format.\n\n" );
-		struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-		matrix_clean( data_matrix, l_ml );
-		return EXIT_FAILURE;
-	} // if ! EOF
 
-	// Formats strings to be used with fscanf().
-	char format_delimiter[8];		// Format string for delimiter/missing data.
-	sprintf( format_delimiter, "%%1[%c\n\r]", delimiter );
-	char format_data[16];			// Format string for numeric data: data + delimiter
-	sprintf( format_data, "%%" SCNgREAL "%s", format_delimiter );
+	/////////////////////////////////
 
-	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("Format delimiter: '%s' (len=%zu)\nFormat data: '%s' (len=%zu)\n",format_delimiter,
-			strlen(format_delimiter),format_data,strlen(format_data));
-		fflush(stdout);
-	#endif
 
-	index_t nitems = numcols;		// Current number of data elements.
+	/* Reuses tokensL2 to store row labels (first row label is already there).
+	 * Remaining memory (whose data were copied to data_matrix already) will be overwritten with future row labels.
+	 */
+	if ( haslabels ) {
+		labels = tokensL2;
+		max_len_labels = len_tokensL2 + 1;		// Allocated memory.
+		len_labels = strlen(tokensL2.tokens) + 1;	// Memory currently used (first label only).
+	}
+
+	// From here: tokensL2 == NULL.
+	tokensL2 = new_empty_tag();
+
+
+	/////////////////////////////////
 
 
 	do {
 
-		nlines++;	// A new line will be read.
+		nlines++;	// A new line is going to be read.
 
 		#if NMFGPU_DEBUG_READ_MATRIX2
-			printf("Reading line %" PRI_IDX "...\n",nlines);
-			fflush(stdout);
+			print_message( false, "\n==============\nReading line %" PRI_IDX "...\n", nlines );
 		#endif
 
 		/////////////////////////////////////////
 
 		// Checks for overflow.
-		if ( ((uintmax_t)nitems + (uintmax_t)numcols) > IDX_MAX ) {
-			printf("\t\tNumber of matrix rows currently read: %" PRI_IDX ".\n"
-				"\t\tNumber of matrix entries currently read: %" PRI_IDX ".\n", numrows, nitems );
-			fflush(stdout);
-			fprintf(stderr, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
-				"Data matrices are limited to:\n\t* %" PRI_IDX " rows.\n\t* %" PRI_IDX
-				" columns.\n\t* %" PRI_IDX " items.\n", IDX_MAX/2,IDX_MAX/2,IDX_MAX);
-			struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-			matrix_clean( data_matrix, l_ml );
+		if ( ( ((uintmax_t) nitems_p + (uintmax_t) l_pitch) > (uintmax_t) max_num_items ) +
+			( (uintmax_t) numrows >= (uintmax_t) max_non_padded_dim ) ) {
+			print_message( false, "\t\tNumber of matrix rows currently read: %" PRI_IDX ".\n"
+					"\t\tNumber of matrix entries currently read: %zu.\n", numrows, nitems );
+			print_error( false, "\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
+				"On this system and with the given input arguments, data matrices are limited to:\n\t* %" PRI_IDX
+				" rows.\n\t* %" PRI_IDX " columns.\n\t* %zu items.\n\n", max_non_padded_dim, max_pitch, max_num_items );
+			free(sum_cols);
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			matrix_clean( data_matrix, l_mt );
 			fclose(file);
 			return EXIT_FAILURE;
-		} // if overflows.
+		}
 
 		/////////////////////////////////////////
 
-		if ( haslabels ) {
+		/* Allocates more memory for data_matrix[] and sum_rows[], if necessary.
+		 * NOTE: labels.ptokens[] will be adjusted after this loop.
+		 */
 
-			// Reads a token.
-			char *restrict data = NULL;
-			int last_char = (int) '\0';
-			size_t const len_data = read_token( file, delimiter, &data, &last_char );
-			if ( ! data ) {
-				if ( len_data ) {
-					fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-					struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-					matrix_clean( data_matrix, l_ml );
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-				// Else, EOF...
-				break;
-			}
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("Line %" PRI_IDX ": Label(len=%zu): '%s'. Last_char=",nlines,len_data,data);
-				if ( last_char == (int) '\n' ) printf("'\\n'.\n");
-				else if ( last_char == (int) '\r' ) printf("'\\r'.\n");
-				else if ( isprint(last_char) + isblank(last_char) ) printf("'%c'.\n",last_char);
-				else printf("'\\x%X'.\n",last_char);
-				fflush(stdout);
-			#endif
-			if ( last_char != delimiter ) { // Blank line.
-				free(data);
-
-				// Checks for more blank lines.
-				c = last_char;
-				index_t const nlines0 = nlines;
-				while ( ( c == (int) '\r' ) + ( c == (int) '\n' ) ) {
-					if ( c == (int) '\r' )
-						fgetc(file);	// Skips, also, the LF character.
-					c = fgetc(file);
-					nlines++;
-				}
-
-				// Just one or more blank lines at the end of the file.
-				if ( feof(file) )
-					break;
-
-				// Fails on error or if there are more non-blank lines to read.
-				fflush(stdout);
-				if ( ferror(file) )
-					fprintf(stderr,"\nInternal error in fgetc().\nError in matrix_load_ascii_verb().\n");
-				else if ( nlines0 < nlines )
-					fprintf(stderr,"\nError reading input file: No matrix data between lines %" PRI_IDX " and %"
-							PRI_IDX ".\nInvalid file format.\n\n", nlines0, nlines);
-				else
-					fprintf(stderr,"\nError reading input file: No matrix data in line %" PRI_IDX
-							"\nInvalid file format.\n\n", nlines0 );
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				matrix_clean( data_matrix, l_ml );
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-			// Before setting the new label, checks if there is enough memory available.
-			size_t const len = len_labels + len_data + 1;
-			if ( len > max_len_labels ) {	// Allocates more memory
-				do {
-					max_len_labels *= 2;
-				} while ( len >= max_len_labels );
-
-				#if NMFGPU_DEBUG_READ_MATRIX
-					printf("Line %" PRI_IDX ": Expanding size of labels to %zu chars.\n",nlines,max_len_labels);
-					fflush(stdout);
-				#endif
-
-				char *const tmp = (char *) realloc( labels, max_len_labels * sizeof(char) );
-				if ( ! tmp ) {
-					int const err = errno; fflush(stdout); errno = err;
-					perror("\nrealloc( labels )");
-					fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-					free(data);
-					struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-					matrix_clean( data_matrix, l_ml );
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-				labels = tmp;
-				p_labels = tmp + len_labels; // Pointer to place for new label.
-
-				#if NMFGPU_DEBUG_READ_MATRIX
-					printf("Line %" PRI_IDX ": Retokenizing labels (numrows=%" PRI_IDX ")...\n",
-						nlines,numrows);
-					fflush(stdout);
-				#endif
-
-				// Resets 'plabels'.
-				retok( (char const *)labels, (char const **)plabels, numrows );
-				p_plabels = plabels + numrows;
-
-			} // If allocate more memory for labels
-
-			// Before setting plabels[], checks if there is enough memory available.
-			if ( numrows == max_numrows ) {
-
-				// NOTE: 'max_numrows' will be incremented when allocating more memory for data_matrix[]
-
-				#if NMFGPU_DEBUG_READ_MATRIX
-					printf("Line %" PRI_IDX ": Expanding size of plabels to %" PRI_IDX " tokens.\n",
-						nlines,2*max_numrows);
-					fflush(stdout);
-				#endif
-
-				// plabels
-				char **const tmp = (char **) realloc( plabels, (2 * max_numrows) * sizeof(char *) );
-				if ( ! tmp ) {
-					int const err = errno; fflush(stdout); errno = err;
-					perror("\nrealloc( plabels )");
-					fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-					free(data);
-					struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-					matrix_clean( data_matrix, l_ml );
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-				plabels = tmp;
-				p_plabels = tmp + numrows;
-
-			} // If allocate more memory for plabels
-
-			// Sets vector of pointers to labels
-			strcpy(p_labels, data);	// Copies from 'data' the new token.
-			*p_plabels = p_labels;	// Sets plabels[numrows].
-
-			p_labels += (len_data + 1);	// pointer to place for next label
-			p_plabels++;
-			len_labels += (len_data + 1);
-
-			free(data);
-
-		}  // if has row labels
-
-		// Before reading data_matrix checks if there is enough memory available.
-		if ( numrows == max_numrows ) {
-
-			// Allocates more memory
+		if ( numrows >= max_numrows ) {
 
 			max_numrows *= 2;
 
 			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("Line %" PRI_IDX ": Expanding size of data_matrix to %" PRI_IDX " rows.\n",
-					nlines, max_numrows);
-				fflush(stdout);
+				print_message( false, "\tExpanding memory for a total of %" PRI_IDX " rows: ", max_numrows );
 			#endif
 
 			// data_matrix
-			real *const matrix_tmp = (real *) realloc( data_matrix, max_numrows * numcols * sizeof(real) );
-			if ( ! matrix_tmp )  {
-				int const err = errno; fflush(stdout); errno = err;
-				perror("\nrealloc( data_matrix )");
-				fprintf(stderr,"Error in matrix_load_ascii_verb().\n");
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				matrix_clean( data_matrix, l_ml );
+			real *restrict const tmp = (real *restrict) realloc( data_matrix, (size_t) max_numrows * (size_t) l_pitch * sizeof(real) );
+			if ( ! tmp )  {
+				print_errnum( true, errno, "Error in matrix_load_ascii_verb(): realloc( data_matrix, max_numrows=%"
+						PRI_IDX", numcols=%" PRI_IDX ", l_pitch=%" PRI_IDX " )", max_numrows, numcols, l_pitch );
+				free(sum_cols);
+				struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+				matrix_clean( data_matrix, l_mt );
 				fclose(file);
 				return EXIT_FAILURE;
 			}
-			data_matrix = matrix_tmp;
-			pmatrix = matrix_tmp + (numcols * numrows);
+			data_matrix = tmp;
+			pmatrix = &tmp[ nitems_p ];
 
 		} // If allocate more memory for data_matrix
 
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("Line %" PRI_IDX ": Reading data_matrix...\n",nlines);
-			fflush(stdout);
-		#endif
+		// Reads the row label (if any) and a full matrix row.
+		index_t const incr_numcols = 1;
+		bool const skip_labels = false;
+		real sum_row = REAL_C( 0.0 );
+		real min_value = R_MAX;
+		bool const real_data = true;
+		status = matrix_read_line( file, nlines, numcols, incr_numcols, haslabels, skip_labels, delimiter, delimiter_scn_format,
+					data_scn_format, real_data, pmatrix, &sum_row, sum_cols, &min_value,
+					(char *restrict *restrict) &(labels.tokens), &len_labels, &max_len_labels );
 
-		// Reads the (rest of the) line as data_matrix[numrows][...]
-		for ( i=0; i<(numcols-1); i++,pmatrix++ ) {
-
-			real value = REAL_C( 0.0 );
-
-			// If it reads a delimiter, then it is a missing data ('value' is set to 0).
-			c = 0;
-			int conv = fscanf( file, format_delimiter, &c );
-			int max_conv = 1;	// Maximum items to be converted from string.
-
-			#if NMFGPU_DEBUG_READ_MATRIX2
-				printf("\tconv1=%i",conv);
-			#endif
-
-			if ( ! conv ) { // No missing data: reads current value (data + new_delimiter).
-				c = 0;
-				conv = fscanf( file, format_data, &value, &c );
-				max_conv = 2;
-
-				#if NMFGPU_DEBUG_READ_MATRIX2
-					printf(",conv2=%i,c2=",conv);	// conv: number of tokens read.
-					if (! c) printf("(empty)");
-					else if ( isprint(c) + isblank(c) )	// c: character set as delimiter
-						printf("'%c'",c);
-					else
-						printf("'\\x%X'",c);
-				#endif
+		if ( (status != EXIT_SUCCESS) + (sum_row < R_MIN) + (min_value < REAL_C(0.0)) ) {
+			if ( status != EXIT_SUCCESS )
+				print_error( false, "\nError reading input file.\n" );
+			else {
+				print_error( false, "\nError reading input file at line: %" PRI_IDX ": ", nlines );
+				if ( min_value < REAL_C(0.0) )
+					print_error( false, "negative value(s) detected (e.g., %g).\n", min_value );
+				else	// sum_row < R_MIN
+					print_error( false, "\"empty\" row detected.\nAll rows and columns must "
+							"have at least one value greater than or equal to %" PRI_IDX "\n", R_MIN );
 			}
-			#if NMFGPU_DEBUG_READ_MATRIX2
-				printf(",value=%g ",value);
-				fflush(stdout);
-			#endif
-
-			// Fails if premature EOF, premature EOL, or an invalid number (NaN, inf,...).
-			if ( (conv < max_conv) + (c != delimiter) + (! is_valid(value)) ) {
-				int const err = errno; fflush(stdout); errno = err;
-				if ( errno + ferror(file) ) {	// Error.
-					if ( errno ) { perror("\nfscanf(value)"); }
-					fprintf( stderr, "Error in matrix_load_ascii_verb() reading line %" PRI_IDX ", matrix column %"
-							PRI_IDX "\n", nlines, i);
-				}
-				else if ( (c == (int) '\n') + (c == (int) '\r') )	// Premature EOL.
-					fprintf(stderr, "\nError reading input file:\nPremature end-of-line detected in line %" PRI_IDX
-							" (%" PRI_IDX " columns found, %" PRI_IDX " expected).\n"
-							"Invalid file format.\n\n", nlines,i+haslabels+1,numcols+haslabels);
-				else if ( (conv == EOF) + feof(file) ) // Premature EOF.
-					fprintf(stderr, "\nError reading input file:\nPremature end-of-file detected in line %" PRI_IDX
-							" (%" PRI_IDX " columns found, %" PRI_IDX " expected).\n"
-							"Invalid file format.\n\n", nlines,i+haslabels,numcols+haslabels);
-				else if ( ! is_valid(value) )	// Not a number
-					fprintf(stderr, "\nError reading input file:\nLine %" PRI_IDX ", column %" PRI_IDX
-							": Invalid numeric data: %g\n\n", nlines,i+haslabels+1,value);
-				else { // Illegal character.
-					fprintf(stderr,"\nError reading input file:\nLine %" PRI_IDX ", column %" PRI_IDX
-							": Invalid character", nlines,i+haslabels+1);
-					c = fgetc( file );	// Reads illegal character
-					if ( c != EOF ) {
-						if ( isprint(c) ) fprintf(stderr, ": '%c' ('\\x%X')",c,c);
-						else fprintf(stderr, ": '\\x%X'",c);
-					}
-					fprintf(stderr,".\n\n");
-				}
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				matrix_clean( data_matrix, l_ml );
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-			// Stores new value.
-			*pmatrix = value;
-
-		} // for 0<= i < numcols-1
-
-		// Last column: i == numcols - 1
-		{
-
-			real value = 0;
-
-			// If it reads an EOL (CR or LF), then it is a missing data (value is set to 0).
-			c = (int) '\n';
-			int conv = fscanf( file, format_delimiter, &c );
-
-			#if NMFGPU_DEBUG_READ_MATRIX2
-				printf(" ... conv1=%i",conv);
-				if ( c != (int) '\n' ) {
-					printf(",c1=");
-					if ( c == (int) '\r' ) printf("'\\r'");
-					else if ( isprint(c) + isblank(c) ) printf("'%c'",c);
-					else printf("'\\x%X'",c);
-				}
-				fflush(stdout);
-			#endif
-
-			if ( (c == delimiter) + ferror(file) + feof(file) ) {
-				int const err = errno; fflush(stdout); errno = err;
-				if ( c == delimiter )	// More than numcols columns.
-					fprintf(stderr, "\nError reading input file:\nLine %" PRI_IDX ": Invalid file format.\n"
-							"There are more than %" PRI_IDX " data columns.\n\n", nlines, numcols);
-				else if ( (conv == EOF) + feof(file) ) // Premature EOF.
-					fprintf(stderr, "\nError reading input file:\nPremature end-of-file detected in line %" PRI_IDX
-							" (%" PRI_IDX " columns found, %" PRI_IDX " expected).\n"
-							"Invalid file format.\n\n", nlines,i+haslabels,numcols+haslabels);
-				else { // Error.
-					if ( errno ) { perror("\nfscanf()"); }
-					fprintf( stderr, "Error in matrix_load_ascii_verb() reading line %" PRI_IDX ", matrix column %"
-							PRI_IDX "\n", nlines, i);
-				}
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				matrix_clean( data_matrix, l_ml );
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-			// No missing data: reads last value (plus ['\r' or '\n']).
-			if ( ! conv ) {
-				c = 0;
-				conv = fscanf( file, format_data, &value, &c );
-
-				#if NMFGPU_DEBUG_READ_MATRIX2
-					printf(",conv2=%i,c2=",conv);
-					if ( c == (int) '\n' ) printf("'\\n'");
-					else if ( c == (int) '\r' ) printf("'\\r'");
-					else if ( isprint(c) + isblank(c) ) printf("'%c'",c);
-					else if ( !c ) printf("(empty)");
-					else printf("'\\x%X'",c);
-					printf(",value=%g",value);
-					fflush(stdout);
-				#endif
-
-				// Fails on invalid format or error (conv=EOF), more columns, invalid characters, or invalid value.
-				if ( (conv <= 0) + (c == delimiter) + (!(c + feof(file))) + (! is_valid(value)) ) {
-					int const err = errno; fflush(stdout); errno = err;
-					if ( errno + ferror(file) ) {	// Error.
-						if ( errno ) { perror("\nfscanf()"); }
-						fprintf( stderr, "Error in matrix_load_ascii_verb() reading line %" PRI_IDX
-								", matrix column %" PRI_IDX ".\n\n", nlines, i);
-					}
-					if ( c == delimiter )	// More than numcols columns.
-						fprintf(stderr, "\nError reading input file:\nLine %" PRI_IDX ": There are more than %"
-								PRI_IDX " data columns or line finishes with a '%c'.\n\n", nlines,
-								numcols, c);
-					else if ( ! is_valid(value) )	// Not a number
-						fprintf(stderr, "\nError reading input file:\nLine %" PRI_IDX ", column %" PRI_IDX
-								": Invalid numeric data: %g\n\n", nlines,i+haslabels+1,value);
-					else {	// Illegal character.
-						fprintf(stderr, "\nError reading input file:\nLine %" PRI_IDX ", column %" PRI_IDX
-								": Invalid character", nlines,i+haslabels+1);
-						c = fgetc( file );	// Reads illegal character
-						if ( c != EOF ) {
-							if ( isprint(c) ) fprintf(stderr, ": '%c' ('\\x%X')",c,c);
-							else fprintf(stderr, ": '\\x%X'",c);
-						}
-						fprintf(stderr,".\n\n");
-					}
-					struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-					matrix_clean( data_matrix, l_ml );
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-
-			} // If last data was read.
-			#if NMFGPU_DEBUG_READ_MATRIX2
-			// Missing data.
-			else { printf(",value=(emtpy)"); fflush(stdout); }
-			#endif
-
-			// If the last character read was a CR ('\r'), reads the corresponding LF character
-			if ( c == (int) '\r' ) {
-
-				c = fgetc(file);
-
-				#if NMFGPU_DEBUG_READ_MATRIX2
-					if ( c == (int) '\n' ) printf(",c3='\\n'");
-					else if ( c == (int) '\r' ) printf(",c3='\\r'");
-					else if ( isprint(c) + isblank(c) ) printf(",c3='%c'",c);
-					else printf(",c3='\\x%X'",c);
-					fflush(stdout);
-				#endif
-
-				// Fails if it is not a LF character (assumes this is not an old OS).
-				if ( ferror(file) + ( c != (int) '\n' ) ) {
-					fflush(stdout);
-					if ( c != (int) '\n' ) {
-						fprintf(stderr,"\nLine %" PRI_IDX ": Unexpected character after a CR ('\\r'): ",nlines);
-						if ( isprint(c) + isblank(c) ) fprintf(stderr,"'%c'.\n\n",c);
-						else fprintf(stderr,"'\\x%X'.\n\n",c);
-					}
-					else
-						fprintf(stderr,"\nLine %" PRI_IDX ": Internal error in fgetc(\\n).\n"
-							"Error in matrix_load_ascii_verb().\n", nlines);
-					struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-					matrix_clean( data_matrix, l_ml );
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-
-			} // if last character read was a CR ('\r').
-
-			#if NMFGPU_DEBUG_READ_MATRIX2
-				printf("\n"); fflush(stdout);
-			#endif
-
-			// Stores the new value.
-			*pmatrix = value;
-			pmatrix++;
-
-		} // last column.
-
-		numrows++;
-		nitems += numcols;
-
-		// Checks for EOF by reading one more character.
-		bool error = false;
-		c = fgetc(file);
-		if ( c != EOF ) {
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("Line %" PRI_IDX "+1: char=",nlines);
-				if ( c == (int) '\n' ) printf("'\\n'.\n");
-				else if ( c == (int) '\r' ) printf("'\\r'.\n");
-				else if ( isprint(c) + isblank(c) ) printf("'%c'.\n",c);
-				else printf("'\\x%X'.\n",c);
-				fflush(stdout);
-			#endif
-
-			// Checks for blank lines.
-			if ( ( c == (int) '\r' ) + ( c == (int) '\n' ) ) {	// ( c == (int) '\r' ) || ( c == (int) '\n' )
-				index_t nlines0 = nlines + 1;
-				do {
-					if ( c == (int) '\r' )
-						fgetc(file);	// Skips the corresponding LF
-					c = fgetc(file);
-					nlines++;
-				} while ( ( c == (int) '\r' ) + ( c == (int) '\n' ) );
-
-				if ( ferror(file) ) {
-					fflush(stdout);
-					fprintf(stderr,"\nInternal error in fgetc().\nError in matrix_load_ascii_verb().\n");
-					error = 1;
-				}
-
-				// No more lines, stops.
-				if ( ( feof(file) ) + ( c == EOF ) )
-					break;
-				else {	// There are more lines. Invalid format
-					fflush(stdout);
-					if ( nlines0 < nlines )
-						fprintf(stderr,"\nError reading input file: No matrix data between lines %" PRI_IDX
-								" and %" PRI_IDX ".\nInvalid file format.\n\n", nlines0, nlines);
-					else
-						fprintf(stderr,"\nError reading input file: No matrix data in line %" PRI_IDX "\n"
-							"Invalid file format.\n\n", nlines0 );
-					error = true;
-				}
-			}
-
-			// There are more lines. Restores the last character read.
-			ungetc( c, file);
-
-		} // if ( c != EOF )
-		else if ( ferror(file) ) {
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fgetc().\nError in matrix_load_ascii_verb().\n");
-			error = true;
+			free(sum_cols);
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			matrix_clean( data_matrix, l_mt );
+			fclose(file);
+			return EXIT_FAILURE;
 		}
 
-		if ( error ) {
-			struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-			matrix_clean( data_matrix, l_ml );
+		numrows++;
+		nitems += (size_t) numcols;	// == numrows * numcols
+		nitems_p += (size_t) l_pitch;	// == numrows * l_pitch
+		pmatrix += l_pitch;
+
+		// -----------------------------
+
+		// Checks for blank lines or EOF.
+		{
+			uintmax_t l = UINTMAX_C( 0 );	// Number of blank lines detected, plus one.
+			char chr[3] = { 0, 0, 0 };	// Newline to be read ("\r\n" or "\n"), followed by '\0'.
+			int conv = 0;			// Number of matched items.
+
+			do {
+				errno = 0;
+				conv = fscanf( file, "%2[\r\n]", chr );
+
+				#if NMFGPU_DEBUG_READ_MATRIX2
+				{
+					bool const shown_by_all = false;
+					int const err = errno;
+					print_message( shown_by_all, "\tconv(next line)=%i,chr=", conv );	// conv: number of tokens read.
+					if ( chr[0] ) {
+						for ( size_t i = 0 ; i < 2 ; i++ )
+							switch( chr[i] ) {
+								case '\0': break;
+								case '\r': { print_message( shown_by_all, "\\r" ); } break;
+								case '\n': { print_message( shown_by_all, "\\n" ); } break;
+								case '\t': { print_message( shown_by_all, "\\t" ); } break;
+								case  ' ': { print_message( shown_by_all, "' '" ); } break;
+								default  : {
+									print_message(shown_by_all,(isgraph(c[0]) ? "'%c'" : "'\\0x%X'"),chr[i]);
+								} break;
+							}
+					} else
+						print_message( shown_by_all, "(empty)" );
+					errno = err;
+				}
+				#endif
+
+				l++;
+
+			} while ( conv == 2 );
+
+
+			switch( conv ) {
+
+				case EOF: {
+					if ( ferror(file) ) {
+						print_errnum( true, errno, "Error in matrix_read_line() at line %" PRIuMAX
+								": fscanf( blank_lines=%" PRIuMAX " )", current_line + l, l );
+						return EXIT_FAILURE;
+					}
+				} break;
+
+				case 1: {
+					if
+				}
+
+			}
+
+
+
+
+
+
+			int c[] = 0;
+			while ( ( c == (int) '\r' ) + ( c == (int) '\n' ) ) {
+				if ( c == (int) '\r' )
+					fgetc(file);	// Skips the corresponding LF
+				c = fgetc(file);
+				l++;
+			}
+		}
+
+
+
+
+		// Checks for EOF by reading one more character.
+		c = fgetc(file);
+
+		#if NMFGPU_DEBUG_READ_MATRIX
+			print_message( false, "Line %" PRI_IDX "+1 (checks for EOF): char=", nlines );
+			if ( c == (int) '\n' ) print_message( false, "'\\n'.");
+			else if ( c == (int) '\r' ) print_message( false, "'\\r'.");
+			else if ( isprint(c) + isblank(c) ) print_message( false, "'%c'.\n", c);
+			else if ( c == EOF ) print_message( false, "EOF.\n" );
+			else print_message( false, "'\\x%X'.\n", c);
+		#endif
+
+		// Checks for blank lines.
+		uintmax_t l = UINTMAX_C( 0 );
+		while ( ( c == (int) '\r' ) + ( c == (int) '\n' ) ) {
+			if ( c == (int) '\r' )
+				fgetc(file);	// Skips the corresponding LF
+			c = fgetc(file);
+			l++;
+		}
+
+		if ( c != EOF ) { // There are more data lines.
+
+			if ( l ) { // There were also blank lines. Invalid format
+
+				#if NMFGPU_DEBUG_READ_MATRIX
+					print_message( false, "\tThere were %" PRIuMAX " blank lines: last char: ", l );
+					print_message( false, ( isgraph(c) ? ("'%c'.\n") : ("'\\x%X'.\n") ), c );
+				#endif
+
+				print_error( false, "\nError reading input file: No matrix data in line %" PRI_IDX "\n"
+						"Invalid file format.\n\n", nlines + 1 );
+				free(sum_cols);
+				struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+				matrix_clean( data_matrix, l_mt );
+				fclose(file);
+				return EXIT_FAILURE;
+
+			} else {	// No blank lines. Restores the last character read.
+				c = ungetc( c, file );
+				#if NMFGPU_DEBUG_READ_MATRIX
+					if ( c == EOF ) print_error( true, "\tError: EOF from ungetc().\n" );
+				#endif
+			}
+		}
+
+		if ( ferror(file) ) {
+			print_error( true, "Error in matrix_load_ascii_verb(): fgetc()/ungetc().\n");
+			free(sum_cols);
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			matrix_clean( data_matrix, l_mt );
 			fclose(file);
 			return EXIT_FAILURE;
 		}
@@ -1238,1682 +1808,1183 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 	fclose(file);
 
-	printf("\t\tLoaded a %" PRI_IDX " x %" PRI_IDX " data matrix (%" PRI_IDX " items).\n",numrows,numcols,nitems);
+	print_message( false, "\t\tLoaded a %" PRI_IDX " x %" PRI_IDX " data matrix (%zu items).\n", numrows, numcols, nitems );
 
-	#if NMFGPU_DEBUG_READ_MATRIX
-		fflush(stdout);
-	#endif
+	// Fails on "empty" columns
+	// NOTE: There are faster alternatives, but we want to tell the user which column is "empty".
+	for ( index_t i = 0 ; i < numcols ; i++ )
+		if ( sum_cols[ i ] < R_MIN ) {
+			print_error( false, "\nError in input file: column %" PRI_IDX " is \"empty\".\nAll rows and columns must "
+					"have at least one value greater than or equal to %" PRI_IDX "\n", i + hasheaders + 1, R_MIN );
+			free(sum_cols);
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			matrix_clean( data_matrix, l_mt );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+	free(sum_cols);
 
 	// Adjusts allocated memory for labels and data matrix.
 	if ( haslabels ) {
 		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("Resizing labels from %zu to %zu, and plabels from %" PRI_IDX " to %" PRI_IDX "\n",
-			       max_len_labels, len_labels,  max_numrows, numrows);
-			fflush(stdout);
+			print_message( false, "\t\tResizing labels from %zu to %zu, and plabels from %" PRI_IDX " to %" PRI_IDX "\n",
+					max_len_labels, len_labels, max_numrows, numrows );
 		#endif
-		labels = (char *) realloc( labels, len_labels * sizeof(char) );
-		plabels = (char **) realloc( plabels, numrows * sizeof(char *) );
+
+		errno = 0;
+		char const *restrict const data = (char const *restrict) realloc( (void *) labels.tokens, len_labels * sizeof(char) );
+		if ( ! data ) {
+			print_errnum( true, errno, "Error in matrix_load_ascii_verb(): realloc( labels, len_labels=%zu )", len_labels );
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			matrix_clean( data_matrix, l_mt );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+		labels.tokens = data;
+
+		errno = 0;
+		char **restrict const pdata = (char **restrict) realloc( (void *) labels.ptokens, (size_t) numrows * sizeof(char *) );
+		if ( ! pdata ) {
+			print_errnum( true, errno, "Error in matrix_load_ascii_verb(): realloc( plabels, numrows=%" PRI_IDX " )", numrows );
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			matrix_clean( data_matrix, l_mt );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+		labels.ptokens = (char const *const *restrict) pdata;
+
+		#if NMFGPU_DEBUG_READ_MATRIX
+			print_message( false, "\t\"Retokenizing\" labels...\n" );
+		#endif
+
+		// Resets labels.ptokens[].
+		retok( labels, numrows );
 	}
-	data_matrix = (real *) realloc( data_matrix, nitems * sizeof(real) );
+
+	// Adjusts memory used by data_matrix
+	{
+		#if NMFGPU_DEBUG_READ_MATRIX
+			print_message( false, "Resizing matrix from %" PRI_IDX "rows to %" PRI_IDX "...\n", max_numrows, numrows );
+		#endif
+		real *restrict const tmp = (real *restrict) realloc( data_matrix, nitems_p * sizeof(real) );
+		if ( ! tmp ) {
+			print_errnum( true, errno, "Error in matrix_load_ascii_verb(): realloc( data_matrix, numrows=%" PRI_IDX " )", numrows );
+			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
+			matrix_clean( data_matrix, l_mt );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+		data_matrix = tmp;
+	}
 
 	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("Load matrix finished!\n");
-		fflush(stdout);
+		print_message( false, "\tLoad matrix finished!\n");
 	#endif
 
 	// Sets output parameters.
 	*matrix = data_matrix;
 	*nrows = numrows;
 	*ncols = numcols;
-	*ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
+	*pitch = l_pitch;
+	*mt = new_matrix_tags( name, headers, labels );
 
 	return EXIT_SUCCESS;
 
 } // matrix_load_ascii_verb
 
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Loads a matrix from a (non-"native") binary file (i.e., double-precision data and unsigned int's).
+ * Loads a real-type matrix from an ASCII file.
  *
- * Detects automatically if matrix has name, column headers and/or row labels,
- * as well as the used tag delimiter (space or tab character). Skips if 'ml' is NULL.
- * Outputs information messages.
- * Performs error checking.
+ * Skips name, headers and labels if 'mt' is NULL.
  *
- * Both matrix dimensions must be >= 2.
+ * If (*matrix) is non-NULL, do not allocates memory but uses the supplied one.
+ * WARNING: In such case, THERE MUST BE ENOUGH MEMORY ALREADY ALLOCATED.
+ *
+ * If input file does not have labels, accepts both tab and space characters as delimiters.
+ *
+ * If 'transpose' is 'true', transposes matrix in memory as follows:
+ * - Matrix dimensions in memory: <ncols> rows, <nrows> columns, padded to <pitch>.
+ * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
+ * - Reads <ncols> column headers (set as mt->headers) and <nrows> row labels (set as mt->labels).
+ *
+ * WARNING:
+ *	- If "transpose" is 'true', nrows must be <= pitch. Else, ncols must be <= pitch
+ *	- NO error checking is performed to detect negative data or empty rows/columns.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_binary_verb( char const *restrict filename, real *restrict *restrict matrix, index_t *restrict nrows, index_t *restrict ncols,
-				struct matrix_labels *restrict ml )
+int matrix_load_ascii( char const *restrict filename, index_t nrows, index_t ncols, index_t pitch, bool hasname, bool hasheaders, bool haslabels,
+			bool transpose, real *restrict *restrict matrix, struct matrix_tags_t *restrict mt )
 {
 
-	// Local values and pointers to output parameters.
-	index_t numcols = 0, numrows = 0;
+	bool const real_data = true;
 
-	// Name, headers and labels
-	char *name = NULL; char *headers = NULL; char *labels = NULL;
+	return matrix_read_ascii( filename, nrows, ncols, pitch, hasname, hasheaders, haslabels, transpose, real_data,
+				(void *restrict *restrict) matrix, mt );
 
-	char **pheaders = NULL, **plabels = NULL;	// Array of pointers to headers and labels
+} // matrix_load_ascii
 
-	real *restrict data_matrix = NULL;
+////////////////////////////////////////////////
 
-	/////////////////////////////////
+/*
+ * Loads a index_t-type matrix from an ASCII file.
+ *
+ * Skips name, headers and labels if 'mt' is NULL.
+ *
+ * If (*matrix) is non-NULL, do not allocates memory but uses the supplied one.
+ * WARNING: In such case, THERE MUST BE ENOUGH MEMORY ALREADY ALLOCATED.
+ *
+ * If input file does not have labels, accepts both tab and space characters as delimiters.
+ *
+ * If 'transpose' is 'true', transposes matrix in memory as follows:
+ * - Matrix dimensions in memory: <ncols> rows, <nrows> columns, padded to <pitch>.
+ * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
+ * - Reads <ncols> column headers (set as mt->headers) and <nrows> row labels (set as mt->labels).
+ *
+ * WARNING:
+ *	- If "transpose" is 'true', nrows must be <= pitch. Else, ncols must be <= pitch
+ *	- NO error checking is performed to detect negative data or empty rows/columns.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int matrix_int_load_ascii( char const *restrict filename, index_t nrows, index_t ncols, index_t pitch, bool hasname, bool hasheaders,
+			bool haslabels, bool transpose, index_t *restrict *restrict matrix, struct matrix_tags_t *restrict mt )
+{
 
-	// Checks for NULL parameters
-	if ( ! ( (size_t) matrix * (size_t) nrows * (size_t) ncols * (size_t) ml ) ) {
-		fflush( stdout );
-		errno = EFAULT;
-		if ( ! matrix )	perror("\nmatrix_load_binary_verb( matrix )");
-		if ( ! nrows )	perror("\nmatrix_load_binary_verb( nrows )");
-		if ( ! ncols )	perror("\nmatrix_load_binary_verb( ncols )");
-		if ( ! ml )	perror("\nmatrix_load_binary_verb( ml )");
+	bool const real_data = false;
+
+	return matrix_read_ascii( filename, nrows, ncols, pitch, hasname, hasheaders, haslabels, transpose, real_data,
+				(void *restrict *restrict) matrix, mt );
+
+} // matrix_int_load_ascii
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+/*
+ * Swaps all bytes to the inverse order.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE on invalid arguments.
+ */
+static void reverse_bytes( void const *restrict in, size_t size, void *restrict out )
+{
+
+	unsigned char const *const p_in = (unsigned char const *restrict) in;
+	unsigned char *const p_out = (unsigned char *restrict) out;
+
+	for ( size_t i = 0, j = size-1 ; i < size ; i++, j-- )
+		p_out[ j ] = p_in[ i ];
+
+	return EXIT_SUCCESS;
+
+} // reverse_bytes
+
+// ---------------------------------------------
+
+/*
+ * Reads the signature from a "formated" binary file: a 32-bits unsigned integer
+ * in little-endian format.
+ *
+ * Returns EXIT_SUCCESS, or EXIT_FAILURE if the signature is invalid.
+ */
+static int read_signature( FILE *restrict file )
+{
+
+	uint32_t const valid_signature = BIN_FILE_SIGNATURE;
+	uint32_t const file_signature = UINT32_C( 0 );
+
+	// -----------------------------
+
+	if ( ! fread( &file_signature, sizeof(uint32_t), 1, file ) ) {
+		if ( feof(file) )
+			print_error( false, "\nError reading input file:\nPremature end-of-file detected.\n"
+					"Invalid file format.\n\n" );
+		else if ( ferror(file) )
+			print_error( true, "Error in read_signature(): fread().\n" );
 		return EXIT_FAILURE;
 	}
 
-	FILE *restrict const file = fopen( filename, "rb" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf( stderr, "Error in matrix_load_binary_verb().\n" );
+	// If this system is big-endian, reverses the byte order.
+	if ( IS_BIG_ENDIAN() ) {
+		uint32_t value = UINT32_C( 0 );
+		reverse_bytes( &file_signature, sizeof(uint32_t), &value );
+		file_signature = value;
+	}
+
+	// -----------------------------
+
+	if ( file_signature != valid_signature ) {
+		print_error( false, "\nError reading input file:\nInvalid signature: %" PRIX32 "\nInvalid file format.\n\n", file_signature );
 		return EXIT_FAILURE;
 	}
+
+	return EXIT_SUCCESS;
+
+} // read_signature
+
+// ---------------------------------------------
+
+/*
+ * Loads a matrix from a "formated" binary file: double-precision data in
+ * little-endian format).
+ *
+ * If (*matrix) is non-NULL, do not allocates memory, but uses the supplied one.
+ * In that case, THERE MUST BE ENOUGH MEMORY ALREADY ALLOCATED (padding included).
+ *
+ * If "transpose" is 'true', transposes matrix in memory as follows:
+ *	- Matrix dimensions in memory: <*ncols> rows, <*nrows> columns, padded to <*pitch>.
+ *	- Matrix dimensions in file: <*nrows> rows, <*ncols> columns.
+ *
+ * If "check_errors" is 'true', makes sure that:
+ *	- All rows and columns must have at least one positive value (i.e., greater than 0).
+ *	- There are no negative values.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+static int matrix_read_binary( FILE *restrict file, bool transpose, bool check_errors, index_t nrows, index_t ncols, index_t pitch,
+				real *restrict *restrict matrix )
+{
+
+	// Allocates memory, if necessary.
+
+	real *restrict data_matrix = *matrix;
+
+	if ( ! data_matrix ) {
+		index_t const dim_major = ( transpose ? numcols : numrows );
+		data_matrix = (real *restrict) malloc( (size_t) dim_major * (size_t) pitch * sizeof(real) );
+		if ( ! data_matrix ) {
+			print_errnum( true, errno, "Error in matrix_read_binary(): malloc( data_matrix, numrows=%" PRI_IDX ", numcols=%"
+					PRI_IDX ", pitch=%" PRI_IDX ", transpose=%i )", numrows, numcols, pitch, transpose );
+			return EXIT_FAILURE;
+		}
+	}
+
+	// -----------------------------
 
 	// Starts reading...
 
-	// Matrix dimensions.
-	unsigned int dim[2];
-	{
-		size_t const nread = fread( dim, sizeof(int), 2, file );
-		if ( nread != 2 ) {
-			fflush(stdout);
-			if ( feof(file) )
-				fprintf(stderr, "\nError reading input file:\nPremature end-of-file detected. Invalid file format.\n\n");
-			else // error
-				fprintf(stderr, "\nInternal error in fread(dim).\nError in matrix_load_binary_verb().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-		uintmax_t const nitems = ((uintmax_t) dim[0]) * ((uintmax_t) dim[1]);
-		printf( "\t\tSize of input matrix to read: %u x %u (%" PRIuMAX " items)\n", dim[0], dim[1], nitems );
-
-		// Checks for invalid values.
-		if ( ( dim[0] < 2 ) + ( dim[1] < 2 ) + ( nitems > IDX_MAX ) ) {
-			fflush(stdout);
-			if ( nitems > IDX_MAX )
-				fprintf(stderr, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
-						"Data matrices are limited to:\n\t* %" PRI_IDX " rows.\n\t* %" PRI_IDX " columns.\n\t* %"
-						PRI_IDX " items.\n", IDX_MAX/2, IDX_MAX/2, IDX_MAX);
-			else
-				fprintf(stderr, "\nError reading input file:\nBoth matrix dimensions must be greater than 1.\n\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		} // if overflows
-	}
-
-	// Changes values to index_t
-	numrows = (index_t) dim[0];
-	numcols = (index_t) dim[1];
-
-	/////////////////////////////////
-
-	// Reads data matrix
-	data_matrix = (real *restrict) malloc( numrows * numcols * sizeof(real) );
-	if ( ! data_matrix ) {
-		int const err = errno; fflush(stdout); errno = err;
-		perror( "\nmalloc( data_matrix )" );
-		fprintf(stderr,"Error in matrix_load_binary_verb().\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
-
-	// In addition, checks for NaN values.
-
 	#if NMFGPU_DEBUG_READ_MATRIX2
-		printf("\n");
-		fflush(stdout);
+		print_message( false, "\tReading data (transpose=%i)...\n\n", transpose );
 	#endif
 
-	real *pmatrix = data_matrix;
-	for ( index_t i = 0 ; i < numrows ; i++ ) {
+	// Step sizes for outer and inner loops.
+	index_t incr_outer_loop = pitch;	// Step size for outer loop
+	index_t incr_inner_loop = INDEX_C(1);	// Step size for inner loop.
+	if ( transpose ) {
+		incr_outer_loop = INDEX_C(1);
+		incr_inner_loop = pitch;
+	}
 
-		for ( index_t j = 0 ; j < numcols ; j++, pmatrix++ ) {
+	// Sums of inner loop: used to check that all columns/rows have at least one positive value.
+	real *restrict sum_inner_loop = NULL;
+	if ( check_errors ) {
+		sum_inner_loop = (real *restrict) calloc( numcols, sizeof(real) ); // NOTE: this is calloc(3), not malloc(3).
+		if ( ! sum_inner_loop ) {
+			print_errnum( true, errno, "Error in matrix_read_binary(): calloc( sum_inner_loop, numcols=%" PRI_IDX " )", numcols );
+			if ( ! (*matrix) )
+				free( (void *) data_matrix );
+			return EXIT_FAILURE;
+		}
+	}
+
+	real *pmatrix = data_matrix;
+	for ( index_t i=0 ; i < numrows ; i++, pmatrix += incr_outer_loop ) {
+
+		real sum_outer_loop = REAL_C( 0.0 );
+		real min_value = R_MAX;
+
+		real *pmatrix_r = pmatrix;
+		for ( index_t j=0 ; j < numcols ; j++, pmatrix_r += incr_inner_loop ) {
 
 			// Reads current data value.
-			double value = 0;
+			double value = 0.0;
 			size_t const nread = fread( &value, sizeof(double), 1, file );	// Reads one double-precision value.
+
+			// If this system is big-endian, reverses the byte order.
+			if ( IS_BIG_ENDIAN() ) {
+				double be_value = 0.0;
+				reverse_bytes( &value, sizeof(double), &be_value );
+				value = be_value;
+			}
 			real const num = (real) value;
 
 			#if NMFGPU_DEBUG_READ_MATRIX2
-				printf("%g ",value);
-				fflush(stdout);
+				print_message( false, "%g ", value );
 			#endif
 
 			// Checks data.
 			if ( ! ( nread * is_valid(num) ) ) {
-				fflush(stdout);
+				index_t r, c;
+				if ( transpose ) { r = j; c = i; }
+				else { r = i; c = j; }
 				if ( feof(file) )
-					fprintf(stderr,"\nError reading input file:\nPremature end-of-file detected.\n"
+					print_error( false, "\nError reading input file:\nPremature end-of-file detected.\n"
 							"Invalid file format.\n\n");
-				else { // error
-					fprintf( stderr, "\nError reading input file:\nError reading row %" PRI_IDX ", column %" PRI_IDX,
-						i, j );
-					if ( (! nread) + ferror(file) )	// Error in file
-						fprintf( stderr, ".\nInvalid file format.\n\n" );
-					else	// Invalid numeric format
-						fprintf( stderr, ": '%g'.\nInvalid numeric format.\n\n", value );
-				}
-				free( data_matrix );
-				fclose(file);
+				else if ( ferror(file) )
+					print_error( true, "Error in matrix_load_binary_verb(): fread( row %" PRI_IDX ", column %" PRI_IDX
+							", transposed dimensions: %s )\n", r, c, (transpose ? "yes" : "no") );
+				else	// ! is_valid(num)
+					print_error( false, "\nError reading input file (row %" PRI_IDX ", column %" PRI_IDX ", transposed "
+							"dimensions: %s): '%g'.\nInvalid numeric or file format.\n\n", r, c,
+							(transpose ? "yes" : "no") );
+				if ( check_errors ) free( sum_inner_loop );
+				if ( ! (*matrix) )  free( (void *) data_matrix );
 				return EXIT_FAILURE;
 			}
 
 			// Stores the new value.
-			*pmatrix = num;
+			*pmatrix_r = num;
+
+			if ( check_errors ) {
+				sum_inner_loop[ j ] += num;
+				sum_outer_loop += num;
+				min_value = MIN( min_value, num );	// num has been checked already.
+			}
 
 		} // for j.
 
 		#if NMFGPU_DEBUG_READ_MATRIX2
-			printf("\n");
-			fflush(stdout);
+			print_message( false, "\n" );
 		#endif
+
+		// Fails on "empty" row/column, or negative value(s).
+		if ( check_errors * ((sum_outer_loop < R_MIN) + (min_value < REAL_C(0.0))) ) {
+			print_error( false, "\nError reading input file at row %" PRI_IDX " (transposed dimensions: %s): ", i,
+					(transpose ? "yes" : "no") );
+			if ( min_value < REAL_C(0.0) )
+				print_error( false, "negative value(s) detected (e.g., %g).\n", min_value );
+			else	// sum_outer_loop < R_MIN
+				print_error( false, "\"empty\" row detected.\nAll rows and columns must "
+						"have at least one value greater than or equal to %" PRI_IDX "\n", R_MIN );
+			free( sum_inner_loop );
+			if ( ! (*matrix) )  free( (void *) data_matrix );
+			return EXIT_FAILURE;
+		}
 
 	} // for i
 
+	#if NMFGPU_DEBUG_READ_MATRIX2
+		print_message( false, "\n" );
+	#endif
+
+	// Fails on "empty" columns/rows
+	if ( check_errors ) {
+		// NOTE: There are faster alternatives, but we want to tell the user which row/column is "emtpy".
+		for ( index_t j=0 ; j < numcols ; j++ )
+			if ( sum_inner_loop[ j ] < R_MIN ) {
+				print_error( false, "\nError in input file: column %" PRI_IDX " (transposed dimensions: %s) is \"empty\".\n"
+						"All rows and columns must have at least one value greater than or equal to %" PRI_IDX "\n",
+						j, (transpose ? "yes" : "no"), R_MIN );
+				free( sum_inner_loop );
+				if ( ! (*matrix) )  free( (void *) data_matrix );
+				return EXIT_FAILURE;
+			}
+		free( sum_inner_loop );
+	}
+
 	// Sets output parameters.
 	*matrix = data_matrix;
-	*nrows = numrows;
-	*ncols = numcols;
+
+	return EXIT_SUCCESS;
+
+} // matrix_read_binary
+
+// ---------------------------------------------
+
+/*
+ * Reads labels, headers and name (as plain text) if they exists.
+ * It also detects automatically the used delimiter symbol (space or tab character).
+ *
+ * verbose: If 'true', shows messages concerning the label type found.
+ *
+ * NOTE: This function is intended to be used when reading tag elements from a BINARY file.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+static int matrix_read_tags( FILE *restrict file, index_t numrows, index_t numcols, bool verbose, struct matrix_tags_t *restrict mt )
+{
+
+	// Name, headers and labels
+	char *restrict name = NULL;
+	struct tag_t headers = new_empty_tag();
+	struct tag_t labels = new_empty_tag();
+
+	size_t ntokens = 0;
+	size_t len = 0;
+
+	int status = 0;
+
+	int const delimiter = (int) '\t';
+
+	// -----------------------------
+
+	// Checks for row labels
+
+	#if NMFGPU_DEBUG_READ_MATRIX
+		print_message( false, "\t\tReading row labels...\n" );
+	#endif
+
+	status = read_tag( file, delimiter, &labels, &len, &ntokens );
+
+	if ( status ) {	// EOF, error, or invalid format
+		if ( status >= 2 ) {	// Error or invalid format.
+			if ( status == 2 )	// Internal error.
+				print_error( true, "Error in matrix_read_tags( row labels ).\n" );
+			else	// 3: Invalid format.
+				print_error( false, "Please remember to set a '\\n' (new-line) character "
+						"between column headers, row labels and the description string.\n\n" );
+			return EXIT_FAILURE;
+		}
+		// Else, EOF
+		return EXIT_SUCCESS;
+	}
+	// Else, success: one or more row labels were read.
+
+	if ( len ) {	// Non-empty line: (len > 0) && (ntokens >= 1)
+
+		if ( verbose )
+			print_message( false, "\t\tRow labels detected.\n" );
+
+		// If there is only one token, and there should be more, "retokenizes" using space as delimiter.
+		if ( ( ntokens == 1 ) * ( numrows > 1 ) ) {
+
+			#if NMFGPU_DEBUG_READ_MATRIX
+				print_message( false, "\t\t\t\"Retokenizes\" using space...\n" );
+			#endif
+
+			// Removes previous array of pointers to tokens.
+			char *restrict data = (char *restrict) labels.tokens;
+			free( (void *) labels.ptokens );
+			ntokens = 0;
+
+			labels = tokenize( data, (int) ' ', &ntokens );
+
+			#if NMFGPU_DEBUG_READ_MATRIX
+				print_message( false, "\t\t\tResulting number of tokens (with space): %zu\n", ntokens );
+			#endif
+
+			if ( ! labels.tokens ) {
+				print_error( true, "Error in matrix_read_tags().\n" );
+				free( (void *) data );
+				return EXIT_FAILURE;
+			}
+
+		} // If it must "retokenize" the string
+
+		if ( ntokens != (size_t) numrows ) {
+			print_error( false, "\nError reading input file: %zu row labels found, %" PRI_IDX " expected.\n", ntokens, numrows );
+			clean_tag( labels );
+			return EXIT_FAILURE;
+		}
+
+	} else {	// Just a newline was read: (len == 0) && (ntokens == 1)
+		clean_tag( labels );
+		labels = new_empty_tag();
+	}
+
+	// --------------------------
+
+	// Checks for column headers
+
+	#if NMFGPU_DEBUG_READ_MATRIX
+		print_message( false, "\t\tReading column headers...\n" );
+	#endif
+
+	ntokens = 0;
+	len = 0;
+
+	status = read_tag( file, delimiter, &headers, &len, &ntokens );
+
+	if ( status ) {	// EOF, error, or invalid format
+		if ( status >= 2 ) {	// Error or invalid format.
+			if ( status == 2 )	// Internal error.
+				print_error( true, "Error in matrix_read_tags( column headers ).\n" );
+			else	// 3: Invalid format.
+				print_error( false, "Please remember to set a '\\n' (new-line) character "
+						"between column headers, row labels and the description string.\n\n" );
+			return EXIT_FAILURE;
+		}
+		// Else, EOF
+		*mt = new_matrix_tags( NULL, new_empty_tag(), labels );
+		return EXIT_SUCCESS;
+	}
+
+	// Else, success: one or more row labels were read.
+
+	if ( len ) {	// Non-empty line: (len > 0) && (ntokens >= 1)
+
+		if ( verbose )
+			print_message( false, "\t\tColumn headers detected.\n" );
+
+		// If there is only one token, and there should be more, "retokenizes" using space as delimiter.
+		if ( ( ntokens == 1 ) * ( numcols > 1 ) ) {
+
+			#if NMFGPU_DEBUG_READ_MATRIX
+				print_message( false, "\t\t\t\"Retokenizes\" using space...\n" );
+			#endif
+
+			// Removes previous array of pointers to tokens.
+			char *restrict data = (char *restrict) headers.tokens;
+			free( (void *) headers.ptokens );
+			ntokens = 0;
+
+			headers = tokenize( data, (int) ' ', &ntokens );
+
+			#if NMFGPU_DEBUG_READ_MATRIX
+				print_message( false, "\t\t\tResulting number of tokens (with space): %zu\n", ntokens );
+			#endif
+
+			if ( ! headers.tokens ) {
+				print_error( true, "Error in matrix_read_tags().\n" );
+				free( (void *) data );
+				clean_tag( labels );
+				return EXIT_FAILURE;
+			}
+
+		} // If it must "retokenize" the string
+
+		if ( ntokens != (size_t) numcols ) {
+			print_error( false, "\nError reading input file: %zu row labels found, %" PRI_IDX " expected.\n", ntokens, numcols );
+			clean_tag( headers );
+			clean_tag( labels );
+			return EXIT_FAILURE;
+		}
+
+	} else {	// Just a newline was read: (len == 0) && (ntokens == 1)
+		clean_tag( headers );
+		headers = new_empty_tag();
+	}
+
+	// --------------------------
+
+	// Checks for name.
+
+	#if NMFGPU_DEBUG_READ_MATRIX
+		print_message( false, "\t\tReading name...\n" );
+	#endif
+
+	len = read_line( file, &name );
+
+	#if NMFGPU_DEBUG_READ_MATRIX
+		print_message( false, "\t\t\tName (len=%zu): '%s'\n", len, name );
+	#endif
+
+	if ( len ) {	// Success, error, or invalid format.
+		if ( ! name ) {	// Error or invalid format.
+			if ( len == 1 )	// Internal error.
+				print_error( true, "Error in matrix_read_tags( name ).\n" );
+			struct matrix_tags_t l_mt = new_matrix_tags( NULL, headers, labels );
+			clean_matrix_tags( l_mt );
+			return EXIT_FAILURE;
+		}
+		// Else, success
+		if ( verbose )
+			print_message( false, "\t\tName (i.e., description string) detected.\n" );
+	}
+	// Else, nothing read: just a newline (name != NULL), or EOF (name == NULL).
+
+	*mt = new_matrix_tags( name, headers, labels );
+
+	return EXIT_SUCCESS;
+
+} // matrix_read_tags
+
+////////////////////////////////////////////////
+
+/*
+ * Loads a real-type matrix from a "formated" binary file: double-precision data,
+ * and 32-bits unsigned integers for matrix dimensions and the file signature,
+ * all of them in little-endian format.
+ *
+ * Detects automatically if matrix has name, column headers and/or row labels,
+ * as well as the employed delimiter symbol (space or tab character).
+ *
+ * In addition, outputs information messages, and performs error checking.
+ *
+ * The number of columns is rounded up to a multiple of <memory_alignment>.
+ *
+ * WARNING:
+ *	- Both matrix dimensions must be >= 2.
+ *	- All rows and columns must have at least one positive value (i.e., greater than 0).
+ *	- Negative values are NOT allowed.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int matrix_load_binary_verb( char const *restrict filename, real *restrict *restrict matrix, index_t *restrict nrows, index_t *restrict ncols,
+				index_t *restrict pitch, struct matrix_tags_t *restrict mt )
+{
+
+	index_t numcols = INDEX_C(0), numrows = INDEX_C(0), l_pitch = INDEX_C(0);
+
+	int status = EXIT_SUCCESS;
+
+	// Limits on matrix dimensions
+	size_t const max_num_items = matrix_max_num_items;
+	index_t const max_pitch = matrix_max_pitch;
+	index_t const max_non_padded_dim = matrix_max_non_padded_dim;
 
 	/////////////////////////////////
 
+	// Checks for NULL parameters
+	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) pitch * (uintptr_t) mt ) ) {
+		bool const shown_by_all = false;
+		int const errnum = EFAULT;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_verb( filename )" );
+		if ( ! matrix )	print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_verb( matrix )" );
+		if ( ! nrows )	print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_verb( nrows )" );
+		if ( ! ncols )	print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_verb( ncols )" );
+		if ( ! pitch )	print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_verb( pitch )" );
+		if ( ! mt )	print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_verb( mt )" );
+		return EXIT_FAILURE;
+	}
+
+	// ------------------------------------
+
+	FILE *restrict const file = fopen( filename, "rb" );
+	if ( ! file ) {
+		print_errnum( true, errno, "Error in matrix_load_binary_verb(): fopen( %s )", filename );
+		return EXIT_FAILURE;
+	}
+
+	// Checks file signature
+	if ( read_signature( file ) != EXIT_SUCCESS ) {
+		fclose(file);
+		return EXIT_FAILURE;
+	}
+
+	// ------------------------------------
+
+	// Reads matrix dimensions.
+	{
+		uint32_t dim[2] = { UINT32_C(0), UINT32_C(0) };
+
+		size_t const nread = fread( dim, sizeof(uint32_t), 2, file );
+		if ( nread != 2 ) {
+			if ( feof(file) )
+				print_error( false, "\nError reading input file:\nPremature end-of-file detected. Invalid file format.\n\n");
+			else // error
+				print_error( true, "Error in matrix_load_binary_verb(): fread( dim[2] ).\n" );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+
+		// Changes to big-endian, if necessary.
+		if ( IS_BIG_ENDIAN() ) {
+			uint32_t value = UINT32_C( 0 );
+			reverse_bytes( &dim[0], sizeof(uint32_t), &value );
+			dim[0] = value;
+			value = UINT32_C( 0 );
+			reverse_bytes( &dim[1], sizeof(uint32_t), &value );
+			dim[1] = value;
+		}
+
+		uint_fast64_t const nitems = ((uint_fast64_t) dim[0]) * ((uint_fast64_t) dim[1]);
+
+		print_message( false, "\t\tSize of input matrix to read: %" PRIu32 " x %" PRIu32 " (%" PRIuFAST64 " items)\n",
+				dim[0], dim[1], nitems );
+
+		if ( (dim[0] < 2) + (dim[1] < 2) + ((size_t) dim[0] > (size_t) max_non_padded_dim) +
+			((size_t) dim[1] > (size_t) max_pitch) + (nitems > (uint_fast64_t) max_num_items) ) {
+			if ( (dim[0] < 2) + (dim[1] < 2) )
+				print_error( false, "\nError reading input file: both matrix dimensions must be greater than 1.\n\n" );
+			else
+				print_error( false, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
+						"On this system and with the given input arguments, data matrices are limited to:\n\t* %"
+						PRI_IDX " rows.\n\t* %" PRI_IDX " columns.\n\t* %zu items.\n", max_non_padded_dim,
+						max_pitch, max_num_items );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+
+		// Changes values to index_t
+		numrows = (index_t) dim[0];
+		numcols = (index_t) dim[1];
+		l_pitch = get_padding( numcols );
+
+	} // Reads matrix dimensions.
+
+	// ------------------------------------
+
+	// Reads matrix data
+
+	bool const transpose = false;
+	bool const check_errors = true;
+
+	status = matrix_read_binary( file, transpose, check_errors, numrows, numcols, l_pitch, matrix );
+
+	if ( status != EXIT_SUCCESS ) {
+		fclose(file);
+		return EXIT_FAILURE;
+	}
+
+	//-------------------------------------
+
 	// Reads labels, headers and name (as plain text) if they exists.
 
-	char *restrict data = NULL;
-	size_t len_data = 0;
-	bool haslabels = false;
-
-	// Checks for row labels
-	len_data = read_line( file, &data );
-	if ( ! data ) {
-		fclose(file);
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("No Labels (null).\n"); fflush(stdout);
-		#endif
-		if ( len_data ) {
-			fprintf(stderr,"Error in matrix_load_binary_verb().\n\n");
-			fflush(stdout);
-			free( data_matrix );
-			return EXIT_FAILURE;
-		}
-		*ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
-		return EXIT_SUCCESS;
-	}
-
-	if ( len_data >= 3 ) {	// minimum length for two labels.
-
-		char **restrict pdata = NULL;
-
-		// Divides into tokens by replacing all tabs characters by '\0'.
-		size_t ntokens = tokenize( data, &pdata, (int) '\t' );
-
-		// If there is only one token, "retokenizes" using space as delimiter.
-		if ( ntokens == 1 ) {
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("ntokens Labels=1\n"); fflush(stdout);
-			#endif
-			free(pdata);
-			pdata = NULL;
-			ntokens = tokenize( data, &pdata, (int) ' ' );
-		} // if ntokens == 1
-
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("ntokens Labels=%zu\n",ntokens);
-			fflush(stdout);
-		#endif
-
-		if ( ntokens != (size_t) numrows ) {
-			fflush(stdout);
-			if ( ntokens ) {
-				printf("\t\tRow labels detected.\n");
-				fprintf( stderr, "\nError reading input file. Invalid format:\nNumber of row "
-						"labels (%zu) and number of matrix rows (%" PRI_IDX ") mismatch.\n", ntokens, numrows );
-				if ( ntokens > (size_t) numrows )
-					fprintf( stderr, "Please remember to set a '\\n' (new-line) character "
-							"between column labels, row labels and the description string.\n\n");
-				free(pdata);
-			}
-			else	// Error.
-				fprintf(stderr,"Error in matrix_load_binary_verb().\n\n");
-			free(data);
-			free( data_matrix );
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-		// File contains row labels.
-		haslabels = true;
-		printf("\t\tRow labels detected.\n");
-
-		labels = data;
-		plabels = pdata;
-
-	} else { // No labels.
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("'No Labels' (len=%zu).\n",len_data); fflush(stdout);
-		#endif
-		free(data);
-	}
-	data = NULL;
-
-
-	// Checks for columns headers
-	len_data = read_line( file, &data );
-	if ( ! data ) {
-		fclose(file);
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("No Headers (null).\n"); fflush(stdout);
-		#endif
-		if ( len_data ) {
-			fprintf(stderr,"Error in matrix_load_binary_verb().\n");
-			if ( haslabels ) { free(labels); free(plabels); }
-			free( data_matrix );
-			return EXIT_FAILURE;
-		}
-		*ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, labels, plabels );
-		return EXIT_SUCCESS;
-	}
-
-	if ( len_data >= 3 ) { // minimum length for two headers.
-
-		char **restrict pdata = NULL;
-
-		// Divides into tokens by replacing all tabs characters by '\0'.
-		size_t ntokens = tokenize( data, &pdata, (int) '\t' );
-
-		// If there is only one token, retokenizes using space as delimiter
-		if ( ntokens == 1 ) {
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("ntokens Headers=1\n"); fflush(stdout);
-			#endif
-			free(pdata);
-			pdata = NULL;
-			ntokens = tokenize( data, &pdata, (int) ' ' );
-		} // if ntokens == 1
-
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("ntokens Headers=%zu\n",ntokens);
-			fflush(stdout);
-		#endif
-
-		if ( ntokens != (size_t) numcols ) {
-			fflush(stdout);
-			if ( ntokens ) {
-				printf("\t\tColumn headers detected.\n");
-				fflush(stdout);
-				fprintf( stderr,"\nError reading input file. Invalid format:\nNumber of column "
-						"labels (%zu) and number of matrix columns (%" PRI_IDX ") mismatch.\n", ntokens,
-						numcols );
-				if ( ntokens > (size_t) numcols )
-					fprintf( stderr, "Please remember to set a '\\n' (new-line) character "
-							"between headers labels, row labels and the description string.\n\n");
-				free(pdata);
-			}
-			else
-				fprintf(stderr,"Error in matrix_load_binary_verb().\n");
-			free(data);
-			free( data_matrix );
-			if ( haslabels ) { free(labels); free(plabels); }
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-		printf("\t\tColumn headers detected.\n");
-
-		headers = data;
-		pheaders = pdata;
-
-	} else {	// No headers
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("'No Headers' (len=%zu).\n",len_data); fflush(stdout);
-		#endif
-		free(data);
-	}
-	data = NULL;
-
-
-	// Checks for name.
-	len_data = read_token( file, (int) '\t', &data, NULL );
-
-	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("Name (len=%zu):\n",len_data);
-		fflush(stdout);
-	#endif
+	status = matrix_read_tags( file, numrows, numcols, true, mt );	// (verbose mode)
 
 	fclose(file);
 
-	if ( ! data ) {
-		struct matrix_labels l_ml = NEW_MATRIX_LABELS( NULL, headers, pheaders, labels, plabels );
-		if ( len_data ) {
-			fflush(stdout);
-			fprintf(stderr,"Error in matrix_load_binary_verb().\n");
-			matrix_clean( data_matrix, l_ml );
-			return EXIT_FAILURE;
-		}
-		*ml = l_ml;
-		return EXIT_SUCCESS;
+	if ( status != EXIT_SUCCESS ) {
+		free( (void *) *matrix );
+		*matrix = NULL;
+		return EXIT_FAILURE;
 	}
 
-	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("\t'%s'.\n",data);
-		fflush(stdout);
-	#endif
-
-	printf("\t\tName (i.e., description string) detected.\n");
-	name = data;
-
-	// Sets output parameters.
-	*ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
+	*nrows = numrows;
+	*ncols = numcols;
+	*pitch = l_pitch;
 
 	return EXIT_SUCCESS;
 
 } // matrix_load_binary_verb
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Loads a matrix from an ASCII file.
+ * Loads a real-type matrix from a "formated" binary file: double-precision data,
+ * and 32-bits unsigned integers for matrix dimensions and the file signature,
+ * all of them in little-endian format.
  *
- * Skips name, headers and labels if 'ml' is set to NULL.
- *
- * If (*matrix) is not NULL, do not allocates memory but uses the supplied one.
- * WARNING: In such case, THERE MUST BE ENOUGH MEMORY ALREADY ALLOCATED.
- *
- * If input file does not have any tag, accepts both tab and space characters as delimiters.
- *
- * If 'transpose' is 'true', transposes matrix in memory as follows:
- * - Matrix dimensions in memory: <ncols> rows, <nrows> columns.
- * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
- * - Reads <ncols> column headers (set as ml->headers) and <nrows> row labels (set as ml->labels).
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE.
- */
-int matrix_load_ascii( char const *restrict filename, index_t nrows, index_t ncols, bool hasname, bool hasheaders, bool haslabels,
-			bool transpose, real *restrict *restrict matrix, struct matrix_labels *restrict ml )
-{
-
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_load_ascii( matrix )");
-		return EXIT_FAILURE;
-	}
-
-	{
-		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
-
-		if ( (nrows <= 0) + (ncols <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_load_ascii( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-				nrows, ncols, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf(stderr, "Matrix dimensions are too large.\nData matrices are limited to:\n"
-						"\t* %" PRI_IDX " rows.\n\t* %" PRI_IDX " columns.\n\t* %" PRI_IDX " items.\n",
-						IDX_MAX, IDX_MAX, IDX_MAX);
-			return EXIT_FAILURE;
-
-		} // if overflows
-	}
-
-	// Starts Reading ...
-	FILE *restrict const file = fopen( filename, "r" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_load_ascii().\n");
-		return EXIT_FAILURE;
-	}
-
-	char *restrict name = NULL;
-	char *restrict headers = NULL;
-	char **restrict pheaders = NULL;
-	char *restrict labels = NULL;
-	char **restrict plabels = NULL;
-
-	// Skips name, headers and labels if ml is NULL.
-	bool const skip = ! ml;	// ( ml == NULL )
-
-	// Delimiter character (TAB by default).
-	int delimiter = (int) '\t';
-
-	// Line number to be read.
-	index_t nlines = 1;
-
-	// ----------------------------
-
-
-	// Name or headers.
-
-	if ( hasname + hasheaders ) {
-
-		char *restrict data = NULL;
-		size_t len_data = 0;
-
-		// Reads line 1.
-		len_data = read_line( file, &data );
-		if ( ! data ) {
-			if ( len_data )
-				fprintf(stderr,"Error in matrix_load_ascii().\n");
-			else {
-				fflush(stdout);
-				fprintf(stderr,"\nError reading input file: file is empty.\n");
-			}
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-		if ( skip )
-			free(data);
-
-		else if ( hasheaders ) {
-			// "Tokenizes" line 1.
-			char **restrict pdata = NULL;
-			size_t ntokens = tokenize( data, &pdata, delimiter );
-			if ( ntokens == 1 ) {	// "Retokenizes" using spaces as delimiter.
-				#if NMFGPU_DEBUG_READ_MATRIX
-					printf("ntokens Line1=1\n");
-					fflush(stdout);
-				#endif
-				delimiter = (int) ' ';
-				free(pdata); pdata = NULL;
-				ntokens = tokenize( data, &pdata, delimiter );
-			}
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("ntokens Line1=%zu\n",ntokens);
-				fflush(stdout);
-			#endif
-			if ( ntokens != (size_t) (ncols + hasname) ) {	// headers or headers+name
-				if ( ntokens ) {
-					fflush(stdout);
-					fprintf(stderr,"\nError reading input file: invalid file format:\nNumber of column labels (%zu) "
-							"and number of matrix columns (%" PRI_IDX ") mismatch.\n",
-							ntokens-hasname,ncols);
-					free(pdata);
-				}
-				else
-					fprintf(stderr,"Error in matrix_load_ascii().\n");
-				free(data);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-			if ( hasname ) {	// Name and headers
-
-				// The first token is the 'name' field, and the rest are column headers.
-
-				// Name: copies the first token.
-				name = (char *restrict) malloc( (strlen(data) + 1) * sizeof(char) );
-				if ( ! name ) {
-					int const err = errno; fflush(stdout); errno = err;
-					perror("\nmalloc( name )");
-					fprintf(stderr,"Error in matrix_load_ascii().\n");
-					free(data); free(pdata);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-				strcpy( name, data );
-
-				/* Headers: Sets remaining tokens, starting from the second one, as column headers.
-				 *
-				 *	Instead of allocating memory and copying 'data' to 'headers' (starting from the second token), it just
-				 *	moves that second token to the "beginning" of 'data' (i.e., to the address returned by the read_line()
-				 *	call above) and overwrites the first token (already copied to 'name'). Remaining tokens are kept
-				 *	untouched, and the previous place of the second token is left as "garbage".
-				 *
-				 *	This way data == headers == pheaders[0], and it is possible to call free(headers).
-				 */
-				char **p_pdata = pdata + 1;	// Second token.
-				char *p = *p_pdata;
-				headers = memmove( data, p, (strlen(p) + 1) * sizeof(char) );	// Overwrites the first token.
-				if ( ! headers )  {
-					int const err = errno; fflush(stdout); errno = err;
-					perror("\nmemmove( headers )");
-					fprintf(stderr,"Error in matrix_load_ascii().\n");
-					free(name);
-					free(pdata); free(data);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-
-				// pheaders: Copies pdata[i+1] to pheaders[i]
-				pheaders = (char **restrict) malloc( ncols * sizeof(char *) );
-				if ( ! pheaders ) {
-					int const err = errno; fflush(stdout); errno = err;
-					perror("\nmalloc( pheaders )");
-					fprintf(stderr,"Error in matrix_load_ascii().\n");
-					free(name);
-					free(pdata); free(data);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-				memcpy( pheaders, p_pdata, ncols * sizeof(char *) );	// pheaders[i] = pdata[i+1]
-				free(pdata);
-
-			} else { // No name, headers only.
-				headers = data;
-				pheaders = pdata;
-			}
-
-		} else // No headers, Name only.
-			name = data;
-
-		// Now, reading line 2...
-		nlines = 2;
-
-	} // if has name or headers
-
-
-	// ----------------------------
-
-
-	// Labels
-
-	size_t max_len_labels = 0;
-	size_t len_labels = 0;
-	char *p_labels = NULL;
-	char **p_plabels = NULL;
-
-	if ( haslabels * ( ! skip ) ) {
-		max_len_labels = 64 * nrows;				// Initial size for <nrows> labels of 64 characters each.
-		labels = (char *restrict) malloc( max_len_labels * sizeof(char) );	// Memory size will be adjusted later.
-		if ( ! labels ) {
-			int const err = errno; fflush(stdout); errno = err;
-			perror("\nmalloc( labels )");
-			fprintf(stderr,"Error in matrix_load_ascii().\n");
-			if ( headers ) { free(pheaders); free(headers); }
-			if ( name ) free(name);
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		p_labels = labels;
-
-		plabels = (char **restrict) malloc( nrows * sizeof(char *) );
-		if ( ! plabels ) {
-			int const err = errno; fflush(stdout); errno = err;
-			perror("\nmalloc( plabels )");
-			fprintf(stderr,"Error in matrix_load_ascii().\n");
-			free(labels);
-			if ( headers ) { free(pheaders); free(headers); }
-			if ( name ) free(name);
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		p_plabels = plabels;
-	} // if has labels.
-
-	// ----------------------------
-
-	// Data matrix.
-
-	real *restrict l_matrix = (*matrix);
-	if ( ! l_matrix ) {	// Allocates memory
-		l_matrix = (real *restrict) malloc( nrows * ncols * sizeof(real) );
-		if ( ! l_matrix ) {
-			int const err = errno; fflush(stdout); errno = err;
-			perror("\nmalloc: ");
-			fprintf(stderr,"Error in matrix_load_ascii().\n");
-			struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-			clean_matrix_labels(l_ml);
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-	}
-
-	// Formats strings to be used with fscanf().
-	char format_delimiter[16];				// Format string for delimiter/missing data.
-	sprintf( format_delimiter, "%%1[\t \n\r%c]", EOF );	// Sets both, tabs and spaces, as valid delimiters.
-	char format_data[16];					// Format string for numeric data: data + delimiter
-	sprintf( format_data, "%%" SCNgREAL "%s", format_delimiter );
-
-	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("Format delimiter: '%s' (len=%zu)\nFormat data: '%s' (len=%zu)\n",format_delimiter,
-			strlen(format_delimiter),format_data,strlen(format_data));
-		fflush(stdout);
-	#endif
-
-
-	// ----------------------------
-
-
-	// Reading file...
-
-	// Steps for outer and inner loops.
-	index_t incr_outer_loop = ncols;	// Step for outer loop
-	index_t incr_inner_loop = 1;		// Step for inner loop.
-	if ( transpose ) {
-		incr_outer_loop = 1;
-		incr_inner_loop = nrows;
-	}
-
-	real *pmatrix = l_matrix;	// &matrix[row][0] (or &matrix[0][row] if transpose)
-	for ( index_t r = 0 ; r < nrows ; r++, nlines++, pmatrix += incr_outer_loop ) {
-
-		if ( haslabels ) {
-			// Reads a token using the selected delimiter.
-			char *restrict data = NULL;
-			int last_char = 0;	// Last char read.
-			size_t const len_data = read_token( file, delimiter, &data, &last_char );
-			if ( ! data ) {
-				if ( len_data )
-					fprintf(stderr,"Error in matrix_load_ascii().\n");
-				else { // EOF
-					fflush(stdout);
-					fprintf(stderr, "\nError reading data label in row %" PRI_IDX ": premature end of file.\n",
-						nlines );
-				}
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				clean_matrix_labels(l_ml);
-				if (! (*matrix)) free(l_matrix);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-			if ( last_char != delimiter ) { // Blank line.
-				free(data);
-
-				// Checks for more blank lines.
-				index_t const nlines0 = nlines;
-				while ( ( last_char == (int) '\r' ) + ( last_char == (int) '\n' ) ) {
-					if ( last_char == (int) '\r' )
-						fgetc(file);	// Skips the LF character.
-					last_char = fgetc(file);
-					nlines++;
-				}
-
-				// Just blank lines at the end of the file.
-				if ( feof(file) )
-					break;
-
-				// Fails on error or if there are more non-blank lines to read.
-				fflush(stdout);
-				if ( ferror(file) )
-					fprintf(stderr,"\nInternal error in fgetc().\nError in matrix_load_ascii().\n");
-				else if ( nlines0 < nlines )
-					fprintf(stderr,"\nError reading input file: No matrix data between lines %" PRI_IDX " and %"
-							PRI_IDX ".\nInvalid file format.\n\n", nlines0, nlines);
-				else
-					fprintf(stderr,"\nError reading input file: No data for row %" PRI_IDX
-							".\nInvalid file format.\n", nlines0 );
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				clean_matrix_labels(l_ml);
-				if (! (*matrix)) free(l_matrix);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-			if ( !skip ) {
-				// Before setting the label, checks if there is enough memory.
-				size_t len = len_labels + len_data + 1;
-				if ( len > max_len_labels ) { // Allocates more memory
-					do {
-						max_len_labels *= 2;
-					} while ( len >= max_len_labels );
-					char *const tmp = (char *) realloc( labels, max_len_labels * sizeof(char) );
-					if ( ! tmp ) {
-						int const err = errno; fflush(stdout); errno = err;
-						perror("\nrealloc( labels )");
-						fprintf( stderr, "Error in matrix_load_ascii().\n" );
-						struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-						clean_matrix_labels(l_ml);
-						if (! (*matrix)) free( (void *) l_matrix );
-						fclose(file);
-						return EXIT_FAILURE;
-					}
-					labels = tmp;
-					p_labels = tmp + len_labels; // Pointer to place for new label.
-
-					// Resets 'plabels'.
-					retok( (char const *)labels, (char const **)plabels, r );
-					p_plabels = plabels + r;	// Pointer to place for new label.
-
-				} // If allocate more memory for labels
-
-				// Sets vector of pointers to labels
-				strcpy(p_labels, data);		// Copies the token.
-				*p_plabels = p_labels;		// Sets p_plabels[r].
-
-				// pointer to place for next label
-				p_labels += (len_data + 1);
-				p_plabels++;
-
-				len_labels = len;	// len == (len_labels + len_data + 1)
-
-			} // If set the label.
-
-			free(data);
-
-		} // if haslabels
-
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("Reading row %" PRI_IDX " (nlines=%" PRI_IDX ")...\n",r,nlines);
-			fflush(stdout);
-		#endif
-
-		real *pmatrix_r = pmatrix;	// &matrix[row][col] (or &matrix[col][row] if transpose)
-		for ( index_t col = 0 ; col < (ncols-1) ; col++, pmatrix_r += incr_inner_loop ) {
-
-			real value = REAL_C( 0.0 );
-
-			// If it reads a delimiter, then it is a missing data ('value' is set to 0).
-			int c = 0;
-			int conv = fscanf( file, format_delimiter, &c );
-			int max_conv = 1;	// Maximum items to be converted from string.
-
-			#if NMFGPU_DEBUG_READ_MATRIX2
-				printf("\tconv1=%i",conv);
-				fflush(stdout);
-			#endif
-
-			if ( ! conv ) { // No missing data: reads current value (data + new_delimiter).
-				c = 0;
-				conv = fscanf( file, format_data, &value, &c );
-				max_conv = 2;
-				#if NMFGPU_DEBUG_READ_MATRIX2
-					printf(",conv2=%i,c=",conv);
-					if (!c) printf("(emtpy)");
-					else if ( isprint(c) + isblank(c) ) printf("'%c'",c);
-					else printf("'\\x%X'",c);
-				#endif
-			}
-			#if NMFGPU_DEBUG_READ_MATRIX2
-				printf(",value=%g ",value);
-				fflush(stdout);
-			#endif
-
-			// Fails if premature EOF, premature EOL, or not a number (NaN, inf,...).
-			if ( (conv < max_conv) + ! (isblank(c) * is_valid(value)) ) {	// conv < max_conv || ! isblank(c) || ! is_valid(value)
-				int const err = errno; fflush(stdout); errno = err;
-				if ( errno + ferror(file) ) {	// Error.
-					if ( errno ) { perror("\nfscanf()"); }
-					fprintf( stderr, "Error in matrix_load_ascii() reading row %" PRI_IDX " (line %" PRI_IDX
-							"), column %" PRI_IDX "\n\n", r, nlines, col);
-				}
-				else if ( (c == (int) '\n') + (c == (int) '\r') )	// Premature EOL.
-					fprintf(stderr, "\nError reading input file:\nPremature end of line detected in line %" PRI_IDX
-							" (%" PRI_IDX " columns found, %" PRI_IDX " expected).\n"
-							"Invalid file format.\n\n", nlines, col+haslabels+1, ncols+haslabels);
-				else if ( (conv == EOF) + feof(file) ) // Premature EOF.
-					fprintf( stderr, "\nError reading input file:\nPremature end of file detected in line %" PRI_IDX
-							" (%" PRI_IDX " columns found, %" PRI_IDX " expected).\n"
-							"Invalid file format.\n\n", nlines, col+haslabels, ncols+haslabels);
-				else if ( ! is_valid(value) )	// Not a number
-					fprintf(stderr, "\nError reading input file:\nLine %" PRI_IDX ", column %" PRI_IDX
-							": Invalid numeric data: %g\n\n", nlines, col+haslabels+1, value);
-				else { // Illegal character.
-					fprintf(stderr,"\nError reading input file:\nLine %" PRI_IDX ", column %" PRI_IDX
-							": Invalid character", nlines, col+haslabels+1);
-					c = fgetc( file );	// Reads illegal character
-					if ( c != EOF ) {
-						if ( isprint(c) ) fprintf(stderr, ": '%c' ('\\x%X')",c,c);
-						else fprintf(stderr, ": '\\x%X'",c);
-					}
-					fprintf(stderr,".\n\n");
-				}
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				clean_matrix_labels(l_ml);
-				if (! (*matrix)) free( (void *) l_matrix );
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-			*pmatrix_r = value;	// matrix[row][col] (or matrix[col][row] if transpose)
-
-		} // for (0 <= col < ncols-1)
-
-		// last file column: col == ncols-1
-		{
-			real value = REAL_C( 0.0 );
-
-			// If it reads a '\n', then it is a missing data (value is set to 0).
-			int c = (int) '\n';
-			int conv = fscanf( file, format_delimiter, &c );
-
-			#if NMFGPU_DEBUG_READ_MATRIX2
-				printf(" ... conv1=%i",conv);
-				if ( c != (int) '\n' ) {
-					printf(",c1=");
-					if ( c == (int) '\r' ) printf("'\\r'");
-					else if ( isprint(c) + isblank(c) ) printf("'%c'",c);
-					else printf("'\\x%X'",c);
-				}
-				fflush(stdout);
-			#endif
-
-			if ( isblank(c) + ferror(file) + feof(file) ) {
-				int const err = errno; fflush(stdout); errno = err;
-				if ( isblank(c) )	// More than ncols columns.
-					fprintf(stderr, "\nError reading input file:\nLine %" PRI_IDX ": Invalid file format.\n"
-							"There are more than %" PRI_IDX " data columns.\n\n",nlines,ncols);
-				else if ( (conv == EOF) + feof(file) ) // Premature EOF.
-					fprintf(stderr, "\nError reading input file:\nPremature end-of-file detected in line %" PRI_IDX
-							" (%" PRI_IDX " columns found, %" PRI_IDX " expected).\n"
-							"Invalid file format.\n\n", nlines, ncols-1+haslabels, ncols+haslabels);
-				else { // Error.
-					if ( errno ) { perror("\nfscanf()"); }
-					fprintf( stderr, "Error in matrix_load_ascii() reading row %" PRI_IDX ", matrix column %"
-							PRI_IDX "\n", r, ncols-1);
-				}
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				clean_matrix_labels(l_ml);
-				if (! (*matrix)) free( (void *) l_matrix );
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-			// No missing data: reads last value (plus ['\r' or '\n']).
-			if ( ! conv ) {
-				c = 0;
-				conv = fscanf( file, format_data, &value, &c );
-
-				#if NMFGPU_DEBUG_READ_MATRIX2
-					printf(",conv2=%i,c=",conv);
-					if ( c == (int) '\n' ) printf("'\\n'");
-					else if ( c == (int) '\r' ) printf("'\\r'");
-					else if ( isprint(c) + isblank(c) ) printf("'%c'",c);
-					else if (!c) printf("(empty)");
-					else printf("'\\x%X'",c);
-					printf(",value=%g",value);
-					fflush(stdout);
-				#endif
-
-				// Fails on invalid format or error (conv=EOF), more columns, invalid characters, or invalid value.
-				if ( (conv <= 0) + (c == delimiter) + (! (c + feof(file))) + (! is_valid(value)) ) {
-					int const err = errno; fflush(stdout); errno = err;
-					if ( errno + ferror(file) ) {	// Error.
-						if ( errno ) { perror("\nfscanf()"); }
-						fprintf(stderr,"Error in matrix_load_ascii() reading row %" PRI_IDX ", matrix column %"
-								PRI_IDX "\n", r, ncols-1);
-					}
-					else if ( isblank(c) )	// More than ncols columns.
-						fprintf( stderr, "\nError reading input file:\nLine %" PRI_IDX ": There are more than %"
-								PRI_IDX " data columns or line finishes with a '%c'.\n\n",
-								nlines, ncols, c );
-					else if ( ! is_valid(value) )	// Not a number
-						fprintf(stderr, "\nError reading input file:\nLine %" PRI_IDX ", column %" PRI_IDX
-								": Invalid numeric data: %g\n\n", nlines, ncols-1+haslabels+1, value);
-					else { // Illegal character.
-						fprintf(stderr, "\nError reading input file:\nLine %" PRI_IDX ", column %" PRI_IDX
-								": Invalid character", nlines, ncols-1+haslabels+1);
-						c = fgetc( file );	// Reads illegal character
-						if ( c != EOF ) {
-							if ( isprint(c) ) fprintf(stderr, ": '%c' ('\\x%X')",c,c);
-							else fprintf(stderr, ": '\\x%X'",c);
-						}
-						fprintf(stderr,".\n\n");
-					}
-					struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-					clean_matrix_labels(l_ml);
-					if (! (*matrix)) free( (void *) l_matrix );
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-
-			} // If last data was read.
-			#if NMFGPU_DEBUG_READ_MATRIX2
-			// Missing data
-			else { printf(",value=(empty)"); fflush(stdout); }
-			#endif
-
-			// If the last character read was a CR ('\r'), reads the corresponding LF ('\n')
-			if ( c == (int) '\r' ) {
-
-				c = fgetc(file);
-
-				#if NMFGPU_DEBUG_READ_MATRIX2
-					if ( c == (int) '\n' ) printf(",c3='\\n'");
-					else if ( c == (int) '\r' ) printf(",c3='\\r'");
-					else if ( isprint(c) + isblank(c) ) printf(",c3='%c'",c);
-					else printf(",c3='\\x%X'",c);
-					fflush(stdout);
-				#endif
-
-				// Fails if it is not a LF character (assumes this is not an old OS).
-				if ( ( ferror(file) ) + ( c != (int) '\n' ) ) {
-					fflush(stdout);
-					if ( c != (int) '\n' ) {
-						fprintf(stderr,"\nLine %" PRI_IDX ": Unexpected character after a CR ('\\r'): ",nlines);
-						if ( isprint(c) + isblank(c) ) fprintf(stderr,"'%c'.\n\n",c);
-						else fprintf(stderr,"'\\x%X'.\n\n",c);
-					} else
-					fprintf(stderr,"\nInternal error in fgetc(\\n).\nError in matrix_load_ascii().\n");
-					struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-					clean_matrix_labels(l_ml);
-					if (! (*matrix)) free( (void *) l_matrix );
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-
-			} // if last character read was a CR ('\r').
-
- 			#if NMFGPU_DEBUG_READ_MATRIX || NMFGPU_DEBUG_READ_MATRIX2
-				printf("\n"); fflush(stdout);
- 			#endif
-
-			// Stores new values.
-			*pmatrix_r = value;	// matrix[row][ncols-1] (or matrix[ncols-1][row] if transpose).
-			pmatrix_r += incr_inner_loop;
-
-		} // last column.
-
-	} // for ( 0 <= r < nrows )
-
-	// Resizes labels.
-	if ( haslabels * (! skip) ) {
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("Resizing labels from %zu to %zu\n",max_len_labels,len_labels);
-			fflush(stdout);
-		#endif
-		labels = (char *) realloc( labels, len_labels * sizeof(char) );
-	}
-
-	fclose(file);
-
-	// Sets output values.
-	*matrix = l_matrix;
-	if ( ! skip )
-		*ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-
-	return EXIT_SUCCESS;
-
-} // matrix_load_ascii
-
-//////////////////////////////////////////////////
-
-/*
- * Loads a matrix from a (non-"native") binary file (i.e., double-precision data and unsigned int's).
- *
- * Detects automatically if matrix has name, column headers and/or row labels,
- * as well as the used tag delimiter (space or tab character). Skips if 'ml' is NULL.
+ * Detects automatically if matrix has name, column headers and/or row labels, as well as the used
+ * delimiter symbol (space or tab character). Skips all of them if 'mt' is NULL.
  *
  * If (*matrix) is non-NULL, do not allocates memory but uses the supplied one.
- * WARNING: In such case, THERE MUST BE ENOUGH MEMORY ALREADY ALLOCATED.
+ * In such case, THERE MUST BE ENOUGH MEMORY ALREADY ALLOCATED (padding included).
  *
  * If 'transpose' is 'true', transposes matrix in memory as follows:
- * - Matrix dimensions in memory: <ncols> rows, <nrows> columns.
- * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
- * - Reads <ncols> column headers (set as ml->headers) and <nrows> row labels (set as ml->labels).
+ * - Matrix dimensions in memory: <numcols> rows, <numrows> columns, padded to <pitch>.
+ * - Matrix dimensions in file: <numrows> rows, <numcols> columns.
+ * - Reads <numcols> column headers (set as mt->headers) and <numrows> row labels (set as mt->labels).
+ *
+ * Fails if dimensions stored in file mismatch with numrows and numcols.
+ *
+ * WARNING:
+ *	- If "transpose" is 'true', numrows must be <= pitch. Else, numcols must be <= pitch
+ *	- NO error-checking is performed to detect negative data or empty rows/columns.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_binary( char const *restrict filename, index_t numrows, index_t numcols, bool transpose, real *restrict *restrict matrix,
-			struct matrix_labels *restrict ml )
+int matrix_load_binary( char const *restrict filename, index_t numrows, index_t numcols, index_t pitch, bool transpose,
+			real *restrict *restrict matrix, struct matrix_tags_t *restrict mt )
 {
 
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_load_binary( matrix )");
+	int status = EXIT_SUCCESS;
+
+	// Limits on matrix dimensions
+	size_t const max_num_items = matrix_max_num_items;
+	index_t const max_pitch = matrix_max_pitch;
+	index_t const max_non_padded_dim = matrix_max_non_padded_dim;
+
+	//////////////////////////////
+
+	// Checks for NULL parameters
+	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix ) ) {
+		bool const shown_by_all = false;
+		int const errnum = EFAULT;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_load_binary( filename )" );
+		if ( ! matrix )	print_errnum( shown_by_all, errnum, "\nmatrix_load_binary( matrix )" );
 		return EXIT_FAILURE;
 	}
 
+	// Checks provided matrix dimensions.
 	{
-		uintmax_t const nitems = ((uintmax_t) numrows) * ((uintmax_t) numcols);
+		index_t const dim_major = ( transpose ? numcols : numrows );
+		uintmax_t const nitems = ((uintmax_t) dim_major) * ((uintmax_t) pitch);
 
-		if ( (numrows <= 0) + (numcols <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_load_binary( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-				numrows, numcols, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf(stderr, "Matrix dimensions are too large.\nData matrices are limited to:\n"
-						"\t* %" PRI_IDX " rows.\n\t* %" PRI_IDX " columns.\n\t* %" PRI_IDX " items.\n",
-						IDX_MAX, IDX_MAX, IDX_MAX);
+		if ( (numrows <= 0) + (numcols <= 0) + (pitch <= 0) + (pitch > max_pitch) + (dim_major > max_non_padded_dim) +
+			(nitems > (uintmax_t) max_num_items) ) {
+			if ( (numrows <= 0) + (numcols <= 0) + (pitch <= 0) )
+				print_error( false, "\nError in matrix_load_binary( rows=%" PRI_IDX ", columns=%" PRI_IDX ", pitch=%"
+						PRI_IDX "): Invalid matrix dimensions.\n", numrows, numcols, pitch );
+			else
+				print_error( false, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
+						"On this system and with the given input arguments, data matrices are limited to:\n\t* %"
+						PRI_IDX " rows.\n\t* %" PRI_IDX " columns.\n\t* %zu items.\n", max_non_padded_dim,
+						max_pitch, max_num_items );
 			return EXIT_FAILURE;
 		}
-	}
-	// Starts reading...
-
-	FILE *restrict const file = fopen( filename, "rb" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf( stderr, "Error in matrix_load_binary().\n" );
-		return EXIT_FAILURE;
-	}
-
-
-	// Matrix dimensions.
-	{
-		unsigned int dim[2];
-		size_t const nread = fread( dim, sizeof(int), 2, file );
-		if ( nread != 2 ) {
-			fflush(stdout);
-			if ( feof(file) )
-				fprintf(stderr, "\nError reading input file:\nPremature end-of-file detected. Invalid file format.\n\n");
-			else // error
-				fprintf(stderr, "\nInternal error in fread(dim).\nError in matrix_load_binary().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-		// Checks dimensions.
-		if ( ((unsigned int) numrows != dim[0]) + ((unsigned int) numcols != dim[1]) ) {
-			fflush(stdout);
-			fprintf(stderr, "\nError reading input file:\nInvalid matrix dimensions: %u x %u (expected: %"
-					PRI_IDX " x %" PRI_IDX ")\n", dim[0], dim[1], numrows, numcols);
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-	}
-
-	// ------------------------------------------
-
-
-	// Data matrix
-
-	real *restrict data_matrix = (*matrix);
-	if ( ! data_matrix ) {	// Allocates memory
-		data_matrix = (real *restrict) malloc( numrows * numcols * sizeof(real) );
-		if ( ! data_matrix ) {
-			int const err = errno; fflush(stdout); errno = err;
-			perror("\nmalloc: ");
-			fprintf(stderr,"Error in matrix_load_binary().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-	}
-
-
-	// ----------------------------------
-
-
-	// Reading file....
-
-
-	#if NMFGPU_DEBUG_READ_MATRIX2
-		printf("\n");
-		fflush(stdout);
-	#endif
-
-
-	// Steps for outer and inner loops.
-	index_t incr_outer_loop = numcols;	// Step for outer loop
-	index_t incr_inner_loop = 1;	// Step for inner loop.
-	if ( transpose ) {
-		incr_outer_loop = 1;
-		incr_inner_loop = numrows;
-	}
-
-	real *pmatrix = data_matrix;	// &matrix[i][0] (or &matrix[0][i] if transpose)
-	for ( index_t i = 0 ; i < numrows ; i++, pmatrix += incr_outer_loop ) {
-
-		real *pmatrix_r = pmatrix; // &matrix[i][j] (or &matrix[j][i] if transpose)
-		for ( index_t j = 0 ; j < numcols ; j++, pmatrix_r += incr_inner_loop ) {
-
-			// Reads current data value.
-			double value = 0;
-			size_t const nread = fread( &value, sizeof(double), 1, file ); // Reads one double-precision data.
-			real const num = (real) value;
-
-			#if NMFGPU_DEBUG_READ_MATRIX2
-				printf("%g ",value); fflush(stdout);
-			#endif
-
-			// Checks data.
-			if ( ! ( nread * is_valid(num) ) ) {
-				fflush(stdout);
-				if ( feof(file) )
-					fprintf(stderr,"\nError reading input file:\nPremature end-of-file detected.\nInvalid file format.\n\n");
-				else { // error
-					index_t const r = ( transpose ? j : i );
-					index_t const c = ( transpose ? i : j );
-					fprintf(stderr, "\nError reading input file:\nError reading row %" PRI_IDX ", column %" PRI_IDX, r, c);
-					if ( (! nread) + ferror(file) )	// Error in file
-						fprintf( stderr, ".\nInvalid file format.\n\n" );
-					else	// Invalid numeric format
-						fprintf( stderr, ": '%g'.\nInvalid numeric format.\n\n", value );
-				}
-				if (! (*matrix)) free( (void *) data_matrix );
-				fclose(file);
+		if ( transpose ) {
+			if ( numrows > pitch ) {
+				print_error( false, "\nError in matrix_load_binary( rows=%" PRI_IDX ", pitch=%" PRI_IDX
+						", transpose: yes ): Invalid values.\n", numrows, pitch );
 				return EXIT_FAILURE;
 			}
+		} else if ( numcols > pitch ) {
+			print_error( false, "\nError in matrix_load_binary( columns=%" PRI_IDX ", pitch=%" PRI_IDX " ): Invalid values.\n",
+					numcols, pitch );
+				return EXIT_FAILURE;
+		}
+	}
 
-			// Stores new value.
-			*pmatrix_r = num;	// matrix[i][j] (or matrix[j][i] if transpose)
+	// ------------------------------------
 
-		} // for (0 <= j < numcols)
+	#if NMFGPU_DEBUG_READ_MATRIX
+		print_message( false, "\nReading '%s'...\n", filename );
+	#endif
 
-		#if NMFGPU_DEBUG_READ_MATRIX2
-			printf("\n");
-			fflush(stdout);
+	FILE *restrict const file = fopen( filename, "rb" );
+	if ( ! file ) {
+		print_errnum( true, errno, "Error in matrix_load_binary(): fopen( %s )", filename );
+		return EXIT_FAILURE;
+	}
+
+	// Checks file signature
+	if ( read_signature( file ) != EXIT_SUCCESS ) {
+		fclose(file);
+		return EXIT_FAILURE;
+	}
+
+	// ------------------------------------
+
+	// Reads matrix dimensions.
+	{
+		uint32_t dim[2] = { UINT32_C(0), UINT32_C(0) };
+
+		size_t const nread = fread( dim, sizeof(uint32_t), 2, file );
+		if ( nread != 2 ) {
+			if ( feof(file) )
+				print_error( false, "\nError reading input file:\nPremature end-of-file detected. Invalid file format.\n\n");
+			else // error
+				print_error( true, "\nError in matrix_load_binary(): fread( dim[2] ).\n" );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+
+		// Changes to big-endian, if necessary.
+		if ( IS_BIG_ENDIAN() ) {
+			uint32_t value = UINT32_C( 0 );
+			reverse_bytes( &dim[0], sizeof(uint32_t), &value );
+			dim[0] = value;
+			value = UINT32_C( 0 );
+			reverse_bytes( &dim[1], sizeof(uint32_t), &value );
+			dim[1] = value;
+		}
+
+		#if NMFGPU_DEBUG_READ_MATRIX
+		{
+			uint_fast64_t nitems = (uint_fast64_t) dim[0] * (uint_fast64_t) dim[1];
+			print_message( false, "\tMatrix Dimensions: %" PRIu32 "x%" PRIu32 " (%" PRIuFAST64 " items)\n",
+					dim[0], dim[1], nitems );
+		}
 		#endif
 
-	} // for (0 <= i < numrows)
+		// Checks file dimensions.
+		if ( (numrows != (index_t) dim[0]) + (numcols != (index_t) dim[1]) ) {
+		print_error( false, "\nError in matrix_load_binary( transpose=%i ): matrix dimensions mismatch: %" PRIu32 " x %" PRIu32
+				" read, %" PRI_IDX " x %" PRI_IDX " expected.\n", transpose, dim[0], dim[1], numrows, numcols );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+	} // Reads matrix dimensions.
 
-	*matrix = data_matrix;
+	// ------------------------------------
 
+	// Reads matrix data
 
-	// ------------------------------
+	bool const check_errors = false;
 
+	status = matrix_read_binary( file, transpose, check_errors, numrows, numcols, matrix );
+	if ( status != EXIT_SUCCESS ) {
+		print_error( true, "Error in matrix_load_binary()\n" );
+		fclose(file);
+		return EXIT_FAILURE;
+	}
+
+	//-------------------------------------
 
 	// Reads labels, headers and name (as plain text) if they exists.
 
-
-	// Skips matrix labels.
-	if ( ! ml ) {
-		fclose(file);
-		return EXIT_SUCCESS;
-	}
-
-	char *restrict name = NULL;
-	char *restrict headers = NULL;
-	char **restrict pheaders = NULL;
-	char *restrict labels = NULL;
-	char **restrict plabels = NULL;
-
-
-	// Checks for row labels
-	size_t len = read_line( file, &labels );
-	if ( ! labels ) {
-		fclose(file);
-		if ( len ) {
-			fprintf(stderr,"Error in matrix_load_binary().\n\n");
-			if (! (*matrix)) free( (void *) data_matrix );
-			return EXIT_FAILURE;
-		}
-		*ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
-		return EXIT_SUCCESS;
-	}
-	if ( len >= 3 ) { // minimum length for two labels.
-
-		// Divides into tokens by replacing all tabs characters by '\0'.
-		size_t ntokens = tokenize( labels, &plabels, (int) '\t' );
-
-		// If there is only one token, "retokenizes" using space as delimiter.
-		if ( ntokens == 1 ) {
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("\tntokens Labels=1\n"); fflush(stdout);
-			#endif
-			free(plabels);
-			plabels = NULL;
-			ntokens = tokenize( labels, &plabels, (int) ' ' );
-		} // if ntokens == 1
-
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("\tntokens Labels=%zu\n",ntokens);
-			fflush(stdout);
-		#endif
-
-		if ( ntokens != (size_t) numrows ) {
-			fflush(stdout);
-			if ( ntokens ) {
-				fprintf( stderr, "\nError reading input file. Invalid format:\nNumber of row labels (%zu) and number of "
-					"matrix rows (%" PRI_IDX ") mismatch.\n", ntokens, numrows );
-				if ( ntokens > (size_t) numrows )
-					fprintf( stderr, "Please remember to set a '\\n' (new-line) character between column labels, row "
-						"labels and the description string.\n\n");
-				free(plabels);
+	if ( mt ) {
+		status = matrix_read_tags( file, numrows, numcols, false, mt );	// (non-verbose mode)
+		if ( status != EXIT_SUCCESS ) {
+			print_error( true, "Error in matrix_load_binary()\n" );
+			if ( ! (*matrix) ) {
+				free( (void *) *matrix );
+				*matrix = NULL;
 			}
-			else	// Error.
-				fprintf(stderr,"Error in matrix_load_binary().\n\n");
-			free(labels);
-			if (! (*matrix)) free( (void *) data_matrix );
-			fclose(file);
-			return EXIT_FAILURE;
 		}
-
-	} else {	// No labels.
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("\t'No Labels' (len=%zu)\n",len);
-			fflush(stdout);
-		#endif
-		free(labels);
-		labels = NULL;
 	}
-
-
-	// Checks for columns headers
-	len = read_line( file, &headers );
-	if ( ! headers ) {
-		fclose(file);
-		if ( len ) {
-			fprintf(stderr,"Error in matrix_load_binary().\n");
-			if ( labels ) { free(labels); free(plabels); }
-			if (! (*matrix)) free( (void *) data_matrix );
-			return EXIT_FAILURE;
-		}
-		*ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, labels, plabels );
-		return EXIT_SUCCESS;
-	}
-	if ( len >= 3 ) { // minimum length for two headers.
-
-		// Divides into tokens by replacing all tabs characters by '\0'.
-		size_t ntokens = tokenize( headers, &pheaders, (int) '\t' );
-
-		// If there is only one token, retokenizes using space as delimiter
-		if ( ntokens == 1 ) {
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("\tntokens Headers=1\n"); fflush(stdout);
-			#endif
-			free(pheaders);
-			pheaders = NULL;
-			ntokens = tokenize( headers, &pheaders, (int) ' ' );
-		} // if ntokens == 1
-
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("\tntokens Headers=%zu\n",ntokens);
-		#endif
-
-		if ( ntokens != (size_t) numcols ) {
-			fflush(stdout);
-			if ( ntokens ) {
-				fflush(stdout);
-				fprintf( stderr,"\nError reading input file. Invalid format:\nNumber of column labels (%zu) and number of "
-						"matrix columns (%" PRI_IDX ") mismatch.\n", ntokens, numcols );
-				if ( ntokens > (size_t) numcols )
-					fprintf( stderr, "Please remember to set a '\\n' (new-line) character between headers labels, "
-							"row labels and the description string.\n\n");
-				free(pheaders);
-			}
-			else
-				fprintf(stderr,"Error in matrix_load_binary().\n");
-			free(headers);
-			if (! (*matrix)) free( (void *) data_matrix );
-			if ( labels ) { free(labels); free(plabels); }
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-	} else { // No headers
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("\t'No Headers' (len=%zu)\n",len);
-			fflush(stdout);
-		#endif
-		free(headers);
-		headers = NULL;
-	}
-
-
-	// Checks for name.
-	len = read_token( file, (int) '\t', &name, NULL );
-
-	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("\tName (len=%zu):\n",len);
-	#endif
 
 	fclose(file);
 
-	if ( (! name) * len ) {
-		fprintf(stderr,"Error in matrix_load_binary().\n");
-		struct matrix_labels l_ml = NEW_MATRIX_LABELS( NULL, headers, pheaders, labels, plabels );
-		clean_matrix_labels(l_ml);
-		if (! (*matrix)) free( (void *) data_matrix );
-		return EXIT_FAILURE;
-	}
-
-	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("\t\t'%s'\n",name);
-	#endif
-
-	// Sets output matrix labels.
-	*ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-
-	return EXIT_SUCCESS;
+	return status;
 
 } // matrix_load_binary
 
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Loads a matrix from a "native" binary file (i.e., with the compiled types for matrix data and dimensions).
- * Detects automatically if matrix has name, column headers and/or row labels, unless 'ml' is set to NULL.
+ * Loads a matrix from a "native" binary file (i.e., with the native endiannes,
+ * and the compiled types for matrix data and dimensions; no file signature).
  *
- * If 'matrix' is NULL, skips data matrix (just reads matrix dimensions).
- * Else, if in addition (*matrix != NULL), do not allocates memory for the data matrix, but uses the supplied one.
+ * Reads <rows_to_read> full rows, starting at <starting_row>.
  *
- * Reads <length> items, starting from the <offset>-th element, if these values are positive (they are
- * ignored otherwise). Skips data matrix if (offset + length) >= matrix dimensions.
+ * Detects automatically if matrix has name, column headers and/or row labels,
+ * unless 'mt' is NULL.
+ *
+ * If "matrix" is NULL, skips data matrix; just reads matrix dimensions (and
+ * labels, if mt is non-NULL). Else, and if in addition, *matrix is non-NULL,
+ * do not allocates memory for the data matrix, but uses the supplied one.
+ *
+ * If <starting_row + rows_to_read> is greater than the number of rows stored in
+ * the file, skips matrix data. In contrast, if "rows_to_read" is zero, reads all
+ * rows starting at <starting_row>.
+ *
+ * In verbose mode, shows information messages, such as matrix dimensions and
+ * labels found.
+ *
+ * If *file_nrows, *file_ncols and *pitch are zero, they are used to return the
+ * matrix dimensions stored in the file, and the pitch used in memory (if any
+ * matrix row is read), respectively. In contrast, if the two former are non-zero,
+ * they are used to check the values stored in the file, failing if they differ.
+ *
+ * The number of columns is always rounded up to a multiple of <memory_alignment>.
  *
  * WARNING:
- *	- For internal use only.
- *	- If *matrix is non-NULL, IT MUST HAVE ENOUGH MEMORY ALREADY ALLOCATED.
- *	- NO ERROR-CHECKING IS PERFORMED (e.g., overflow, invalid values....).
+ *	- For internal-use only (i.e., for temporary files).
+ *	- If *matrix is non-NULL, IT MUST HAVE ENOUGH MEMORY ALREADY ALLOCATED,
+ *	  padding included.
+ *	- NO ERROR-CHECKING IS PERFORMED (e.g., overflow, invalid values,
+ *	  negative data, etc).
  *
- * Returns EXIT_SUCCESS (or EXIT_FAILURE if could not open filename).
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_binary_native( char const *restrict filename, index_t offset, index_t length, real *restrict *restrict matrix,
-				index_t *restrict nrows, index_t *restrict ncols, struct matrix_labels *restrict ml )
+int matrix_load_binary_native( char const *restrict filename, index_t starting_row, index_t rows_to_read, bool verbose, size_t data_size,
+				void *restrict *restrict matrix, index_t *restrict file_nrows, index_t *restrict file_ncols,
+				index_t *restrict pitch, struct matrix_tags_t *restrict mt )
 {
 
-	// Checks for NULL parameters
-	if ( ! ( (size_t) nrows * (size_t) ncols ) ) {
-		fflush( stdout );
-		errno = EFAULT;
-		if ( ! nrows ) perror("\nmatrix_load_binary_native( nrows )");
-		if ( ! ncols ) perror("\nmatrix_load_binary_native( ncols )");
-		return EXIT_FAILURE;
-	}
+	index_t numcols = INDEX_C(0), numrows = INDEX_C(0), l_pitch = INDEX_C(0);
 
+	void *restrict data_matrix = NULL;
 
-	// Starts Reading ...
-	FILE *restrict const file = fopen( filename, "rb" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_load_binary_native().\n");
-		return EXIT_FAILURE;
-	}
+	bool read_matrix = false;	// If data matrix was read.
 
-
-	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("Reading file: '%s'\n",filename);
-		fflush(stdout);
-	#endif
-
-	// Matrix size
-	index_t dim[2];
-	size_t nread = fread( dim, sizeof(index_t), 2, file );
-	if ( nread != 2 ) {
-		fflush(stdout);
-		if ( feof(file) )
-			fprintf(stderr,"\nError reading matrix dimensions:\nPremature end-of-file detected.\n" );
-		else // error
-			fprintf(stderr,"\nInternal error in function fread (%zu items read, 2 expected).\n", nread);
-		fprintf(stderr,"Error in matrix_load_binary_native().\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
-	index_t nitems;
-	{
-		uintmax_t nitems_overflow = ((uintmax_t) dim[0] * (uintmax_t) dim[1]) - (uintmax_t)(offset + length);
-
-		if ( (dim[0] <= 0) + (dim[1] <= 0) + (nitems_overflow > (uintmax_t) IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_load_binary_native( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-				dim[0], dim[1], strerror(errno));
-			if ( nitems_overflow > (uintmax_t) IDX_MAX )
-				fprintf(stderr, "Matrix dimensions are too large.\nData matrices are limited to:\n"
-						"\t* %" PRI_IDX " rows.\n\t* %" PRI_IDX " columns.\n\t* %" PRI_IDX " items.\n",
-						IDX_MAX, IDX_MAX, IDX_MAX);
-			return EXIT_FAILURE;
-		}
-
-		nitems = (index_t) nitems_overflow;
-	}
-
-	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("\tMatrix Dimensions: %" PRI_IDX "x%" PRI_IDX " (%" PRI_IDX " items)\n", dim[0], dim[1], nitems );
-		fflush(stdout);
-	#endif
+	bool memory_allocated = false;	// If memory was allocated for data matrix.
 
 	/////////////////////////////////
 
-	// Reads data matrix
+	// Checks for NULL parameters
+	if ( ! ( (uintptr_t) filename * (uintptr_t) file_nrows * (uintptr_t) file_ncols * (uintptr_t) pitch ) ) {
+		bool const shown_by_all = false;
+		int const errnum = EFAULT;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_native( filename )" );
+		if ( ! file_nrows ) print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_native( file_nrows )" );
+		if ( ! file_ncols ) print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_native( file_ncols )" );
+		if ( ! pitch )	print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_native( pitch )" );
+		return EXIT_FAILURE;
+	}
 
-	real *restrict data_matrix = NULL;
+	// Checks for invalid parameters
+	if ( (! data_size) + (starting_row < 0) + (rows_to_read < 0) + (*file_nrows < 0) + (*file_ncols < 0) ) {
+		bool const shown_by_all = false;
+		int const errnum = EINVAL;
+		if ( ! data_size ) print_errnum( shown_by_all, errnum, "\nmatrix_load_binary_native( data_size=%zu )", data_size );
+		if ( starting_row < 0 ) print_errnum(shown_by_all,errnum,"\nmatrix_load_binary_native( starting_row=%" PRI_IDX " )",starting_row);
+		if ( rows_to_read < 0 ) print_errnum(shown_by_all,errnum,"\nmatrix_load_binary_native( rows_to_read=%" PRI_IDX " )",rows_to_read);
+		if ( *file_nrows < 0 ) print_errnum(shown_by_all,errnum,"\nmatrix_load_binary_native( file_nrows=%" PRI_IDX " )",*file_nrows );
+		if ( *file_ncols < 0 ) print_errnum(shown_by_all,errnum,"\nmatrix_load_binary_native( file_ncols=%" PRI_IDX " )",*file_ncols );
+		return EXIT_FAILURE;
+	}
+
+	// ------------------------------------
+
+	#if NMFGPU_DEBUG_READ_MATRIX
+		print_message( false, "\nReading '%s'...\n", filename );
+	#endif
+
+	FILE *restrict const file = fopen( filename, "rb" );
+	if ( ! file ) {
+		print_errnum( true, errno, "Error in matrix_load_binary_native(): fopen( %s )", filename );
+		return EXIT_FAILURE;
+	}
+
+	// ------------------------------------
+
+	// Reads matrix dimensions.
+	{
+		index_t dim[2] = { INDEX_C(0), INDEX_C(0) };
+
+		size_t const nread = fread( dim, sizeof(index_t), 2, file );
+		if ( nread != 2 ) {
+			if ( feof(file) )
+				print_error( false, "\nError reading input file:\nPremature end-of-file detected. Invalid file format.\n\n");
+			else // error
+				print_error( true, "\nError in matrix_load_binary_native(): fread( dim[2] ).\n" );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+
+		uintmax_t const nitems = ((uintmax_t) dim[0]) * ((uintmax_t) dim[1]);
+
+		if ( verbose )
+			print_message( false, "\t\tMatrix dimensions: %" PRI_IDX " x %" PRI_IDX " (%" PRIuMAX " items)\n",
+					dim[0], dim[1], nitems );
+
+		if ((dim[0] <= 0) + (dim[1] <= 0) + (dim[0] > max_non_padded_dim) + (dim[1] > max_pitch) + (nitems > (uintmax_t)max_num_items)) {
+			if ( (dim[0] < 2) + (dim[1] < 2) )
+				print_error( false, "\nError reading input file: both matrix dimensions must be greater than zero.\n\n" );
+			else
+				print_error( false, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
+						"On this system and with the given input arguments, data matrices are limited to:\n\t* %"
+						PRI_IDX " rows.\n\t* %" PRI_IDX " columns.\n\t* %zu items.\n", max_non_padded_dim,
+						max_pitch, max_num_items );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+
+		// ------------------------------------
+
+		// Checks matrix dimensions, if provided.
+
+		if ( (*file_nrows + *file_ncols) * ((*file_nrows != (index_t) dim[0]) + (*file_ncols != (index_t) dim[1])) ) {
+			print_error( false, "\nError in matrix_load_binary( transpose=%i ): matrix dimensions mismatch: %" PRIu32 " x %" PRIu32
+				" read, %" PRI_IDX " x %" PRI_IDX " expected.\n", transpose, dim[0], dim[1], *file_nrows, *file_ncols );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+
+		numrows = dim[0];
+		numcols = dim[1];
+		l_pitch = get_padding( numcols );
+
+	} // Reads matrix dimensions
+
+	// ------------------------------------
+
+	// Reads matrix data
 
 	// If data matrix will be read.
-	bool const read_matrix = ( ((size_t) matrix) * ((offset+length) <= nitems) );
-
-	bool allocated_memory = false;	// If memory was allocated for data matrix.
+	read_matrix = ( ((uintptr_t) matrix) * ((starting_row + rows_to_read) <= numrows) );
 
 	if ( read_matrix ) {
 
-		// If length is not specified, reads all the matrix.
-		index_t const size = ( length ? length : nitems ) ;
+		/* If the number of rows to read was not specified, reads all
+		 * the matrix, starting at <starting_row>.
+		 */
+		if ( ! rows_to_read )
+			rows_to_read = numrows - starting_row;
 
 		data_matrix = (real *restrict) (*matrix);
+
+		// Allocates memory, if necessary.
 		if ( ! data_matrix ) {
 
 			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("\tAllocating memory for %" PRI_IDX " data items (length=%" PRI_IDX ")...\n", size, length );
-				fflush(stdout);
+				size_t const items_to_read = (size_t) rows_to_read * numcols;
+				print_message( false, "\tAllocating memory for %zu items: %" PRI_IDX " rows, %" PRI_IDX " columns (%"
+						PRI_IDX " with padding)...\n", items_to_read, rows_to_read, numcols, l_pitch );
 			#endif
 
-			data_matrix = (real *restrict) malloc( size * sizeof(real) );
+			size_t const items_to_read_padding = (size_t) rows_to_read * l_pitch;
+
+			data_matrix = malloc( items_to_read_padding * data_size );
 			if ( ! data_matrix ) {
-				int const err = errno; fflush(stdout); errno = err;
-				perror("\nmalloc: ");
-				fprintf(stderr,"Error in matrix_load_binary_native().\n");
+				print_errnum( true, errno, "Error in matrix_load_binary_native(): malloc( data_matrix, rows=%" PRI_IDX
+						", numcols=%" PRI_IDX ", padding=%" PRI_IDX " )", rows_to_read, numcols, l_pitch );
 				fclose(file);
 				return EXIT_FAILURE;
 			}
 
-			allocated_memory = true;
-
-			*matrix = data_matrix;	// Sets the new address.
-
+			memory_allocated = true;
 		}
 
-		if ( offset && fseek( file, offset * sizeof(real), SEEK_CUR ) ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nfseek(%" PRI_IDX "): %s\n", offset, strerror(errno) );
-			fprintf(stderr,"Error in matrix_load_binary_native().\n");
-			if (allocated_memory) free( (void *) data_matrix );
-			fclose(file);
-			return EXIT_FAILURE;
+		// ------------------------------------
+
+		// "Jumps" to row <starting_row>.
+		{
+			#if NMFGPU_DEBUG_READ_MATRIX
+				print_message( false, "\tSkipping %" PRI_IDX " rows...\n", starting_row );
+			#endif
+
+			size_t const offset = starting_row * numcols;	// Offset in file, not in memory.
+
+			if ( offset && fseek( file, offset * data_size, SEEK_CUR ) ) {
+				print_errnum( true, errno, "Error in matrix_load_binary_native(): fseek( starting_row=%" PRI_IDX ", numcols=%"
+						PRI_IDX " )", starting_row, numcols );
+				if ( memory_allocated )
+					free( (void *) data_matrix );
+				fclose(file);
+				return EXIT_FAILURE;
+			}
 		}
 
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("\tReading %" PRI_IDX " items (length=%" PRI_IDX ") from data matrix (starting at offset %" PRI_IDX ")... ",
-				size, length, offset );
-			fflush(stdout);
-		#endif
+		// ------------------------------------
 
-		nread = fread( data_matrix, sizeof(real), size, file );
-		if ( nread != (size_t) size ) {
-			fflush(stdout);
-			fprintf(stderr,"\nError reading file: %zu items read, %" PRI_IDX " expected.\n"
-					"Error in matrix_load_binary_native().\n", nread, size);
-			fclose(file);
-			if (allocated_memory) free( (void *) data_matrix );
-			return EXIT_FAILURE;
+		// Reads the data matrix.
+
+		if ( verbose )
+			print_message( false, "\tReading an %" PRI_IDX "-by-%" PRI_IDX " data matrix, starting at row %" PRI_IDX "...\n",
+					rows_to_read, numcols, starting_row );
+
+		void *pmatrix = data_matrix;
+		for ( index_t i=0 ; i < rows_to_read ; i++, pmatrix += (l_pitch * data_size) ) {
+
+			size_t const nread = fread( pmatrix, data_size, numcols, file );
+
+			if ( nread != (size_t) numcols ) {
+				if ( ferror(file) )
+					print_errnum( true, errno, "Error in matrix_load_binary_native(): fread( row %" PRI_IDX "/%" PRI_IDX
+							", %" PRI_IDX " columns)", i, rows_to_read, numcols );
+				else	// EOF
+					print_error( false, "\nError reading input file:\nPremature end-of-file detected. "
+							"Invalid file format.\n\n");
+				if ( memory_allocated )
+					free( (void *) data_matrix );
+				fclose(file);
+				return EXIT_FAILURE;
+			}
+
 		}
 
 	} else { // Skips all data matrix
 
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("\tSkipping data matrix... " );
-			fflush(stdout);
-		#endif
+		size_t const nitems = (size_t) numrows * numcols;
 
-		if ( fseek( file, nitems * sizeof(real), SEEK_CUR ) ) {
-			int const err = errno; fflush(stdout); errno = err;
-			perror("\nfseek(data_matrix)");
-			fprintf(stderr,"Error in matrix_load_binary_native().\n");
+		if ( verbose )
+			print_message( false, "\tSkipping data matrix...\n" );
+
+		if ( fseek( file, nitems * data_size, SEEK_CUR ) ) {
+			print_errnum( true, errno, "Error in matrix_load_binary_native(): fseek( matrix_size: %zu items )", nitems );
 			fclose(file);
 			return EXIT_FAILURE;
 		}
 
 	} // If read data matrix
 
-	#if NMFGPU_DEBUG_READ_MATRIX
-		printf("done.\n" );
-		fflush(stdout);
-	#endif
-
-	*nrows = dim[0];
-	*ncols = dim[1];
-
 	/////////////////////////////////
 
 
 	// Reads headers, labels and name (as plain text) if they exists.
 
-	// Skips them if ml is set to NULL
-	if ( ! ml ) {
+	if ( mt && ( matrix_read_tags( file, numrows, numcols, verbose, mt ) != EXIT_SUCCESS ) ) {
+		print_error( true, "Error in matrix_load_binary_native()\n" );
+		if ( read_matrix * memory_allocated )
+			free( (void *) data_matrix );
 		fclose(file);
-		return EXIT_SUCCESS;
+		return EXIT_FAILURE;
 	}
-
-	index_t const numrows = dim[0];
-	index_t const numcols = dim[1];
-
-	char *restrict name = NULL;
-	char *restrict headers = NULL;
-	char **restrict pheaders = NULL;
-	char *restrict labels = NULL;
-	char **restrict plabels = NULL;
-
-
-	// Checks for row labels
-	size_t len = read_line( file, &labels );
-	if ( ! labels ) {
-		#if NMFGPU_DEBUG_READ_MATRIX2
-			printf("\tNo Labels (null)\n"); fflush(stdout);
-		#endif
-		fclose(file);
-		if ( len ) { // Error
-			fprintf(stderr, "Error reading row labels.\nError in matrix_load_binary_native().\n");
-			if (allocated_memory) free( (void *) data_matrix );
-			return EXIT_FAILURE;
-		}
-		*ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
-		return EXIT_SUCCESS;
-	}
-	if ( len >= 3 ) { // minimum length for two labels.
-		// Divides into tokens by replacing all tabs characters by '\0'.
-		size_t ntokens = tokenize( labels, &plabels, (int) '\t' );
-
-		// If there is only one token, "retokenizes" using space as delimiter.
-		if ( ntokens == 1 ) {
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("\tntokens Labels=1\n"); fflush(stdout);
-			#endif
-			free(plabels);
-			plabels = NULL;
-			ntokens = tokenize( labels, &plabels, (int) ' ' );
-		} // if ntokens == 1
-
-		#if NMFGPU_DEBUG_READ_MATRIX2
-			printf("\tntokens Labels=%zu\n",ntokens);
-			fflush(stdout);
-		#endif
-
-		if ( ntokens != (size_t) numrows ) {
-			fflush(stdout);
-			if ( ntokens ) {
-				fprintf( stderr, "\nError reading input file. Invalid format:\nNumber of row labels (%zu) and number of "
-					"matrix rows (%" PRI_IDX ") mismatch.\n", ntokens, numrows );
-				if ( ntokens > (size_t) numrows )
-					fprintf( stderr, "Please remember to set a '\\n' (new-line) character between column labels, row "
-						"labels and the description string.\n\n");
-				free(plabels);
-			}
-			else	// Error.
-				fprintf(stderr,"Error in matrix_load_binary_native().\n\n");
-			free(labels);
-			if (! (*matrix)) free( (void *) data_matrix );
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-	} else {	// No labels.
-		#if NMFGPU_DEBUG_READ_MATRIX2
-			printf("\t'No Labels' (len=%zu)\n",len); fflush(stdout);
-		#endif
-		free(labels);
-		labels = NULL;
-	}
-
-
-	// Checks for columns headers
-	len = read_line( file, &headers );
-	if ( ! headers ) {
-		#if NMFGPU_DEBUG_READ_MATRIX2
-			printf("\tNo headers (null)\n"); fflush(stdout);
-		#endif
-		fclose(file);
-		if ( len ) {
-			fprintf(stderr, "Error reading column headers.\nError in matrix_load_binary_native().\n");
-			if ( labels ) { free(plabels); free(labels); }
-			if (allocated_memory) free( (void *) data_matrix );
-			return EXIT_FAILURE;
-		}
-		*ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, labels, plabels );
-		return EXIT_SUCCESS;
-	}
-	if ( len >= 3 ) { // minimum length for two headers.
-		// Divides into tokens by replacing all tabs characters by '\0'.
-		size_t ntokens = tokenize( headers, &pheaders, (int) '\t' );
-
-		// If there is only one token, retokenizes using space as delimiter
-		if ( ntokens == 1 ) {
-			#if NMFGPU_DEBUG_READ_MATRIX
-				printf("\tntokens Headers=1\n"); fflush(stdout);
-			#endif
-			free(pheaders);
-			pheaders = NULL;
-			ntokens = tokenize( headers, &pheaders, (int) ' ' );
-		} // if ntokens == 1
-
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("\tntokens Headers=%zu\n",ntokens);
-		#endif
-
-		if ( ntokens != (size_t) numcols ) {
-			fflush(stdout);
-			if ( ntokens ) {
-				fflush(stdout);
-				fprintf( stderr,"\nError reading input file. Invalid format:\nNumber of column labels (%zu) and number of "
-						"matrix columns (%" PRI_IDX ") mismatch.\n", ntokens, numcols );
-				if ( ntokens > (size_t) numcols )
-					fprintf( stderr, "Please remember to set a '\\n' (new-line) character between headers labels, "
-							"row labels and the description string.\n\n");
-				free(pheaders);
-			}
-			else
-				fprintf(stderr,"Error in matrix_load_binary_native().\n");
-			free(headers);
-			if (! (*matrix)) free( (void *) data_matrix );
-			if ( labels ) { free(labels); free(plabels); }
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-	} else {	// No headers
-		#if NMFGPU_DEBUG_READ_MATRIX2
-			printf("\t'No headers' (len=%zu)\n",len);
-		#endif
-		free(headers);
-		headers = NULL;
-	}
-
-
-	// Checks for name.
-	len = read_token( file, (int) '\t', &name, NULL );
-
-	#if NMFGPU_DEBUG_READ_MATRIX2
-		printf("\tName (len=%zu):\n",len);
-	#endif
 
 	fclose(file);
 
-	if ( ( ! name ) * len ) {
-		fprintf(stderr, "Error reading description string.\nError in matrix_load_binary_native().\n");
-		struct matrix_labels l_ml = NEW_MATRIX_LABELS( NULL, headers, pheaders, labels, plabels );
-		clean_matrix_labels(l_ml);
-		if (allocated_memory) free( (void *) data_matrix );
-		return EXIT_FAILURE;
-	} // if has name
+	// ------------------------------------
 
-	#if NMFGPU_DEBUG_READ_MATRIX2
-		printf("\t\t'%s'\n",name);
-	#endif
+	// Sets output values.
 
-	*ml = (struct matrix_labels) NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
+	*file_nrows = numrows;
+	*file_ncols = numcols;
+	*pitch = l_pitch;
+	if ( read_matrix * memory_allocated )
+		*matrix = data_matrix;
 
 	return EXIT_SUCCESS;
 
 } // matrix_load_binary_native
 
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Reads input matrix according to the selected file format.
@@ -2926,27 +2997,29 @@ int matrix_load_binary_native( char const *restrict filename, index_t offset, in
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_lbls, index_t is_bin, real *restrict *restrict matrix,
-		index_t *restrict nrows, index_t *restrict ncols, struct matrix_labels *restrict ml )
+		index_t *restrict nrows, index_t *restrict ncols, index_t *restrict pitch, struct matrix_tags_t *restrict mt )
 {
 
 	// Checks for NULL parameters
-	if ( ! ( (size_t) filename * (size_t) matrix * (size_t) nrows * (size_t) ncols * (size_t) ml ) ) {
-		fflush( stdout );
-		errno = EFAULT;
-		if ( ! filename ) perror("\nmatrix_load( filename )");
-		if ( ! matrix )	perror("\nmatrix_load( matrix )");
-		if ( ! nrows )	perror("\nmatrix_load( nrows )");
-		if ( ! ncols )	perror("\nmatrix_load( ncols )");
-		if ( ! ml )	perror("\nmatrix_load( ml )");
+	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) pitch * (uintptr_t) mt ) ) {
+		bool const shown_by_all = false;
+		int const errnum = EFAULT;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_load( filename )" );
+		if ( ! matrix )	print_errnum( shown_by_all, errnum, "\nmatrix_load( matrix )" );
+		if ( ! nrows )	print_errnum( shown_by_all, errnum, "\nmatrix_load( nrows )" );
+		if ( ! ncols )	print_errnum( shown_by_all, errnum, "\nmatrix_load( ncols )" );
+		if ( ! pitch )	print_errnum( shown_by_all, errnum, "\nmatrix_load( pitch )" );
+		if ( ! mt )	print_errnum( shown_by_all, errnum, "\nmatrix_load( mt )" );
 		return EXIT_FAILURE;
 	}
 
 	if ( is_bin < 0 ) {
-		fflush(stdout);
-		errno = EINVAL;
-		fprintf( stderr, "\nmatrix_load( is_bin=%" PRI_IDX " ): %s\n", is_bin, strerror(errno));
+		print_errnum( false, EINVAL, "\nError in matrix_load( is_bin=%" PRI_IDX " )", is_bin );
 		return EXIT_FAILURE;
 	}
+
+	// Initializes matrix dimensions
+	*pitch = *ncols = *nrows = 0;
 
 	int status = EXIT_SUCCESS;
 
@@ -2954,33 +3027,40 @@ int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_
 
 	// Loads the file.
 
-	printf("\nLoading input file...\n");
+	print_message( false, "\nLoading input file...\n" );
 
 	if ( is_bin > 1 ) { // Input file is "native" binary.
 
-		printf("\tFile selected as \"native\" binary (i.e., the file is read using the data types specified at compilation).\n"
-			"\tNo error-checking is performed.\n\tLoading...\n");
+		print_message( false, "\tFile selected as \"native\" binary (i.e., the file is read using the data types specified "
+					"at compilation).\n\tNo error-checking is performed.\n\tLoading...\n" );
 
-		status = matrix_load_binary_native( filename, 0, 0, matrix, nrows, ncols, ml );
+		index_t const starting_row = 0;
+		index_t const rows_to_read = 0;
+		bool const verbose = true;
+		size_t const data_size = sizeof(real);
+
+		status = matrix_load_binary_native( filename, starting_row, rows_to_read, verbose, data_size, (void *restrict *restrict) matrix,
+							nrows, ncols, pitch, mt );
 	}
 
 	// Input file is "non-native" binary.
 	else if ( is_bin ) {
 
-		printf("\tFile selected as (non-\"native\") binary (i.e., double-precision data and unsigned integers). Loading...\n");
+		print_message( false, "\tFile selected as (non-\"native\") binary (i.e., double-precision data and unsigned integers).\n"
+				"\tLoading...\n" );
 
-		status = matrix_load_binary_verb( filename, matrix, nrows, ncols, ml );
+		status = matrix_load_binary_verb( filename, matrix, nrows, ncols, pitch, mt );
 	}
 
 	// Input file is ASCII-text.
 	else {
 
-		printf("\tFile selected as ASCII text. Loading...\n"
+		print_message( false, "\tFile selected as ASCII text. Loading...\n"
 			"\t\tData matrix selected as having numeric column headers: %s.\n"
 			"\t\tData matrix selected as having numeric row labels: %s.\n",
 			( numeric_hdrs ? "Yes" : "No" ), ( numeric_lbls ? "Yes" : "No" ) );
 
-		status = matrix_load_ascii_verb( filename, numeric_hdrs, numeric_lbls, matrix, nrows, ncols, ml );
+		status = matrix_load_ascii_verb( filename, numeric_hdrs, numeric_lbls, matrix, nrows, ncols, pitch, mt );
 
 	} // If file is (native) binary or text.
 
@@ -2990,17 +3070,217 @@ int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_
 
 } // matrix_load
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
  * Saves a matrix to an ASCII-text file.
- * Skips name, headers and labels if 'ml' is set to NULL.
+ * Skips name, headers and labels if 'mt' is NULL.
+ *
+ * If 'transpose' is 'true', transposes matrix in file as follows:
+ * - Matrix dimensions in memory: <ncols> rows, <nrows> columns (padded to <pitch>)
+ * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
+ * - Writes <ncols> mt->headers (as column headers) and <nrows> mt->labels (as row labels).
+ *
+ * ncols <= pitch, unless matrix transposing is set (in that case, nrows <= pitch).
+ *
+ * Set 'append' to 'true' to append data to the file.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+static int matrix_write_ascii( char const *restrict filename, bool real_data, void const *restrict matrix, index_t nrows, index_t ncols,
+				index_t padding, bool transpose, bool append, struct matrix_tags_t const *restrict mt )
+{
+
+	int status = EXIT_SUCCESS;
+	int const delimiter = (int) '\t';
+
+	char const *restrict name = NULL;
+	struct tag_t labels = new_empty_tag();
+	struct tag_t headers = new_empty_tag();
+
+	bool hasheaders = false;
+	bool haslabels = false;
+
+	////////////////////////////////
+
+	// Checks for NULL parameters
+	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix ) ) {
+		int const errnum = EFAULT;
+		bool const shown_by_all = false;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_write_ascii( filename )" );
+		if ( ! matrix )	print_errnum( shown_by_all, errnum, "\nmatrix_write_ascii( matrix )" );
+		return EXIT_FAILURE;
+	}
+
+	// Checks matrix dimensions.
+	{
+		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
+
+		if ( (nrows <= 0) + (ncols <= 0) + (nitems > (uintmax_t) max_num_items) ) {
+			print_error( false, "\nError in matrix_write_ascii( rows=%" PRI_IDX ", columns=%" PRI_IDX ", padding=%" PRI_IDX
+						" transpose=%i ): Invalid matrix dimensions.\n", nrows, ncols, padding, transpose );
+			if ( (nrows > 0) * (ncols > 0) ) // nitems > max_num_items
+				print_error( false, "Matrix size (%" PRIuMAX " items) exceeds the limits used for matrix dimensions (%zu "
+							"items).\n", nitems, max_num_items );
+			return EXIT_FAILURE;
+		}
+
+		if ( transpose ) {
+			if ( nrows > padding ) {
+				print_error( false, "\nError in matrix_write_ascii( rows=%" PRI_IDX " [number of columns since matrix "
+						"transposing is selected], padding=%" PRI_IDX " ): Invalid values.\n", nrows, padding );
+				return EXIT_FAILURE;
+			}
+		} else if ( ncols > padding ) {
+			print_error( false, "\nError in matrix_write_ascii( columns=%" PRI_IDX ", padding=%" PRI_IDX " ): Invalid values.\n",
+					nrows, padding );
+				return EXIT_FAILURE;
+		}
+	} // Checks matrix dimensions
+
+	// -----------------------------
+
+	// File mode: Creates a new text file, <OR>, appends data to an existing one.
+	char const mode = ( append ? 'a' : 'w' );
+
+	FILE *restrict const file = fopen( filename, &mode );
+	if ( ! file ) {
+		print_errnum( true, errno, "Error in matrix_write_ascii(): fopen( %s, mode='%c' )", filename, mode );
+		return EXIT_FAILURE;
+	}
+
+	// -----------------------------
+
+	// Writes tag elements.
+
+	if ( mt ) {
+		name = mt->name;
+		headers = mt->headers;
+		labels = mt->labels;
+
+		hasheaders = (bool) headers.tokens;
+		haslabels = (bool) labels.tokens;
+	}
+
+	// Name
+	if ( name ) {
+		struct tag_t const tag_name = new_tag( (char *restrict)name, (char **restrict)&name );	// Fakes a struct tag_t
+
+		status = write_tag( file, tag_name, "name", 1, delimiter, false, ! hasheaders ); // No prefix; suffix only if no headers.
+		if ( status != EXIT_SUCCESS ) {
+			print_error( true, "Error in matrix_write_ascii()\n" );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+	}
+
+	// Column headers
+	if ( hasheaders ) {
+		status = write_tag( file, headers, "headers", ncols, delimiter, name, true ); // Prefix only if has name; suffix always.
+		if ( status != EXIT_SUCCESS ) {
+			print_error( true, "Error in matrix_write_ascii()\n" );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+	}
+
+	// ----------------------------
+
+	// Writing data...
+
+	// Step sizes for outer and inner loops.
+	index_t incr_outer_loop = padding;	// Step size for outer loop
+	index_t incr_inner_loop = 1;		// Step size for inner loop.
+	if ( transpose ) {
+		incr_outer_loop = 1;
+		incr_inner_loop = padding;
+	}
+	errno = 0;
+
+	size_t const data_size = ( real_data ? sizeof(real) : sizeof(index_t) );
+
+	void const *pmatrix = matrix;	// &matrix[i][0] (or &matrix[0][i], if transpose)
+	for ( index_t i = 0 ; i < nrows ; i++, pmatrix += (incr_outer_loop * data_size) ) {
+
+		// Writes label.
+		if ( haslabels ) {
+			if ( fprintf( file, "%s", labels.ptokens[i] ) < 0 ) {	// < 0: *ptokens[i] might be NULL.
+				print_errnum( true, errno, "Error in matrix_write_ascii( %s ): fprintf(plabels[%" PRI_IDX "])",
+						( real_data ? "real" : "index_t" ), i );
+				fclose(file);
+				return EXIT_FAILURE;
+			}
+		} else {
+			data_t val;
+			int conv;
+
+			memcpy( &val, pmatrix, data_size );
+
+			if ( real_data )
+				conv = fprintf( file, "%g", val.r );
+			else
+				conv = fprintf( file, "%" PRI_IDX, val.i );
+
+			if ( conv <= 0 ) {
+				print_errnum( true, errno, "Error in matrix_write_ascii( %s ): fprintf( %s %" PRI_IDX " of %" PRI_IDX
+						", item 0 of %" PRI_IDX " )", ( real_data ? "real" : "index_t" ),
+						( transpose ? "column" : "row" ), i, nrows, ncols );
+				fclose(file);
+				return EXIT_FAILURE;
+			}
+		} // if haslabels
+
+		void const *p = pmatrix + ( (! haslabels) * incr_inner_loop * data_size );
+		for ( index_t j = (! haslabels) ; j < ncols ; j++, p += (incr_inner_loop * data_size) ) {
+
+			data_t val;
+			int conv;
+
+			memcpy( &val, p, data_size );
+
+			if ( real_data )
+				conv = fprintf( file, "%c%g", delimiter, val.r );
+			else
+				conv = fprintf( file, "%c%" PRI_IDX, delimiter, val.i );
+
+			if ( conv <= 0 ) {
+				print_errnum( true, errno, "Error in matrix_write_ascii( %s ): fprintf( %s %" PRI_IDX " of %" PRI_IDX ", item %"
+						PRI_IDX " of %" PRI_IDX " )", ( real_data ? "real" : "index_t" ), ( transpose ? "column" : "row" ),
+						i, nrows, j, ncols );
+				fclose(file);
+				return EXIT_FAILURE;
+			}
+		}
+
+		if ( fprintf( file, "\n" ) <= 0 ) {
+			print_errnum( true, errno, "Error in matrix_write_ascii( %s ): fprintf('\\n' at %s %" PRI_IDX " of %" PRI_IDX ")",
+					( real_data ? "real" : "index_t" ), ( transpose ? "column" : "row" ), i, nrows );
+			fclose(file);
+			return EXIT_FAILURE;
+		}
+
+	} // for ( 0 <= i < nrows )
+
+	if ( fclose(file) ) {
+		print_errnum( true, errno, "Error in matrix_write_ascii(): fclose()" );
+		return EXIT_FAILURE;
+	}
+
+	return EXIT_SUCCESS;
+
+} // matrix_write_ascii
+
+// ---------------------------------------------
+
+/*
+ * Saves a real-type matrix to an ASCII-text file.
+ * Skips name, headers and labels if 'mt' is NULL.
  *
  * If 'transpose' is 'true', transposes matrix in file as follows:
  * - Matrix dimensions in memory: <ncols> rows, <nrows> columns.
  * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
- * - Writes <ncols> ml->headers (as column headers) and <nrows> ml->labels (as row labels).
+ * - Writes <ncols> mt->headers (as column headers) and <nrows> mt->labels (as row labels).
  *
  * ncols <= padding, unless matrix transposing is set (in that case, nrows <= padding).
  *
@@ -3009,563 +3289,411 @@ int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int matrix_save_ascii( char const *restrict filename, real const *restrict matrix, index_t nrows, index_t ncols, bool transpose, bool append,
-			struct matrix_labels const *restrict ml, index_t padding )
+			struct matrix_tags_t const *restrict mt, index_t padding )
 {
 
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_save_ascii( matrix )");
+	bool const real_data = true;
+
+	return matrix_write_ascii( filename, real_data, (void const *restrict) matrix, nrows, ncols, transpose, append, mt, padding );
+
+} // matrix_save_ascii
+
+////////////////////////////////////////////////
+
+/*
+ * Saves an index_t-type matrix to an ASCII-text file.
+ * Skips name, headers and labels if 'mt' is NULL.
+ *
+ * If 'transpose' is 'true', transposes matrix in file as follows:
+ * - Matrix dimensions in memory: <ncols> rows, <nrows> columns.
+ * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
+ * - Writes <ncols> mt->headers (as column headers) and <nrows> mt->labels (as row labels).
+ *
+ * ncols <= padding, unless matrix transposing is set (in that case, nrows <= padding).
+ *
+ * Set 'append' to 'true' to append data to the file.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int matrix_int_save_ascii( char const *restrict filename, index_t const *restrict matrix, index_t nrows, index_t ncols, bool transpose,
+				bool append, struct matrix_tags_t const *restrict mt, index_t padding )
+{
+
+	bool const real_data = false;
+
+	return matrix_write_ascii( filename, real_data, (void const *restrict) matrix, nrows, ncols, transpose, append, mt, padding );
+
+} // matrix_int_save_ascii
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+/*
+ * Writes to a file the given real-type values in a single line, separated by the given delimiter.
+ *
+ * prefix: If 'true', also writes a delimiter character before the first value.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
+ */
+static int matrix_write_line( FILE *restrict file, real const *restrict pmatrix, index_t nitems, int delimiter, bool prefix )
+{
+
+	errno = 0;
+
+	// Starts with no prefix
+	if ( (! prefix) && (fprintf( file, "%g", *pmatrix ) <= 0) ) {
+		print_errnum( true, errno, "Error in matrix_write_line(): fprintf( item 0 of %" PRI_IDX " )", nitems );
 		return EXIT_FAILURE;
 	}
 
-	{
-		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
-
-		if ( (nrows <= 0) + (ncols <= 0) + (padding <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_save_ascii( rows=%" PRI_IDX ", columns=%" PRI_IDX ", padding=%" PRI_IDX " ): %s\n",
-				nrows, ncols, padding, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf( stderr, "Matrix size (%" PRIuMAX ") exceeds the limits used for matrix dimensions (%" PRI_IDX ").\n",
-					nitems, IDX_MAX);
+	for ( index_t j = (! prefix) ; j < nitems ; j++ ) {
+		int const conv = fprintf( file, "%c%g", delimiter, pmatrix[ j ] );
+		if ( conv <= 0 ) {
+			print_errnum( true, errno, "Error in matrix_write_line(): fprintf( item %" PRI_IDX " of %" PRI_IDX " )", j, nitems );
 			return EXIT_FAILURE;
 		}
-	}
-
-	if ( transpose ) {
-		if ( nrows > padding ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_save_ascii( rows=%" PRI_IDX " [number of columns since matrix transposing "
-					"is selected], padding=%" PRI_IDX " ): %s\n", nrows, padding, strerror(errno));
-			return EXIT_FAILURE;
-		}
-	} else if ( ncols > padding ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_save_ascii( columns=%" PRI_IDX ", padding=%" PRI_IDX " ): %s\n",
-					nrows, padding, strerror(errno));
-			return EXIT_FAILURE;
-	}
-
-	// ------------------------
-
-	// File mode: Creates a new text file, <OR>, appends to an existing one.
-	char const mode = ( append ? 'a' : 'w' );
-
-	FILE *restrict const file = fopen( filename, &mode );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_save_ascii().\n");
-		return EXIT_FAILURE;
-	}
-
-	char const *restrict name = NULL;
-	char const *restrict headers = NULL;
-	char const *const *restrict pheaders = NULL;
-	char const *restrict labels = NULL;
-	char const *const *restrict plabels = NULL;
-
-	if ( ml ) {
-		struct matrix_labels lml = *ml;
-		name = lml.name;
-		headers = lml.headers.tokens;
-		pheaders = lml.headers.ptokens;
-		labels = lml.labels.tokens;
-		plabels = lml.labels.ptokens;
-	}
-
-
-	// Name
-	if ( name ) {
-		if ( fprintf(file,"%s",name) < 0 ) {
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(name).\nError in matrix_save_ascii().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		if ( ( ! headers ) && (fprintf(file,"\n") <= 0) ) {
-			fflush(stdout);
-			fprintf(stderr, "\nInternal error in fprintf(name\\n).\nError in matrix_save_ascii().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-	}
-
-
-	// Column headers
-	if ( headers ) {
-
-		index_t i = 0;
-
-		// Starts with a delimiter or not.
-		if ( ! name ) {
-			if ( fprintf(file,"%s",headers) < 0 ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fprintf(pheaders[0]).\nError in matrix_save_ascii().\n");
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-			i = 1;
-		}
-
-		for ( ; i < ncols ; i++)
-			if ( fprintf(file,"\t%s",pheaders[i]) <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fprintf(pheaders[%" PRI_IDX "]).\n Error in matrix_save_ascii().\n", i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-		if ( fprintf(file,"\n") <= 0 ) {
-			fflush(stdout);
-			fprintf(stderr, "\nInternal error in fprintf(headers\\n).\nError in matrix_save_ascii().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-	} // if headers
-
-
-	// ----------------------------
-
-
-	// Writing file...
-
-	// Steps for outer and inner loops.
-	index_t incr_outer_loop = padding;	// Step for outer loop
-	index_t incr_inner_loop = 1;		// Step for inner loop.
-	if ( transpose ) {
-		incr_outer_loop = 1;
-		incr_inner_loop = padding;
-	}
-
-	real const *pmatrix = matrix;	// &matrix[i][0] (or &matrix[0][i] if transpose)
-	for ( index_t i = 0 ; i < nrows ; i++, pmatrix += incr_outer_loop ) {
-
-		index_t j = 0;
-		real const *pmatrix_r = pmatrix; // &matrix[i][j] (or &matrix[j][i] if transpose)
-
-		if ( labels ) {	// Writes label.
-
-			if ( fprintf(file,"%s",plabels[i]) < 0 ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fprintf(plabels[%" PRI_IDX "]).\nError in matrix_save_ascii().\n", i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-		} else { // No labels
-
-			// First value.
-			if ( fprintf( file, "%" DECIMAL_PRECISION "g", *pmatrix_r ) <= 0 ) {
-				fflush(stdout);
-				if ( transpose )
-					fprintf(stderr, "\nInternal error in fprintf(matrix[0][%" PRI_IDX "]).\nError in matrix_save_ascii().\n",
-						i);
-				else
-					fprintf(stderr, "\nInternal error in fprintf(matrix[%" PRI_IDX "][0]).\nError in matrix_save_ascii().\n",
-						i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-			pmatrix_r += incr_inner_loop;	// &matrix[i][1] (or &matrix[1][i] if transpose)
-			j = 1;
-
-		} // If has labels
-
-		for ( ; j < ncols ; j++, pmatrix_r += incr_inner_loop )
-			if ( fprintf(file, "\t%" DECIMAL_PRECISION "g", *pmatrix_r) <= 0 ) {
-				fflush(stdout);
-				if ( transpose )
-					fprintf(stderr,"\nInternal error in fprintf(matrix[%" PRI_IDX "][%" PRI_IDX
-							"]).\nError in matrix_save_ascii().\n", j, i);
-				else
-					fprintf(stderr,"\nInternal error in fprintf(matrix[%" PRI_IDX "][%" PRI_IDX
-							"]).\nError in matrix_save_ascii().\n", i, j);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-		if ( fprintf(file,"\n") <= 0 ) {
-			fflush(stdout);
-			if ( transpose )
-				fprintf(stderr,"\nInternal error in fprintf(matrix[][%" PRI_IDX "]\\n).\nError in matrix_save_ascii().\n", i);
-			else
-				fprintf(stderr,"\nInternal error in fprintf(matrix[%" PRI_IDX "][]\\n).\nError in matrix_save_ascii().\n", i);
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-	} // for ( 0 <= i < nrows )
-
-	if ( fclose(file) ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_save_ascii().\n");
-		return EXIT_FAILURE;
 	}
 
 	return EXIT_SUCCESS;
 
-} // matrix_save_ascii
+} // matrix_write_line
 
-//////////////////////////////////////////////////
+// ---------------------------------------------
 
 /*
- * Saves <nmatrices> <nrows>-by-<ncols> matrices to a single ASCII-text file.
- * Reads input matrices from "native" binary files (i.e., with the compiled types for matrix data and dimensions).
- * Uses the supplied labels (unless 'ml' is NULL).
+ * Saves <nmatrices> <nrows>-by-<ncols> real-type matrices to a single ASCII-text file.
+ * Reads input matrices from "native"-binary files (i.e., with the compiled types for matrix data and dimensions).
+ * Uses the supplied labels (unless 'mt' is NULL).
  * nmatrices > 1
- *
- * WARNING: 'filename_tmp' MUST HAVE ENOUGH MEMORY AVAILABLE TO STORE ANY OF THE INPUT FILENAMES.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int matrix_save_combined_ascii( char const *restrict filename, char const *restrict input_pattern, char const *restrict output_pattern,
-				index_t nmatrices, index_t nrows, index_t ncols, struct matrix_labels const *restrict ml,
-				char *restrict filename_tmp )
+				index_t nmatrices, index_t nrows, index_t ncols, struct matrix_tags_t const *restrict mt )
 {
 
+	// Temporary storage for filenames.
+	char *restrict filename_tmp = NULL;
+	size_t str_len = 0;	// strlen( filename_tmp )
+
+	int status = EXIT_SUCCESS;
+	int const delimiter = (int) '\t';
+
+	char const *restrict name = NULL;
+	struct tag_t labels = new_empty_tag();
+	struct tag_t headers = new_empty_tag();
+
+	bool hasheaders = false;
+	bool haslabels = false;
+
+	////////////////////////////////
+
 	// Checks for NULL parameters
-	if ( ! ( (size_t) filename * (size_t) input_pattern * (size_t) output_pattern * (size_t) ml * (size_t) filename_tmp ) ) {
-		fflush(stdout);
-		fprintf( stderr, "\nmatrix_save_combined_ascii():\n" );
-		errno = EFAULT;
-		if ( ! filename )	perror("\tfilename");
-		if ( ! input_pattern )	perror("\tinput_pattern");
-		if ( ! output_pattern )	perror("\toutput_pattern");
-		if ( ! filename_tmp )	perror("\tfilename_tmp");
+	if ( ! ( (uintptr_t) filename * (uintptr_t) input_pattern * (uintptr_t) output_pattern ) ) {
+		int const errnum = EFAULT;
+		bool const shown_by_all = false;
+		if ( ! filename )	print_errnum( shown_by_all, errnum, "\nmatrix_save_combined_ascii( filename )" );
+		if ( ! input_pattern )	print_errnum( shown_by_all, errnum, "\nmatrix_save_combined_ascii( input_pattern )" );
+		if ( ! output_pattern )	print_errnum( shown_by_all, errnum, "\nmatrix_save_combined_ascii( output_pattern )" );
 		return EXIT_FAILURE;
 	}
 
+	// Checks other parameters
 	{
-		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
-		if ( (nrows <= 0) + (ncols <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_save_combined_ascii( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-				nrows, ncols, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf( stderr, "Matrix size (%" PRIuMAX ") exceeds the limits used for matrix dimensions (%" PRI_IDX ").\n",
-						nitems, IDX_MAX);
+		uintmax_t const nitems = ((uintmax_t) nmatrices) * ((uintmax_t) nrows) * ((uintmax_t) ncols);
+
+		if ( (nmatrices <= 1) + (nrows <= 0) + (ncols <= 0) + (nitems > (uintmax_t) max_num_items) ) {
+			print_error( false, "\nError in matrix_save_combined_ascii( nmatrices=%" PRI_IDX ", rows=%" PRI_IDX
+					", columns=%" PRI_IDX " ): Invalid parameters.\n", nmatrices, nrows, ncols );
+			if ( (nrows > 0) * (ncols > 0) ) { // (nitems > max_num_items) || (nmatrices == 1)
+				if ( nmatrices == 1 )
+					print_error( false, "This method is intended for at least two matrices.\n" );
+				else
+					print_error( false, "The size of the resulting matrix ( %" PRIuMAX " items ) exceeds the limits "
+							"used for matrix dimensions (%zu items).\n", nitems, max_num_items );
+			}
 			return EXIT_FAILURE;
 		}
 	}
-
-	if ( nmatrices <= 1 ) {
-		fflush(stdout);
-		errno = EINVAL;
-		fprintf( stderr, "\nmatrix_save_combined_ascii( nmatrices=%" PRI_IDX " ): %s\n", nmatrices, strerror(errno));
-		return EXIT_FAILURE;
-	}
-
 
 	// --------------------------
 
 	// List of input files
+
 	FILE *restrict *restrict const input_files = (FILE *restrict *restrict) malloc( nmatrices * sizeof(FILE *) );
 	if ( ! input_files ) {
-		int const err = errno; fflush(stdout); errno = err;
-		perror("\nmalloc(input_files[])");
-		fprintf(stderr,"Error in matrix_save_combined_ascii().\n");
+		print_errnum( true, errno, "Error in matrix_save_combined_ascii(): malloc( input_files[], size=%" PRI_IDX " )", nmatrices );
 		return EXIT_FAILURE;
 	}
 
-	// Opens all input files.
-	for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) {
-		if ( sprintf( filename_tmp, input_pattern, filename, ncols, mt ) <= 0 ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nsprintf( base_filename='%s', ncols=%" PRI_IDX ", mt=%" PRI_IDX " ): ",
-				filename, ncols, mt );
-			if ( err ) fprintf( stderr, "%s\n", strerror(err) );
-			fprintf(stderr,"Error setting input filename in matrix_save_combined_ascii()\n");
-			for( index_t i = 0 ; i < mt ; i++ ) fclose(input_files[i]);
-			free((void *) input_files);
+	// --------------------------
+
+	// Temporary storage for filenames.
+	{
+		// Computes (very roughly) the required amount of memory
+
+		size_t const len_ip = strlen( input_pattern );
+		size_t const len_op = strlen( output_pattern );
+
+		str_len = strlen( filename ) + MAX( len_ip, len_op );
+
+		index_t val = MAX( ncols, nmatrices );
+		index_t num_digits = 1;
+		while ( val >= 10 ) {
+			val /= 10;
+			num_digits++;
+		}
+		str_len += (2 * num_digits);
+
+		str_len++;	// To store the null character.
+
+		// Allocates that memory
+		filename_tmp = (char *restrict) malloc( str_len * sizeof(char) );
+		if ( ! filename_tmp ) {
+			print_errnum( true, errno, "Error in matrix_save_combined_ascii(): malloc( filename_tmp, size=%zu )", str_len );
+			free((void *)input_files);
 			return EXIT_FAILURE;
 		}
+
+	} // Temporary storage for filenames.
+
+	// --------------------------
+
+	// Opens all input files.
+
+	for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) {
+
+		errno = 0;
+		status = snprintf( filename_tmp, str_len, input_pattern, filename, ncols, mt );
+		if ( (status <= 0) + ((size_t)status >= str_len) ) {
+			print_errnum( (status <= 0), errno, "Error matrix_save_combined_ascii(): snprintf( base_filename='%s', ncols=%"
+					PRI_IDX ", input file mt=%" PRI_IDX " of nmatrices=%" PRI_IDX ", length=%zu )", filename, ncols,
+					mt, nmatrices, str_len );
+			if ( status > 0 )	// (status >= str_len)
+				print_error( false, "The resulting string was truncated; %i bytes are required at least.\n", status + 1 );
+			for ( index_t i = 0 ; i < mt ; i++ ) fclose(input_files[i]);
+			free((void *)filename_tmp); free((void *)input_files);
+			return EXIT_FAILURE;
+		}
+
 		input_files[mt] = (FILE *restrict) fopen( filename_tmp, "rb" );	// Opens for reading in binary mode.
 		if( ! input_files[mt] ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename_tmp, strerror(errno) );
-			fprintf(stderr,"Error in matrix_save_combined_ascii().\n");
+			print_errnum( true, errno, "Error in matrix_save_combined_ascii(): fopen( input file '%s' )", filename_tmp );
 			for ( index_t i = 0 ; i < mt ; i++ ) fclose(input_files[i]);
-			free((void *) input_files);
+			free((void *)filename_tmp); free((void *)input_files);
 			return EXIT_FAILURE;
 		}
+
 		// Checks matrix dimensions.
 		index_t dim[2] = { 0, 0 };
+
 		size_t const nread = fread( dim, sizeof(index_t), 2, input_files[mt] );
-		if ( (nread != 2) + ferror(input_files[mt]) + feof(input_files[mt]) + (dim[0] != nrows) + (dim[1] != ncols) ) {
-			fflush(stdout);
-			fprintf( stderr, "\nError reading input file %" PRI_IDX "/ %" PRI_IDX " ('%s'):", mt, nmatrices, filename_tmp );
-			if ( ( nread != 2 ) + ferror(input_files[mt]) + feof(input_files[mt]) )
-				fprintf( stderr, "%zu items read, 2 expected.\n", nread );
-			else
-				fprintf( stderr, "Invalid input matrix dimensions: %" PRI_IDX " x %" PRI_IDX " (expected: %" PRI_IDX " x %"
-						PRI_IDX ").\n", dim[0], dim[1], nrows, ncols );
-			fprintf( stderr, "Error in matrix_save_combined_ascii().\n" );
+		if ( (nread != 2) + (dim[0] != nrows) + (dim[1] != ncols) ) {
+			if ( ferror( input_files[mt] ) )
+				print_errnum( true, errno, "Error in matrix_save_combined_ascii(): fread( dim[2], ncols=%" PRI_IDX
+						", mt=%" PRI_IDX ", nmatrices=%" PRI_IDX " )" );
+			else if ( feof( input_files[mt] ) )
+				print_error( false, "\nError in matrix_save_combined_ascii() reading dimensions in file %" PRI_IDX " of "
+						PRI_IDX ": Premature end of file detected.\nInvalid file format.\n", mt, nmatrices );
+			else	// (dim[0] != nrows) || (dim[1] != ncols)
+				print_error( false, "\nError in matrix_save_combined_ascii() reading dimensions in file %" PRI_IDX " of "
+						PRI_IDX ": Invalid input matrix dimensions.\n%" PRI_IDX " x %" PRI_IDX " read, %" PRI_IDX
+						" x %" PRI_IDX "expected.\n", mt, nmatrices, dim[0], dim[1], nrows, ncols );
 			for ( index_t i = 0 ; i < mt ; i++ ) fclose(input_files[i]);
-			free((void *) input_files);
+			fclose(input_files[mt]);
+			free((void *)filename_tmp); free((void *)input_files);
 			return EXIT_FAILURE;
 		}
 	} // For all input files.
 
+	// --------------------------
+
 	// Opens the output file.
-	if ( sprintf( filename_tmp, output_pattern, filename, ncols ) <= 0 ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf(stderr, "\nsprintf( base_filename='%s', ncols=%" PRI_IDX " ): ", filename, ncols );
-		if ( err ) fprintf( stderr, "%s\n", strerror(err) );
-		fprintf(stderr,"Error setting output filename in matrix_save_combined_ascii()\n");
+
+	status = snprintf( filename_tmp, str_len, output_pattern, filename, ncols );
+	if ( (status <= 0) + ((size_t)status >= str_len) ) {
+		print_errnum( (status <= 0), errno, "Error matrix_save_combined_ascii(): snprintf( output file, ncols=%" PRI_IDX
+				", length=%zu )", filename, ncols, str_len );
+		if ( status > 0 )	// (status >= str_len)
+			print_error( false, "The resulting string was truncated; %i bytes are required at least.\n", status + 1 );
 		for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-		free((void *) input_files);
+		free((void *)filename_tmp); free((void *)input_files);
 		return EXIT_FAILURE;
 	}
+
 	FILE *restrict const out_file = fopen( filename_tmp, "w" );
 	if( ! out_file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename_tmp, strerror(errno) );
-		fprintf(stderr,"Error in matrix_save_combined_ascii().\n");
+		print_errnum( true, errno, "Error in matrix_save_combined_ascii(): fopen( output file '%s' )", filename_tmp );
 		for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-		free((void *) input_files);
+		free((void *)filename_tmp); free((void *)input_files);
 		return EXIT_FAILURE;
 	}
+	free((void *)filename_tmp);
 
 	// ----------------------------
 
-	// Writes all column headers.
+	// Writes all matrix tag elements.
 
-	char const *restrict name = NULL;
-	char const *restrict headers = NULL;
-	char const *const *restrict pheaders = NULL;
-	char const *restrict labels = NULL;
-	char const *const *restrict plabels = NULL;
+	if ( mt ) {
+		name = mt->name;
+		headers = mt->headers;
+		labels = mt->labels;
 
-	if ( ml ) {
-		struct matrix_labels lml = *ml;
-		name = lml.name;
-		headers = lml.headers.tokens;
-		pheaders = lml.headers.ptokens;
-		labels = lml.labels.tokens;
-		plabels = lml.labels.ptokens;
+		hasheaders = (bool) headers.tokens;
+		haslabels = (bool) headers.tokens;
 	}
-
-	// ----------------------------
 
 	// Name
 	if ( name ) {
-		if ( fprintf(out_file,"%s",name) < 0 ) {
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(name).\nError in matrix_save_combined_ascii().\n");
+		struct tag_t const tag_name = new_tag( (char *restrict)name, (char **restrict)&name );	// Fakes a struct tag_t
+
+		status = write_tag( out_file, tag_name, "name", 1, delimiter, false, ! hasheaders ); // No prefix; suffix only if no headers.
+		if ( status != EXIT_SUCCESS ) {
+			print_error( true, "Error in matrix_save_combined_ascii().\n" );
+			fclose(out_file);
 			for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-			fclose(out_file); free((void *) input_files);
-			return EXIT_FAILURE;
-		}
-		if ( (! headers) && (fprintf(out_file,"\n") <= 0) ) {
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(name\\n).\nError in matrix_save_combined_ascii().\n");
-			for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-			fclose(out_file); free((void *) input_files);
+			free((void *)input_files);
 			return EXIT_FAILURE;
 		}
 	}
 
-	// ----------------------------
-
 	// Column headers
-	if ( headers ) {
+	if ( hasheaders ) {
 
-		index_t i = 0;
-
-		// First column header: starts or not with a delimiter.
-		if ( ! name ) {
-			if ( fprintf(out_file,"%s",headers) < 0 ) {
-				fflush(stdout);
-				fprintf(stderr,"\nInternal error in fprintf(pheaders[0]).\nError in matrix_save_combined_ascii().\n");
-				for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-				fclose(out_file); free((void *) input_files);
-				return EXIT_FAILURE;
-			}
-			i = 1;
-		}
-
-		// Rest of headers for mt == 0 and all headers for mt > 0.
-		for( index_t mt = 0 ; mt < nmatrices ; mt++ ) {
-			for ( ; i < ncols ; i++ )
-				if ( fprintf(out_file,"\t%s",pheaders[i]) <= 0 ) {
-					fflush(stdout);
-					fprintf(stderr, "\nInternal error in fprintf(pheaders_%" PRI_IDX "[%" PRI_IDX "]).\n"
-							"Error in matrix_save_combined_ascii().\n", mt, i);
-					for ( index_t j = 0 ; j < nmatrices ; j++ ) fclose(input_files[j]);
-					fclose(out_file); free((void *) input_files);
-					return EXIT_FAILURE;
-				}
-			i = 0;	// For mt > 0, starts at header 0.
-		}
-
-		if ( fprintf(out_file,"\n") <= 0 ) {
-			fflush(stdout);
-			fprintf(stderr, "\nInternal error in fprintf(headers\\n).\nError in matrix_save_combined_ascii().\n");
+		// First header: prefix only if has name; no suffix.
+		status = write_tag( out_file, headers, "headers", ncols, delimiter, name, false );
+		if ( status != EXIT_SUCCESS ) {
+			print_error( true, "Error in matrix_save_combined_ascii() writing column headers (0 of %" PRI_IDX " matrices)\n",
+					nmatrices );
+			fclose(out_file);
 			for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-			fclose(out_file); free((void *) input_files);
+			free((void *)input_files);
 			return EXIT_FAILURE;
 		}
 
-	} // if headers
+		// Rest of headers: All prefixed; no suffix
+		for ( index_t mt = 1 ; mt < nmatrices ; mt++ ) {
+			status = write_tag( out_file, headers, "headers", ncols, delimiter, true, false );
+			if ( status != EXIT_SUCCESS ) {
+				print_error( true, "Error in matrix_save_combined_ascii() writing column headers (%" PRI_IDX " of %"
+						PRI_IDX " matrices)\n", mt, nmatrices );
+				fclose(out_file);
+				for ( index_t i = 0 ; i < nmatrices ; i++ ) fclose(input_files[i]);
+				free((void *)input_files);
+				return EXIT_FAILURE;
+			}
+		}
+
+		errno = 0;
+		if ( fprintf( out_file, "\n" ) <= 0 ) {
+			print_errnum( true, errno, "Error in matrix_save_combined_ascii(): fprintf('\\n') after headers" );
+			fclose(out_file);
+			for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
+			free((void *)input_files);
+			return EXIT_FAILURE;
+		}
+
+	} // if hasheaders
 
 	// ----------------------------
 
-	// Allocates memory for one row of data.
-	real *restrict data = (real *restrict) malloc( ncols * sizeof(real) );
+	// Allocates memory for a single data row.
+	real *restrict const data = (real *restrict) malloc( ncols * sizeof(real) );
 	if ( ! data ) {
-		int const err = errno; fflush(stdout); errno = err;
-		perror("\nmalloc(data)");
-		fprintf(stderr,"Error in matrix_save_combined_ascii().\n");
+		print_errnum( true, errno, "Error in matrix_save_combined_ascii(): malloc(data, size=ncols=%" PRI_IDX ")", ncols );
+		fclose(out_file);
 		for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-		fclose(out_file); free((void *) input_files);
+		free((void *)input_files);
 		return EXIT_FAILURE;
 	}
 
 	// ----------------------------
 
-	// Row labels
-	if ( labels ) {
+	// Processes the rest of data.
 
-		for ( index_t i = 0 ; i < nrows ; i++ ) {	// for each row.
+	for ( index_t i = 0 ; i < nrows ; i++ ) {
 
-			// Writes the row label
-			if ( fprintf(out_file,"%s",plabels[i]) < 0 ) {
-				int const err = errno; fflush(stdout); errno = err;
-				fprintf(stderr,"\nInternal error in fprintf(plabels[%" PRI_IDX
-						"]).\nError in matrix_save_combined_ascii().\n", i);
-				for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-				fclose(out_file); free((void *) input_files); free(data);
-				return EXIT_FAILURE;
-			}
+		// Writes label.
+		errno = 0;
+		if ( haslabels && (fprintf(out_file,"%s",labels.ptokens[i]) < 0) ) {	// < 0: *ptokens[i] might be NULL
+			print_errnum( true, errno, "Error in matrix_save_combined_ascii(): fprintf(plabels[%" PRI_IDX "])", i );
+			free(data); fclose(out_file);
+			for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
+			free((void *)input_files);
+			return EXIT_FAILURE;
+		}
 
-			// Writes row i from each matrix.
-			for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) {
-
-				// Reads the entire row from input file <mt>.
-				size_t const nread = fread( data, sizeof(real), ncols, input_files[mt] );
-				if ( nread != (size_t) ncols ) {
-					int const err = errno; fflush(stdout); errno = err;
-					fprintf( stderr, "\nError reading input file %" PRI_IDX " (row %" PRI_IDX "): %zu items read, %"
-							PRI_IDX " expected.\nError in matrix_save_combined_ascii().\n", mt, i, nread, ncols);
-					for ( index_t j = 0 ; j < nmatrices ; j++ ) fclose(input_files[j]);
-					fclose(out_file); free((void *) input_files); free(data);
-					return EXIT_FAILURE;
-				}
-
-				// Writes that row.
-				for ( index_t j = 0 ; j < ncols ; j++ )
-					if ( fprintf(out_file,"\t%" DECIMAL_PRECISION "g",data[j]) <= 0 ) {
-						int const err = errno; fflush(stdout); errno = err;
-						fprintf( stderr, "\nInternal error in fprintf(input_matrix_%" PRI_IDX "[%" PRI_IDX "][%"
-								PRI_IDX "]).\nError in matrix_save_combined_ascii().\n", mt, i, j);
-						for ( index_t p = 0 ; p < nmatrices ; p++ ) fclose(input_files[p]);
-						fclose(out_file); free((void *) input_files); free(data);
-						return EXIT_FAILURE;
-					}
-
-			} // for each input file.
-
-			if ( fprintf(out_file,"\n") <= 0 ) {
-				int const err = errno; fflush(stdout); errno = err;
-				fprintf(stderr, "\nInternal error in fprintf(input_matrix[%" PRI_IDX
-						"][]\\n).\nError in matrix_save_combined_ascii().\n", i);
-				for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-				fclose(out_file); free((void *) input_files); free(data);
-				return EXIT_FAILURE;
-			}
-
-		} // for each row.
-
-	} else { // No labels
-
-		for ( index_t i = 0 ; i < nrows ; i++ ) { // for each row.
-
-			// Writes row i from the first matrix (mt == 0)
-
-			// Reads the entire row from input file 0.
-			size_t const nread = fread( data, sizeof(real), ncols, input_files[0] );
+		// Writes row i from input file 0.
+		{
+			// Reads the entire row <i> from input file 0.
+			size_t const nread = fread( data, sizeof(real), ncols, input_files[ 0 ] );
 			if ( nread != (size_t) ncols ) {
-				fflush(stdout);
-				fprintf(stderr,"\nError reading input file 0 (row %" PRI_IDX "): %zu items read, %" PRI_IDX
-						" expected.\nError in matrix_save_combined_ascii().\n", i, nread, ncols);
-				for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-				fclose(out_file); free((void *) input_files); free(data);
+				if ( ferror( input_files[ 0 ] ) )
+					print_errnum( true, errno, "Error in matrix_save_combined_ascii(): fread( row=%" PRI_IDX
+							", file 0 of %" PRI_IDX ", ncols=%" PRI_IDX " )", i, nmatrices, ncols );
+				else
+					print_error( false, "Error in matrix_save_combined_ascii() reading row %" PRI_IDX " from file 0 of %"
+							PRI_IDX " (ncols=%" PRI_IDX ").\nPremature end of file.\n", i, nmatrices, ncols );
+				free(data); fclose(out_file);
+				for ( index_t j = 0 ; j < nmatrices ; j++ ) fclose(input_files[j]);
+				free((void *)input_files);
 				return EXIT_FAILURE;
 			}
 
-			// Writes the first data in that row (without delimiter).
-			if ( fprintf(out_file,"%" DECIMAL_PRECISION "g",*data) <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fprintf(input_matrix_0[%" PRI_IDX
-						"][0]).\nError in matrix_save_combined_ascii().\n", i);
-				for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-				fclose(out_file); free((void *) input_files); free(data);
+			// Writes that row: prefixes only if there are labels.
+			status = matrix_write_line( out_file, data, ncols, delimiter, haslabels );
+			if ( status != EXIT_SUCCESS ) {
+				print_error( true, "Error in matrix_save_combined_ascii() writing row %" PRI_IDX " from file 0 of %"
+						PRI_IDX " (ncols=%" PRI_IDX ").\n", i, nmatrices, ncols );
+				free(data); fclose(out_file);
+				for ( index_t j = 0 ; j < nmatrices ; j++ ) fclose(input_files[j]);
+				free((void *)input_files);
+				return EXIT_FAILURE;
+			}
+		} // input file 0
+
+		// Writes row i from the rest of input files
+		for ( index_t mt = 1 ; mt < nmatrices ; mt++ ) {
+
+			// Reads the entire row <i> from input file <mt>.
+			size_t const nread = fread( data, sizeof(real), ncols, input_files[ mt ] );
+			if ( nread != (size_t) ncols ) {
+				if ( ferror( input_files[ mt ] ) )
+					print_errnum( true, errno, "Error in matrix_save_combined_ascii(): fread( row=%" PRI_IDX ", file %"
+							PRI_IDX " of %" PRI_IDX ", ncols=%" PRI_IDX " )", i, mt, nmatrices, ncols );
+				else
+					print_error( false, "Error in matrix_save_combined_ascii() reading row %" PRI_IDX " from file %"
+							PRI_IDX " of %" PRI_IDX " (ncols=%" PRI_IDX ").\nPremature end of file.\n", i, mt,
+							nmatrices, ncols );
+				free(data); fclose(out_file);
+				for ( index_t j = 0 ; j < nmatrices ; j++ ) fclose(input_files[j]);
+				free((void *)input_files);
 				return EXIT_FAILURE;
 			}
 
-			// Writes the rest of that row.
-			for ( index_t j = 1 ; j < ncols ; j++ )
-				if ( fprintf(out_file,"\t%" DECIMAL_PRECISION "g",data[j]) <= 0 ) {
-					fflush(stdout);
-					fprintf(stderr,"\nInternal error in fprintf(input_matrix_0[%" PRI_IDX "][%" PRI_IDX
-							"]).\nError in matrix_save_combined_ascii().\n", i, j);
-					for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-					fclose(out_file); free((void *) input_files); free(data);
-					return EXIT_FAILURE;
-				}
-
-
-			// ---------------
-
-
-			// Writes row i from the rest of matrices (mt > 0).
-
-			for( index_t mt = 1 ; mt < nmatrices ; mt++ ) {
-
-				// Reads the entire row from input file <mt>.
-				size_t const nread = fread( data, sizeof(real), ncols, input_files[mt] );
-				if ( nread != (size_t) ncols ) {
-					fflush(stdout);
-					fprintf(stderr,"\nError reading input file %" PRI_IDX " (row %" PRI_IDX "): %zu items read, %"
-							PRI_IDX " expected.\nError in matrix_save_combined_ascii().\n", mt, i, nread, ncols);
-					for ( index_t j = 0 ; j < nmatrices ; j++ ) fclose(input_files[j]);
-					fclose(out_file); free((void *) input_files); free(data);
-					return EXIT_FAILURE;
-				}
-
-				// Writes that row.
-				for ( index_t j = 0 ; j < ncols ; j++ )
-					if ( fprintf(out_file,"\t%" DECIMAL_PRECISION "g",data[j]) <= 0 ) {
- 					fflush(stdout);
-						fprintf(stderr,"\nInternal error in fprintf(input_matrix_%" PRI_IDX "[%" PRI_IDX "][%"
-								PRI_IDX "]).\nError in matrix_save_combined_ascii().\n", mt, i, j);
-						for ( index_t p = 0 ; p < nmatrices ; p++ ) fclose(input_files[p]);
-						fclose(out_file); free((void *) input_files); free(data);
-						return EXIT_FAILURE;
-					}
-
-			} // for each input file.
-
-			if ( fprintf(out_file,"\n") <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fprintf(input_matrix[%" PRI_IDX
-						"][]\\n).\nError in matrix_save_combined_ascii().\n", i);
-				for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
-				fclose(out_file); free((void *) input_files); free(data);
+			// Writes that row: prefixes always.
+			status = matrix_write_line( out_file, data, ncols, delimiter, true );
+			if ( status != EXIT_SUCCESS ) {
+				print_error( true, "Error in matrix_save_combined_ascii() writing row %" PRI_IDX " from file %"
+						PRI_IDX " of %" PRI_IDX " (ncols=%" PRI_IDX ").\n", i, mt, nmatrices, ncols );
+				free(data); fclose(out_file);
+				for ( index_t j = 0 ; j < nmatrices ; j++ ) fclose(input_files[j]);
+				free((void *)input_files);
 				return EXIT_FAILURE;
 			}
 
-		} // for each row.
+		} // for each input file.
 
-	} // if labels
+		errno = 0;
+		if ( fprintf( out_file, "\n" ) <= 0 ) {
+			print_errnum( true, errno, "Error in matrix_save_combined_ascii(): fprintf('\\n') after row %" PRI_IDX, i );
+			free(data); fclose(out_file);
+			for ( index_t mt = 0 ; mt < nmatrices ; mt++ ) fclose(input_files[mt]);
+			free((void *)input_files);
+			return EXIT_FAILURE;
+		}
+
+	} // for each row.
 
 	// --------------------------
 
@@ -3575,12 +3703,11 @@ int matrix_save_combined_ascii( char const *restrict filename, char const *restr
 
 	for ( index_t mt = 0 ; mt < nmatrices ; mt++ )
 		fclose( input_files[mt] );
-	free((void *) input_files);
+	free( (void *) input_files );
 
+	errno = 0;
 	if ( fclose(out_file) ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename_tmp, strerror(errno) );
-		fprintf(stderr,"Error in matrix_save_combined_ascii().\n");
+		print_errnum( true, errno, "Error in matrix_save_combined_ascii(): fclose( output file )" );
 		return EXIT_FAILURE;
 	}
 
@@ -3588,80 +3715,139 @@ int matrix_save_combined_ascii( char const *restrict filename, char const *restr
 
 } // matrix_save_combined_ascii
 
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Saves a matrix to a (non-"native") binary file (i.e., double-precision data and unsigned int's).
- * Skips name, headers and labels if 'ml' is set to NULL.
+ * Writes labels, headers and name (as plain text).
+ *
+ * NOTE: This function is intended to be used when writing tag elements to a BINARY file.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+static int matrix_write_tags( FILE *restrict file, index_t num_headers, index_t num_labels, struct matrix_tags_t mt, int delimiter )
+{
+
+	char const *restrict name = mt.name;
+	struct tag_t headers = mt.headers;
+	struct tag_t labels = mt.labels;
+
+	// -----------------------------
+
+	// Row labels
+	{
+		bool const suffix = ( (uintptr_t) headers.tokens + (uintptr_t)name );
+		int const status = write_tag( file, labels, "labels", num_labels, delimiter, false, suffix ); // No prefix.
+		if ( status != EXIT_SUCCESS ) {
+			print_error( true, "Error in matrix_write_tags()\n" );
+			return EXIT_FAILURE;
+		}
+	}
+
+	// -----------------------------
+
+	// Column headers
+	{
+		bool const suffix = name;	// name != NULL
+		int const status = write_tag( file, headers, "headers", num_headers, delimiter, false, suffix ); // No prefix
+		if ( status != EXIT_SUCCESS ) {
+			print_error( true, "Error in matrix_write_tags()\n" );
+			return EXIT_FAILURE;
+		}
+	}
+
+	// -----------------------------
+
+	// Name
+	{
+		struct tag_t const tag_name = new_tag( (char *restrict)name, (char **restrict)&name );	// Fakes a struct tag_t
+		bool const suffix = name;	// name != NULL
+
+		int const status = write_tag( file, tag_name, "name", 1, delimiter, false, suffix ); // No prefix
+		if ( status != EXIT_SUCCESS ) {
+			print_error( true, "Error in matrix_write_tags()\n" );
+			return EXIT_FAILURE;
+		}
+	}
+
+	return EXIT_SUCCESS;
+
+} // matrix_write_tags
+
+// ---------------------------------------------
+
+/*
+ * Saves a matrix to a (non-"native") binary file (i.e., double-precision data and unsigned integers).
+ * Skips name, headers and labels if 'mt' is NULL.
  *
  * If 'transpose' is 'true', transposes matrix in file as follows:
  * - Matrix dimensions in memory: <ncols> rows, <nrows> columns.
  * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
- * - Writes <ncols> ml->headers (as column headers) and <nrows> ml->labels (as row labels).
+ * - Writes <ncols> mt->headers (as column headers) and <nrows> mt->labels (as row labels).
  *
  * ncols <= padding, unless matrix transposing is set (in that case, nrows <= padding).
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int matrix_save_binary( char const *restrict filename, real const *restrict matrix, index_t nrows, index_t ncols, bool transpose,
-			struct matrix_labels const *restrict ml, index_t padding )
+			struct matrix_tags_t const *restrict mt, index_t padding )
 {
 
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_save_binary( matrix )");
+	int const delimiter = (int) '\t';
+
+	////////////////////////////////
+
+	// Checks for NULL parameters
+	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix ) ) {
+		int const errnum = EFAULT;
+		bool const shown_by_all = false;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_save_binary( filename )" );
+		if ( ! matrix )	print_errnum( shown_by_all, errnum, "\nmatrix_save_binary( matrix )" );
 		return EXIT_FAILURE;
 	}
 
+	// Checks matrix dimensions.
 	{
 		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
 
-		if ( (nrows <= 0) + (ncols <= 0) + (padding <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_save_binary( rows=%" PRI_IDX ", columns=%" PRI_IDX ", padding=%" PRI_IDX " ): %s\n",
-				nrows, ncols, padding, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf( stderr, "Matrix size (%" PRIuMAX ") exceeds the limits used for matrix dimensions (%" PRI_IDX ").\n",
-					nitems, IDX_MAX);
+		if ( (nrows <= 0) + (ncols <= 0) + (nitems > (uintmax_t) max_num_items) ) {
+			print_error( false, "\nError in matrix_save_binary( rows=%" PRI_IDX ", columns=%" PRI_IDX ", padding=%" PRI_IDX
+						" transpose=%i ): Invalid matrix dimensions.\n", nrows, ncols, padding, transpose );
+			if ( (nrows > 0) * (ncols > 0) ) // nitems > max_num_items
+				print_error( false, "Matrix size (%" PRIuMAX " items) exceeds the limits used for matrix dimensions (%zu "
+							"items).\n", nitems, max_num_items );
 			return EXIT_FAILURE;
 		}
-	}
 
-	if ( transpose ) {
-		if ( nrows > padding ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_save_binary( rows=%" PRI_IDX " [number of columns since matrix transposing "
-					"is selected], padding=%" PRI_IDX " ): %s\n", nrows, padding, strerror(errno));
-			return EXIT_FAILURE;
+		if ( transpose ) {
+			if ( nrows > padding ) {
+				print_error( false, "\nError in matrix_save_binary( rows=%" PRI_IDX " [number of columns since matrix "
+						"transposing is selected], padding=%" PRI_IDX " ): Invalid values.\n", nrows, padding );
+				return EXIT_FAILURE;
+			}
+		} else if ( ncols > padding ) {
+			print_error( false, "\nError in matrix_save_binary( columns=%" PRI_IDX ", padding=%" PRI_IDX " ): Invalid values.\n",
+					nrows, padding );
+				return EXIT_FAILURE;
 		}
-	} else if ( ncols > padding ) {
-		fflush(stdout);
-		errno = EINVAL;
-		fprintf( stderr, "\nmatrix_save_binary( columns=%" PRI_IDX ", padding=%" PRI_IDX " ): %s\n", nrows, padding, strerror(errno));
-		return EXIT_FAILURE;
-	}
+	} // Checks matrix dimensions
 
+	// -----------------------------
 
 	FILE *restrict const file = fopen( filename, "wb" );
 	if ( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_save_binary().\n");
+		print_errnum( true, errno, "Error in matrix_save_binary(): fopen( %s )", filename );
 		return EXIT_FAILURE;
 	}
 
 	// ----------------------------------
 
-	// Dimensions.
+	// Writes matrix dimensions.
 	{
 		unsigned int const dims[2] = { (unsigned int) nrows, (unsigned int) ncols };
-		size_t const nwritten = fwrite( dims, sizeof(int), 2, file );
+		size_t const nwritten = fwrite( dims, sizeof(unsigned int), 2, file );
 		if ( nwritten != 2 ) {
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fwrite while writing matrix dimensions.\nError in matrix_save_binary().\n");
+			print_error( true, "\nError in matrix_save_binary(): fwrite( dim, size=2 ).\n" );
 			fclose(file);
 			return EXIT_FAILURE;
 		}
@@ -3669,7 +3855,7 @@ int matrix_save_binary( char const *restrict filename, real const *restrict matr
 
 	// ----------------------------------
 
-	// Data matrix
+	// Writes data matrix
 
 	// Steps for outer and inner loops.
 	index_t incr_outer_loop = padding;	// Step for outer loop
@@ -3679,124 +3865,39 @@ int matrix_save_binary( char const *restrict filename, real const *restrict matr
 		incr_inner_loop = padding;
 	}
 
-	for ( index_t r=0, i=0 ; r < nrows ; r++, i += incr_outer_loop )
-		for ( index_t c=0, idx=i ; c < ncols ; c++, idx += incr_inner_loop ) {
+	real const *pmatrix = matrix;
+	for ( index_t r=0 ; r < nrows ; r++, pmatrix += incr_outer_loop ) {
+
+		real const *pmatrix_r = pmatrix;
+
+		for ( index_t c=0 ; c < ncols ; c++, pmatrix_r += incr_inner_loop ) {
 
 			// Writes one double-precision data
-			double const value = (double) matrix[ idx ];
+			double const value = (double) *pmatrix_r;
 
 			size_t const nwritten = fwrite( &value, sizeof(double), 1, file );
 			if ( ! nwritten ) {
-				fflush(stdout);
-				fprintf(stderr,"\nInternal error writing item %g at row %" PRI_IDX " (of %" PRI_IDX "), and column %"
-						PRI_IDX "(of %" PRI_IDX ").\nError in matrix_save_binary().\n", value, r, nrows, c, ncols);
+				print_errnum( true, errno, "Error in matrix_save_binary(): fwrite( row %" PRI_IDX ", column %" PRI_IDX
+							", transposed dimensions: %s )", r, c, (transpose ? "yes" : "no") );
 				fclose(file);
 				return EXIT_FAILURE;
 			}
 
-		}
+		} // for c
+
+	} // for r
 
 	// ----------------------------------
 
-	// Returns if there is no labels.
+	// Writes matrix labels, if any
 
-	if ( ! ml ) {
-		if ( fclose(file) ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-			fprintf(stderr,"Error in matrix_save_binary().\n");
-			return EXIT_FAILURE;
-		}
-		return EXIT_SUCCESS;
-	}
-
-	struct matrix_labels lml = *ml;
-
-	char const *restrict name = lml.name;
-	char const *restrict headers = lml.headers.tokens;
-	char const *const *restrict pheaders = lml.headers.ptokens;
-	char const *restrict labels = lml.labels.tokens;
-	char const *const *restrict plabels = lml.labels.ptokens;
-
-
-	// Returns if there is no labels.
-	if ( ! ( (size_t) labels + (size_t) headers + (size_t) name) ) {	// (labels == NULL) && (headers == NULL) && (name == NULL)
-		if ( fclose(file) ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-			fprintf(stderr,"Error in matrix_save_binary().\n");
-			return EXIT_FAILURE;
-		}
-		return EXIT_SUCCESS;
-	}
-
-
-	// ----------------------------------
-
-
-	// Row Labels
-	if ( labels ) {
-		if ( fprintf(file,"%s",labels) < 0 ) {	// Saves the first label
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(plabels[0]).\nError in matrix_save_binary().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		for ( index_t i=1 ; i < nrows ; i++ )
-			if ( fprintf(file,"\t%s",plabels[i]) <= 0 ) {
-				fflush(stdout);
-				fprintf( stderr,"\nInternal error in fprintf(plabels[%" PRI_IDX "]).\nError in matrix_save_binary().\n", i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-	} // if labels
-
-	if ( fprintf(file,"\n")  <= 0 ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fprintf(plabels[]\\n).\nError in matrix_save_binary().\n");
+	if ( mt && (matrix_write_tags( file, ncols, nrows, *mt, delimiter ) != EXIT_SUCCESS) ) {
 		fclose(file);
 		return EXIT_FAILURE;
 	}
-
-
-	// Column headers
-	if ( headers ) {
-		if ( fprintf(file,"%s",headers) < 0 ) {	// Saves the first header
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(pheaders[0]).\nError in matrix_save_binary().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		for ( index_t j=1 ; j < ncols ; j++ )
-			if ( fprintf(file,"\t%s",pheaders[j])  <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr,"\nInternal error in fprintf(pheaders[%" PRI_IDX "]).\nError in matrix_save_binary().\n",j);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-	} // if headers
-
-	if ( fprintf(file,"\n")  <= 0 ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fprintf(pheaders[]\\n).\nError in matrix_save_binary().\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
-
-	// Name
-	if ( name && (fprintf(file,"%s",name) < 0) ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fprintf(name).\nError in matrix_save_binary().\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
 
 	if ( fclose(file) ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_save_binary().\n");
+		print_errnum( true, errno, "Error in matrix_save_binary(): fclose( %s )", filename );
 		return EXIT_FAILURE;
 	}
 
@@ -3804,173 +3905,96 @@ int matrix_save_binary( char const *restrict filename, real const *restrict matr
 
 } // matrix_save_binary
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Saves a matrix to a "native" binary file (i.e., with the compiled types for matrix data and dimensions).
- * Skips name, headers and labels if 'ml' is set to NULL.
+ * Skips name, headers and labels if 'mt' is NULL.
  *
- * WARNING: For internal use only. No error checking is performed.
+ * WARNING:
+ *	- For internal use only (i.e., for temporary files).
+ *	- NO ERROR-CHECKING IS PERFORMED (e.g., overflow, invalid values...).
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_save_binary_native( char const *restrict filename, real const *restrict matrix, index_t nrows, index_t ncols,
-				struct matrix_labels const *restrict ml )
+int matrix_save_binary_native( char const *restrict filename, void const *restrict matrix, index_t nrows, index_t ncols, size_t data_size,
+				struct matrix_tags_t const *restrict mt )
 {
 
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_save_binary_native( matrix )");
+	int const delimiter = (int) '\t';
+
+	////////////////////////////////
+
+	// Checks for NULL parameters
+	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix * data_size ) ) {
+		int const errnum = EFAULT;
+		bool const shown_by_all = false;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_save_binary_native( filename )" );
+		if ( ! matrix )	print_errnum( shown_by_all, errnum, "\nmatrix_save_binary_native( matrix )" );
+		if ( ! data_size ) print_errnum( shown_by_all, EINVAL, "\nmatrix_save_binary_native( data_size )" );
 		return EXIT_FAILURE;
 	}
 
-	if ( (nrows <= 0) + (ncols <= 0) ) {
-		fflush(stdout);
-		errno = EINVAL;
-		fprintf( stderr, "\nmatrix_save_binary_native( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-			nrows, ncols, strerror(errno));
-		return EXIT_FAILURE;
+	// Checks matrix dimensions.
+	{
+		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
+
+		if ( (nrows <= 0) + (ncols <= 0) + (nitems > (uintmax_t) max_num_items) ) {
+			print_error( false, "\nError in matrix_save_binary_native( rows=%" PRI_IDX ", columns=%" PRI_IDX
+					" ): Invalid matrix dimensions.\n", nrows, ncols );
+			if ( (nrows > 0) * (ncols > 0) ) // nitems > max_num_items
+				print_error( false, "Matrix size (%" PRIuMAX " items) exceeds the limits used for matrix dimensions (%zu "
+							"items).\n", nitems, max_num_items );
+			return EXIT_FAILURE;
+		}
 	}
 
+	size_t const nitems = nrows * ncols;
+
+	// -----------------------------
 
 	FILE *restrict const file = fopen( filename, "wb" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_save_binary_native().\n");
+	if ( ! file ) {
+		print_errnum( true, errno, "Error in matrix_save_binary_native(): fopen( %s )", filename );
 		return EXIT_FAILURE;
 	}
 
-
 	// ----------------------------------
 
-
-	// Matrix dimensions.
+	// Writes matrix dimensions.
 	{
-		const index_t dim[2] = { nrows, ncols };
-		size_t const nwritten = fwrite( dim, sizeof(index_t), 2, file );
+		index_t const dims[2] = { nrows, ncols };
+		size_t const nwritten = fwrite( dims, sizeof(index_t), 2, file );
 		if ( nwritten != 2 ) {
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fwrite writing matrix dimensions.\nError in matrix_save_binary_native().\n");
+			print_error( true, "\nError in matrix_save_binary_native(): fwrite( dim, size=2 ).\n" );
 			fclose(file);
 			return EXIT_FAILURE;
 		}
 	}
 
-	// Data matrix
-	size_t const nitems = nrows * ncols;
-	size_t const nwritten = fwrite( matrix, sizeof(real), nitems, file );
-	if ( nwritten != nitems ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in function fwrite: %zu items read, %zu expected\n"
-				"Error in matrix_save_binary_native().\n",nwritten,nitems);
+	// ----------------------------------
+
+	// Writes data matrix
+
+	size_t const nwritten = fwrite( matrix, data_size, nitems, file );
+	if ( nwritten != (size_t) nitems ) {
+		print_errnum( true, errno, "Error in matrix_save_binary_native(): fwrite( %" PRI_IDX "x%" PRI_IDX " = %zu )",
+				nrows, ncols, nitems );
 		fclose(file);
 		return EXIT_FAILURE;
 	}
 
 	// ----------------------------------
 
+	// Writes matrix labels, if any
 
-	// Returns if there are no matrix labels.
-	if ( ! ml ) {
-		if ( fclose(file) ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-			fprintf(stderr,"Error in matrix_save_binary_native().\n");
-			return EXIT_FAILURE;
-		}
-		return EXIT_SUCCESS;
-	}
-
-	struct matrix_labels lml = *ml;
-
-	char const *restrict name = lml.name;
-	char const *restrict headers = lml.headers.tokens;
-	char const *const *restrict pheaders = lml.headers.ptokens;
-	char const *restrict labels = lml.labels.tokens;
-	char const *const *restrict plabels = lml.labels.ptokens;
-
-	if ( ! ( (size_t) labels + (size_t) headers + (size_t) name) ) {	// (labels == NULL) && (headers == NULL) && (name == NULL)
-		if ( fclose(file) ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-			fprintf(stderr,"Error in matrix_save_binary_native().\n");
-			return EXIT_FAILURE;
-		}
-		return EXIT_SUCCESS;
-	}
-
-	// ----------------------------------
-
-	// Row Labels
-	if ( labels ) {
-		if ( fprintf(file,"%s",labels) < 0 ) {	// Saves the first label
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(plabels[0]).\nError in matrix_save_binary_native().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		for (index_t i=1 ; i<nrows ; i++)
-			if ( fprintf(file,"\t%s",plabels[i]) <= 0 ) {
-				fflush(stdout);
-				fprintf( stderr,"\nInternal error in fprintf(plabels[%" PRI_IDX
-						"]).\nError in matrix_save_binary_native().\n",i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-	} // if labels
-
-	if ( fprintf(file,"\n")  <= 0 ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fprintf(plabels[]\\n).\nError in matrix_save_binary_native().\n");
+	if ( mt && (matrix_write_tags( file, ncols, nrows, *mt, delimiter ) != EXIT_SUCCESS) ) {
 		fclose(file);
 		return EXIT_FAILURE;
 	}
-
-fflush(NULL); printf("MARK2\n"); fflush(NULL);
-
-
-	// Column headers
-	if ( headers ) {
-		if ( fprintf(file,"%s",headers) < 0 ) {	// Saves the first header
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(pheaders[0]).\nError in matrix_save_binary_native().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		for (index_t j=1; j<ncols; j++)
-			if ( fprintf(file,"\t%s",pheaders[j])  <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr,"\nInternal error in fprintf(pheaders[%" PRI_IDX
-						"]).\nError in matrix_save_binary_native().\n",j);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-	} // if headers
-
-	if ( fprintf(file,"\n")  <= 0 ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fprintf(pheaders[]\\n).\nError in matrix_save_binary_native().\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
-
-	// Name
-	if ( name && fprintf(file,"%s",name)  < 0 ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fprintf(name).\nError in matrix_save_binary_native().\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
 
 	if ( fclose(file) ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_save_binary_native().\n");
+		print_errnum( true, errno, "Error in matrix_save_binary_native(): fclose( %s )", filename );
 		return EXIT_FAILURE;
 	}
 
@@ -3978,21 +4002,21 @@ fflush(NULL); printf("MARK2\n"); fflush(NULL);
 
 } // matrix_save_binary_native
 
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Writes matrix to a file according to the selected file format
- * Skips name, headers and labels if 'ml' is set to NULL.
+ * Writes matrix to a file according to the selected file format.
+ * Skips name, headers and labels if 'mt' is NULL.
  *
  * save_bin: Saves output matrix to a binary file.
- *		== 0: Disabled. Saves file as ASCII text.
+ *		== 0: Disabled. Saves the file as ASCII text.
  *		== 1: Uses "non-native" format (i.e., double-precision data, and "unsigned int" for dimensions).
  *		 > 1: Uses "native" or raw format (i.e., the compiled types for matrix data and dimensions).
  *
- * If 'transpose' is 'true', and save_bin <= 1, transposes matrix in file as follows:
+ * If 'transpose' is 'true' and save_bin <= 1, transposes matrix in file as follows:
  * - Matrix dimensions in memory: <ncols> rows, <nrows> columns.
  * - Matrix dimensions in file: <nrows> rows, <ncols> columns.
- * - Writes <ncols> ml->headers (as column headers) and <nrows> ml->labels (as row labels).
+ * - Writes <ncols> mt->headers (as column headers) and <nrows> mt->labels (as row labels).
  *
  * ncols <= padding, unless matrix transposing is set (in that case, nrows <= padding).
  *
@@ -4000,28 +4024,29 @@ fflush(NULL); printf("MARK2\n"); fflush(NULL);
  *
  * WARNING:
  *	"Native" mode (i.e., save_bin > 1) skips ALL data transformation (matrix transposing, padding, etc).
- *	All related arguments are ignored. The file is saved in raw format.
+ *	All related arguments are ignored, and the file is saved in raw format.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_save( char const *restrict filename, index_t save_bin, real *restrict matrix, index_t nrows, index_t ncols, bool transpose,
-		struct matrix_labels const *restrict ml, index_t padding, bool verbose )
+int matrix_save( char const *restrict filename, index_t save_bin, real const *restrict matrix, index_t nrows, index_t ncols, bool transpose,
+		struct matrix_tags_t const *restrict mt, index_t padding, bool verbose )
 {
 
 	// Checks for NULL parameters
-	if ( ! ( (size_t) filename * (size_t) matrix) ) {
-		fflush(stdout);
-		errno = EFAULT;
-		if ( ! filename ) perror("\nmatrix_save( filename )");
-		if ( ! matrix )   perror("\nmatrix_save( matrix )");
+	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix ) ) {
+		int const errnum = EFAULT;
+		bool const shown_by_all = false;
+		if ( ! filename ) print_errnum( shown_by_all, errnum, "\nmatrix_save( filename )" );
+		if ( ! matrix )	print_errnum( shown_by_all, errnum, "\nmatrix_save( matrix )" );
 		return EXIT_FAILURE;
 	}
 
 	if ( (nrows <= 0) + (ncols <= 0) + (save_bin < 0) ) {
-		fflush(stdout);
-		errno = EINVAL;
-		fprintf( stderr, "\nmatrix_save( rows=%" PRI_IDX ", columns=%" PRI_IDX ", save_bin=%" PRI_IDX " ): %s\n",
-			nrows, ncols, save_bin, strerror(errno));
+		if ( (nrows <= 0) + (ncols <= 0) )
+			print_error( false, "\nError in matrix_save( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): Invalid matrix dimensions.\n",
+					nrows, ncols );
+		if ( save_bin < 0 )
+			print_errnum( false, EINVAL, "\nError in matrix_save( save_bin=%" PRI_IDX " )", save_bin );
 		return EXIT_FAILURE;
 	}
 
@@ -4030,29 +4055,32 @@ int matrix_save( char const *restrict filename, index_t save_bin, real *restrict
 	// -------------------------------
 
 	if ( verbose )
-		printf("\nSaving output file as ");
+		print_message( false, "\nSaving output file...\n" );
 
 	// Saves output as "native" binary.
 	if ( save_bin > 1 ) {
-		if ( verbose )
-			printf("\"native\" binary (i.e., raw format)...\n");
-		if ( (padding + transpose) * verbose )
-			printf("\tSkipping all transformation options (matrix transposing, padding, etc.)...\n");
-		status = matrix_save_binary_native( filename, matrix, nrows, ncols, ml );
+		if ( verbose ) {
+			print_message( false, "\tFile selected as \"native\" binary (i.e., the file is written using the data types specified "
+					"at compilation).\n\tNo error-checking is performed.\n" );
+			if ( transpose )
+				print_message( false, "\tSkipping all transformation options (matrix transposing, padding, etc.)...\n");
+		}
+		status = matrix_save_binary_native( filename, matrix, nrows, ncols, sizeof(real), mt );
 	}
 
 	// Saves output as (non-"native") binary.
 	else if ( save_bin ) {
 		if ( verbose )
-			printf("(non-\"native\") binary (i.e., double-precision data and unsigned integers)...\n");
-		status = matrix_save_binary( filename, matrix, nrows, ncols, transpose, ml, padding );
+			print_message(false,"\tFile selected as (non-\"native\") binary (i.e., double-precision data and unsigned integers).\n");
+
+		status = matrix_save_binary( filename, matrix, nrows, ncols, transpose, mt, padding );
 	}
 
 	// Saves output as ASCII text.
 	else {
 		if ( verbose )
-			printf("ASCII text...\n");
-		status = matrix_save_ascii( filename, matrix, nrows, ncols, transpose, false, ml, padding );
+			print_message( false, "\tFile selected as ASCII text.\n" );
+		status = matrix_save_ascii( filename, matrix, nrows, ncols, transpose, false, mt, padding );
 	}
 
 	// ----------------------------------------
@@ -4061,108 +4089,423 @@ int matrix_save( char const *restrict filename, index_t save_bin, real *restrict
 
 } // matrix_save
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
- * Transposes matrix using a temporary "native" binary file (i.e., with the compiled types for matrix data and dimensions).
+ * Prints matrix's content (data, name, headers and/or labels).
+ * Skips name, headers and labels if 'mt' is NULL.
  *
- * <base_filename> is used only if no temporary file from the system can be employed.
+ * If 'transpose' is 'true', transposes matrix as follows:
+ * - Matrix dimensions in memory: <numcols> rows, <numrows> columns.
+ * - Matrix dimensions on screen: <numrows> rows, <numcols> columns.
+ * - Shows <numcols> mt->headers (as column headers) and <numrows> mt->labels (as row labels).
  *
- * WARNING:
- *	No error checking is performed.
- *	"matrix" is always changed (even on error).
+ * numcols <= padding, unless matrix transposing is set (in that case, numrows <= padding).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int matrix_transpose_file( real *restrict matrix, index_t *restrict nrows, index_t *restrict ncols, char const *restrict const base_filename )
+static int matrix_print( bool real_data, void const *restrict matrix, index_t numrows, index_t numcols, index_t padding, bool transpose,
+			bool shown_by_all, struct matrix_tags_t const *restrict mt )
 {
 
+	int status = EXIT_SUCCESS;
+
+	char const *restrict name = NULL;
+	struct tag_t labels = new_empty_tag();
+	struct tag_t headers = new_empty_tag();
+
+	bool hasheaders = false;
+	bool haslabels = false;
+
+	// Portion of "matrix" to be shown.
+	index_t nrows = numrows;
+	index_t ncols = numcols;
+
+	// Maximum length of each row label to show.
+	int const label_precision = 5;
+
+	////////////////////////////////
+
 	// Checks for NULL parameters
-	if ( ! ( (size_t) matrix * (size_t) nrows * (size_t) ncols ) ) {
-		fflush( stdout );
-		fprintf( stderr, "\nmatrix_transpose_file():\n" );
-		errno = EFAULT;
-		if ( ! matrix ) perror("\tmatrix");
-		if ( ! nrows  ) perror("\tnrows" );
-		if ( ! ncols  ) perror("\tncols" );
+	if ( ! matrix ) {
+		print_errnum( false, EFAULT, "\nprint_show( matrix )" );
 		return EXIT_FAILURE;
 	}
 
-	if ( (*nrows <= 0) + (*ncols <= 0) ) {
-		fflush(stdout);
-		errno = EINVAL;
-		fprintf( stderr, "\nmatrix_transpose_file( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-			*nrows, *ncols, strerror(errno));
+	// Checks matrix dimensions.
+	{
+		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
+
+		if ( (nrows <= 0) + (ncols <= 0) + (nitems > (uintmax_t) max_num_items) ) {
+			print_error( false, "\nError in print_show( rows=%" PRI_IDX ", columns=%" PRI_IDX ", padding=%" PRI_IDX
+						" transpose=%i ): Invalid matrix dimensions.\n", nrows, ncols, padding, transpose );
+			if ( (nrows > 0) * (ncols > 0) ) // nitems > max_num_items
+				print_error( false, "Matrix size (%" PRIuMAX " items) exceeds the limits used for matrix dimensions (%zu "
+							"items).\n", nitems, max_num_items );
+			return EXIT_FAILURE;
+		}
+
+		if ( transpose ) {
+			if ( nrows > padding ) {
+				print_error( false, "\nError in print_show( rows=%" PRI_IDX " [number of columns since matrix "
+						"transposing is selected], padding=%" PRI_IDX " ): Invalid values.\n", nrows, padding );
+				return EXIT_FAILURE;
+			}
+		} else if ( ncols > padding ) {
+			print_error( false, "\nError in print_show( columns=%" PRI_IDX ", padding=%" PRI_IDX " ): Invalid values.\n",
+					nrows, padding );
+				return EXIT_FAILURE;
+		}
+	} // Checks matrix dimensions
+
+	// --------------------------------
+
+	// Checks if there are tag elements to show...
+
+	if ( mt ) {
+		name = mt->name;
+		headers = mt->headers;
+		labels = mt->labels;
+
+		hasheaders = (bool) headers.tokens;
+		haslabels = (bool) labels.tokens;
+	}
+
+	// -----------------------------
+
+	// Matrix dimensions to show.
+
+	#if ! NMFGPU_TESTING
+		if ( nrows == 1 )	// 'matrix' is a vector.
+			ncols = MIN( ncols, 225 ) ;
+		else {
+			ncols = MIN( ncols, 15 ) ;
+			nrows = MIN( nrows, 9 ) ;
+		}
+
+		// Decrements ncols by 1 if there are row labels.
+		ncols -= haslabels;
+	#endif
+
+	// -----------------------------
+
+	// Writes all tags.
+
+	// Name
+	if ( name ) {
+		struct tag_t const tag_name = new_tag( (char *restrict)name, (char **restrict)&name );	// Fakes a struct tag_t
+
+		if ( show_tag( tag_name, "Name", 1, 1, true, shown_by_all ) != EXIT_SUCCESS )
+			return EXIT_FAILURE;
+	}
+
+	// Column headers
+	if ( hasheaders && ( show_tag( headers, "Headers", numcols, ncols, true, shown_by_all ) != EXIT_SUCCESS ) )
+		return EXIT_FAILURE;
+
+	// ----------------------------
+
+	// Prints matrix, with row labels if exist
+
+	if ( ((uintptr_t) name + hasheaders + haslabels + transpose) &&
+		(print_message( shown_by_all, "Data matrix: %" PRI_IDX " rows x %" PRI_IDX " columns.\n", numrows, numcols ) != EXIT_SUCCESS) )
+		return EXIT_FAILURE;
+
+
+	// Warns about possibly truncated row labels.
+	if ( haslabels ) {
+		status = print_message( shown_by_all, "Please note that row labels will show up to the first %i characters.\n\n",
+					label_precision );
+		if ( status != EXIT_SUCCESS )
+			return EXIT_FAILURE;
+	}
+
+
+	// Step sizes for outer and inner loops.
+	index_t incr_outer_loop = padding;	// Step size for outer loop
+	index_t incr_inner_loop = 1;		// Step size for inner loop.
+	if ( transpose ) {
+		incr_outer_loop = 1;
+		incr_inner_loop = padding;
+	}
+	errno = 0;
+
+	size_t const data_size = ( real_data ? sizeof(real) : sizeof(index_t) );
+
+	void const *pmatrix = matrix;	// &matrix[i][0] (or &matrix[0][i], if transpose)
+	for ( index_t i = 0 ; i < nrows ; i++, pmatrix += (incr_outer_loop * data_size) ) {
+
+		if ( print_message( shown_by_all, "Line %" PRI_IDX ":", i ) != EXIT_SUCCESS )
+			return EXIT_FAILURE;
+
+		// Prints a (truncated) row label.
+		if ( haslabels && (print_message( shown_by_all, " %.*s:", label_precision, labels.ptokens[i] ) != EXIT_SUCCESS) )
+			return EXIT_FAILURE;
+
+		void const *p = pmatrix;
+		for ( index_t j = 0 ; j < ncols ; j++, p += (incr_inner_loop * data_size) ) {
+
+			data_t val;
+			memcpy( &val, p, data_size );
+
+			if ( real_data )
+				status = print_message( shown_by_all, " %g", val.r );
+			else
+				status = print_message( shown_by_all, " %" PRI_IDX, val.i );
+
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+
+		} // for
+
+		// Last column.
+		if ( ncols < numcols ) {
+
+			data_t val;
+			p = pmatrix + ( (numcols-1) * incr_inner_loop * data_size );
+
+			memcpy( &val, p, data_size );
+
+			if ( real_data )
+				status = print_message( shown_by_all, " ... %g", val.r );
+			else
+				status = print_message( shown_by_all, " ... %" PRI_IDX, val.i );
+
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		}
+
+		if ( print_message( shown_by_all, "\n" ) != EXIT_SUCCESS )
+			return EXIT_FAILURE;
+
+	} // for i=[0..nrows)
+
+	// Last row.
+	if ( nrows < numrows ) {
+
+		index_t const i = numrows - 1;
+		pmatrix = matrix + (i * incr_outer_loop * data_size);
+
+		if ( print_message( shown_by_all, "...\nLine %" PRI_IDX ":", i ) != EXIT_SUCCESS )
+			return EXIT_FAILURE;
+
+		// Prints a (truncated) row label.
+		if ( haslabels && (print_message( shown_by_all, " %.*s:", label_precision, labels.ptokens[i] ) != EXIT_SUCCESS) )
+			return EXIT_FAILURE;
+
+		void const *p = pmatrix;
+		for ( index_t j = 0 ; j < ncols ; j++, p += (incr_inner_loop * data_size) ) {
+
+			data_t val;
+			memcpy( &val, p, data_size );
+
+			if ( real_data )
+				status = print_message( shown_by_all, " %g", val.r );
+			else
+				status = print_message( shown_by_all, " %" PRI_IDX, val.i );
+
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+
+		} // for
+
+		// Last column.
+		if ( ncols < numcols ) {
+
+			data_t val;
+			p = pmatrix + ( (numcols-1) * incr_inner_loop * data_size );
+
+			memcpy( &val, p, data_size );
+
+			if ( real_data )
+				status = print_message( shown_by_all, " ... %g", val.r );
+			else
+				status = print_message( shown_by_all, " ... %" PRI_IDX, val.i );
+
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		}
+
+		if ( print_message( shown_by_all, "\n" ) != EXIT_SUCCESS )
+			return EXIT_FAILURE;
+
+	} // if ( nrows < numrows )
+
+	return print_message( shown_by_all, "\n" );
+
+} // matrix_print
+
+// ---------------------------------------------
+
+/*
+ * Shows matrix's content (data, name, headers and/or labels).
+ * Skips name, headers and labels if 'mt' is NULL.
+ *
+ * If 'transpose' is 'true', transposes matrix as follows:
+ * - Matrix dimensions in memory: <numcols> rows, <numrows> columns.
+ * - Matrix dimensions on screen: <numrows> rows, <numcols> columns.
+ * - Shows <numcols> mt->headers (as column headers) and <numrows> mt->labels (as row labels).
+ *
+ * numcols <= padding, unless matrix transposing is set (in that case, numrows <= padding).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
+ */
+int matrix_show( real const *restrict matrix, index_t numrows, index_t numcols, index_t padding, bool transpose, bool shown_by_all,
+		struct matrix_tags_t const *restrict mt )
+{
+
+	bool const real_data = true;
+
+	return matrix_print( real_data, matrix, numrows, numcols, padding, transpose, shown_by_all, mt );
+
+} // matrix_show
+
+////////////////////////////////////////////////
+
+/*
+ * Shows matrix's content (data, name, headers and/or labels).
+ * Skips name, headers and labels if 'mt' is NULL.
+ *
+ * If 'transpose' is 'true', transposes matrix as follows:
+ * - Matrix dimensions in memory: <numcols> rows, <numrows> columns.
+ * - Matrix dimensions on screen: <numrows> rows, <numcols> columns.
+ * - Shows <numcols> mt->headers (as column headers) and <numrows> mt->labels (as row labels).
+ *
+ * numcols <= padding, unless matrix transposing is set (in that case, numrows <= padding).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
+ */
+int matrix_int_show( index_t const *restrict matrix, index_t numrows, index_t numcols, index_t padding, bool transpose, bool shown_by_all,
+			struct matrix_tags_t const *restrict mt )
+{
+
+	bool const real_data = false;
+
+	return matrix_print( real_data, matrix, numrows, numcols, padding, transpose, shown_by_all, mt );
+
+} // matrix_int_show
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Transposes a matrix using a temporary file.
+ *
+ * <base_filename> is used only if no temporary file from the system can be employed. It is never referenced otherwise.
+ *
+ * WARNING:
+ *	- Pointer "matrix" is ALWAYS CHANGED, even on error.
+ *	- NO ERROR-CHECKING IS PERFORMED (e.g., overflow, invalid values...).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
+ */
+int matrix_transpose_file( void *restrict matrix, index_t *restrict nrows, index_t *restrict ncols, size_t data_size,
+				char const *restrict base_filename )
+{
+
+	index_t numcols = 0, numrows = 0;
+
+	bool custom_file = false;		// Uses a custom file rather than one generated by the system.
+	char *restrict filename_tmp = NULL;	// Custom filename (used only if no temporary file from the system can be employed).
+
+	////////////////////////////////
+
+	// Checks for NULL parameters
+	if ( ! ( (uintptr_t) matrix * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) data_size ) ) {
+		bool const shown_by_all = false;
+		int const errnum = EFAULT;
+		if ( ! matrix )	print_errnum( shown_by_all, errnum, "\nmatrix_transpose_file( matrix )" );
+		if ( ! nrows )	print_errnum( shown_by_all, errnum, "\nmatrix_transpose_file( nrows )" );
+		if ( ! ncols )	print_errnum( shown_by_all, errnum, "\nmatrix_transpose_file( ncols )" );
+		if ( ! data_size ) print_errnum( shown_by_all, EINVAL, "\nmatrix_transpose_file( data_size )" );
+		return EXIT_FAILURE;
+	}
+
+	numrows = *nrows;
+	numcols = *ncols;
+
+	if ( (numrows <= 0) + (numcols <= 0) ) {
+		print_error( false, "\nError in matrix_save_binary_native( rows=%" PRI_IDX ", columns=%" PRI_IDX
+				" ): Invalid matrix dimensions.\n", numrows, numcols );
 		return EXIT_FAILURE;
 	}
 
 	// ---------------------------
 
-	// Writes matrix by columns to a temporary file.
-	bool custom_file = false;		// Uses a custom file instead of one generated by the system.
-	char *restrict filename_tmp = NULL;	// Custom filename
+	// Opens a temporary file
 
 	FILE *restrict file = tmpfile();
+
 	if ( ! file ) {
 
 		// Uses a custom file.
 		custom_file = true;
 
 		if ( ! base_filename ) {
-			fflush( stdout );
-			errno = EFAULT;
-			perror( "\nmatrix_transpose_file():\n\tbase_filename" );
+			print_errnum( false, EFAULT, "\nmatrix_transpose_file( base_filename )" );
 			return EXIT_FAILURE;
 		}
 
-		size_t const len_filename = strlen(base_filename);
-		filename_tmp = (char *restrict) malloc( (len_filename + 8) * sizeof(char) );
+		size_t const len = strlen(base_filename) + 8;
+		filename_tmp = (char *restrict) malloc( len * sizeof(char) );
 		if ( ! filename_tmp ) {
-			int const err = errno; fflush(stdout); errno = err;
-			perror("\nmalloc( filename_tmp )");
-			fprintf(stderr,"Error in matrix_transpose_file().\n");
+			print_errnum( true, errno, "Error in matrix_transpose_file(): malloc( filename_tmp, length=%zu )", len );
 			return EXIT_FAILURE;
 		}
-		sprintf(filename_tmp, "%s_t.dat", base_filename);
-
-		file = fopen( filename_tmp, "w+b" );	// Open for reading and writing.
-		if ( ! file ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename_tmp, strerror(errno) );
-			fprintf(stderr,"Error in matrix_transpose_file().\n");
+		errno = 0;
+		int const conv = snprintf( filename_tmp, len, "%s_t.dat", base_filename );
+		if ( (conv <= 0) + ((size_t) conv >= len) ) {
+			print_errnum( (conv <= 0), errno, "Error in matrix_transpose_file(): snprintf( filename_tmp, length=%zu )", len );
+			if ( conv > 0 )	// conv >= len
+				print_error( false, "The resulting string was truncated; %i bytes are required at least.\n", conv + 1 );
 			free(filename_tmp);
 			return EXIT_FAILURE;
 		}
 
-	}
+		file = fopen( filename_tmp, "w+b" );	// Open for reading and writing.
+		if ( ! file ) {
+			print_errnum( true, errno, "Error in matrix_transpose_file(): fopen( %s )", filename_tmp );
+			free(filename_tmp);
+			return EXIT_FAILURE;
+		}
+
+	} // If requires a custom file.
 
 	// ---------------------------
 
-	index_t const numrows = *nrows;
-	index_t const numcols = *ncols;
+	// Writes matrix by columns
 
-	for ( index_t j=0 ; j<numcols ; j++ ) {
-		for ( index_t i=0, idx=j ; i<numrows ; i++, idx+=numcols )
-			if ( ! fwrite( &matrix[ idx ], sizeof(real), 1, file ) ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fwrite(temporary_file[ %" PRI_IDX " / %" PRI_IDX "][ %" PRI_IDX " / %"
-						PRI_IDX "]).\nError in matrix_transpose_file().\n", j, numcols, i, numrows);
+	void const *pmatrix = matrix;
+	for ( index_t j = 0 ; j < numcols ; j++, pmatrix += data_size ) {
+
+		void const *pmatrix_r = pmatrix;
+
+		for ( index_t i=0 ; i<numrows ; i++, pmatrix_r += (numcols * data_size) )
+
+			if ( fwrite( pmatrix_r, data_size, 1, file ) != 1 ) {
+				print_errnum( true, errno, "Error in matrix_transpose_file(): fwrite( row %" PRI_IDX ", column %"
+						PRI_IDX " )", i, j );
 				fclose(file);
 				if ( custom_file ) { unlink(filename_tmp); free(filename_tmp); }
 				return EXIT_FAILURE;
 			}
-	} // for j.
+	} // for j
+
+	// ---------------------------
 
 	// Now, reads the file.
+
 	rewind(file);
 
 	size_t const nitems = numrows * numcols;
-	size_t const nread = fread( matrix, sizeof(real), nitems, file );
+	size_t const nread = fread( matrix, data_size, nitems, file );
 	if ( nread != nitems ) {
-		fflush(stdout);
-		if ( feof(file) )
-			fprintf(stderr,"\nfread(): premature end-of-file in temporary file.\nError in matrix_transpose_file().\n");
-		else // error
-			fprintf(stderr,"\nInternal error in fread( temporary_file ).\nError in matrix_transpose_file().\n");
+		if ( ferror(file) )
+			print_errnum( true, errno, "Error in matrix_transpose_file(): fread( %zu items )", nitems );
+		else	// EOF
+			print_error( true, "Error in matrix_transpose_file(): fread( %zu items ): Premature end-of-file detected "
+					"(%zu items read).\n", nitems, nread );
 		fclose(file);
 		if ( custom_file ) { unlink(filename_tmp); free(filename_tmp); }
 		return EXIT_FAILURE;
@@ -4178,1207 +4521,21 @@ int matrix_transpose_file( real *restrict matrix, index_t *restrict nrows, index
 
 } // matrix_transpose_file
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
  * Cleans name, headers, labels and matrix.
- *
- * WARNING: This method uses the regular free(3) function.
  */
-void matrix_clean( real *restrict matrix, struct matrix_labels ml )
+void matrix_clean( void *restrict matrix, struct matrix_tags_t mt )
 {
 
-	clean_matrix_labels( ml );
+	clean_matrix_tags( mt );
 
 	if ( matrix )
 		free( (void *) matrix );
 
 } // matrix_clean
 
-//////////////////////////////////////////////////
-
-/*
- * Shows matrix's content (data, name, headers and/or labels).
- *
- * If 'transpose' is 'true', transposes matrix as follows:
- * - Matrix dimensions in memory: <numcols> rows, <numrows> columns.
- * - Matrix dimensions on screen: <numrows> rows, <numcols> columns.
- * - Shows <numcols> ml->headers (as column headers) and <numrows> ml->labels (as row labels).
- *
- * numcols <= padding, unless matrix transposing is set (in that case, numrows <= padding).
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE
- */
-int matrix_show( real const *restrict matrix, index_t numrows, index_t numcols, index_t padding, bool transpose,
-		struct matrix_labels const *restrict ml )
-{
-
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_show( matrix )");
-		return EXIT_FAILURE;
-	}
-
-	{
-		uintmax_t const nitems = ((uintmax_t) numrows) * ((uintmax_t) numcols);
-
-		if ( (numrows <= 0) + (numcols <= 0) + (padding <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_show( rows=%" PRI_IDX ", columns=%" PRI_IDX ", padding=%" PRI_IDX " ): %s\n",
-				numrows, numcols, padding, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf( stderr, "Matrix size (%" PRIuMAX ") exceeds the limits used for matrix dimensions (%" PRI_IDX ").\n",
-					nitems, IDX_MAX);
-			return EXIT_FAILURE;
-		}
-	}
-
-	if ( transpose ) {
-		if ( numrows > padding ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_show( rows=%" PRI_IDX " [number of columns since matrix transposing is selected], "
-					"padding=%" PRI_IDX " ): %s\n", numrows, padding, strerror(errno));
-			return EXIT_FAILURE;
-		}
-	} else if ( numcols > padding ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_show( columns=%" PRI_IDX ", padding=%" PRI_IDX " ): %s\n",
-				numrows, padding, strerror(errno));
-			return EXIT_FAILURE;
-	}
-
-	index_t nrows, ncols;
-
-	#if NMFGPU_TESTING
-		ncols = numcols;
-		nrows = numrows;
-	#else
-		if ( numrows == 1 ) {	// 'matrix' is a vector.
-			ncols = MIN( numcols, 225 ) ;
-			nrows = 1;
-		} else {
-			ncols = MIN( numcols, 15 ) ;
-			nrows = MIN( numrows, 9 ) ;
-		}
-	#endif
-
-
-	// --------------------------------
-
-
-	char const *restrict name = NULL;
-	char const *restrict headers = NULL;
-	char const *const *restrict pheaders = NULL;
-	char const *restrict labels = NULL;
-	char const *const *restrict plabels = NULL;
-
-	if ( ml ) {
-		struct matrix_labels lml = *ml;
-		name = lml.name;
-		headers = lml.headers.tokens;
-		pheaders = lml.headers.ptokens;
-		labels = lml.labels.tokens;
-		plabels = lml.labels.ptokens;
-	}
-
-
-	// Name
-	if ( name )
-		printf("Name: '%s'\n\n", name);
-
-
-	// Column headers
-	if ( headers ) {
-		printf( "Headers (%" PRI_IDX "):\n", numcols );
-		for( index_t i=0 ; i<ncols ; i++ )
-			printf("'%s' ", pheaders[i] );
-		if ( ncols < numcols )
-			printf(" ... '%s'", pheaders[numcols-1]);
-		printf("\n\n");
-	}
-
-
-	// ----------------------------
-
-	// Show matrix (with row labels if exist)
-
-	if ( ((size_t) ml) + transpose ) {	// (ml != NULL) || (transpose == true)
-		printf("Data matrix: %" PRI_IDX " rows x %" PRI_IDX " columns.\n", numrows, numcols );
-		fflush( stdout );
-	}
-
-	// Steps for outer and inner loops.
-	index_t incr_outer_loop = padding;	// Step for outer loop
-	index_t incr_inner_loop = 1;		// Step for inner loop.
-	if ( transpose ) {
-		incr_outer_loop = 1;
-		incr_inner_loop = padding;
-	}
-
-	real const *pmatrix = matrix;	// &matrix[i][0] (or &matrix[0][i] if transpose)
-	for ( index_t i=0 ; i<nrows ; i++,pmatrix+=incr_outer_loop ) {
-
-		index_t j = 0;
-		real const *pmatrix_r = pmatrix; // &matrix[i][j] (or &matrix[j][i] if transpose)
-
-		printf( "Line %" PRI_IDX ": ", i );
-
-		if ( labels )
-			printf( "%s", plabels[i] );
-
-		else { // No labels. Writes the first value.
-
-			printf( "%g", *pmatrix_r );
-			pmatrix_r += incr_inner_loop;	// &matrix[i][1] (or &matrix[1][i] if transpose)
-			j = 1;
-
-		} // If has labels
-
-		// Rest of values.
-		for ( ; j<ncols ; j++,pmatrix_r+=incr_inner_loop )
-			printf( " %g", *pmatrix_r );
-
-		if ( ncols < numcols )
-			printf( " ... %g", pmatrix[ (numcols - 1) * incr_inner_loop ] ); // NOTE: we use 'pmatrix', not 'pmatrix_r'
-
-		printf( "\n" );
-
-	} // for ( 0 <= i < nrows )
-
-	// Last row.
-	if ( nrows < numrows ) {
-
-		index_t i = numrows - 1;
-		pmatrix = matrix + i * incr_outer_loop;
-
-		index_t j = 0;
-		real const *pmatrix_r = pmatrix; // &matrix[i][j] (or &matrix[j][i] if transpose)
-
-		printf( "...\nLine %" PRI_IDX ": ", i );
-
-		if ( labels )
-			printf( "%s", plabels[i] );
-
-		else { // No labels. Writes the first value.
-
-			printf( "%g", *pmatrix_r );
-			pmatrix_r += incr_inner_loop;	// &matrix[i][1] (or &matrix[1][i] if transpose)
-			j = 1;
-
-		} // If has labels
-
-		// Rest of values.
-		for ( ; j<ncols ; j++,pmatrix_r+=incr_inner_loop )
-			printf( " %g", *pmatrix_r );
-
-		if ( ncols < numcols )
-			printf( " ... %g", pmatrix[ (numcols - 1) * incr_inner_loop ] ); // NOTE: we use 'pmatrix', not 'pmatrix_r'
-
-		printf( "\n" );
-
-	} // if ( nrows < numrows )
-
-	printf( "\n" );
-
-	fflush( stdout );
-
-	return EXIT_SUCCESS;
-
-} // matrix_show
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-/*
- * Loads an integer matrix from an ASCII file.
- * Skips name, headers and labels if 'ml' is set to NULL.
- *
- * WARNING: 'matrix' must be a non-NULL pointer with ENOUGH MEMORY ALREADY ALLOCATED.
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE.
- */
-int matrix_int_load_ascii( char const *restrict filename, index_t nrows, index_t ncols, bool hasname, bool hasheaders, bool haslabels,
-			index_t *restrict matrix, struct matrix_labels *restrict ml )
-{
-
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_int_load_ascii( matrix )");
-		return EXIT_FAILURE;
-	}
-
-	{
-		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
-
-		if ( (nrows <= 0) + (ncols <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_int_load_ascii( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-				nrows, ncols, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf( stderr, "Matrix size (%" PRIuMAX ") exceeds the limits used for matrix dimensions (%" PRI_IDX ").\n",
-					nitems, IDX_MAX);
-			return EXIT_FAILURE;
-		}
-	}
-
-
-	// Starts Reading ...
-	FILE *restrict const file = fopen( filename, "r" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_int_load_ascii().\n");
-		return EXIT_FAILURE;
-	}
-
-	char *restrict name = NULL;
-	char *restrict headers = NULL;
-	char **restrict pheaders = NULL;
-	char *restrict labels = NULL;
-	char **restrict plabels = NULL;
-
-	// Skips name, headers and labels if ml is NULL.
-	bool const skip = ! ml;	// ( ml == NULL )
-
-
-	// ----------------------------
-
-
-	// Name or headers.
-
-	if ( hasname + hasheaders ) {
-
-		char *restrict data = NULL;
-		size_t len_data = 0;
-
-		// Reads line 1.
-		len_data = read_line( file, &data );
-		if ( ! data ) {
-			if ( ! len_data )
-				fprintf(stderr,"\nError reading input file: file is empty.\n");
-			fprintf(stderr,"Error in matrix_int_load_ascii().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-		if ( skip )
-			free(data);
-
-		else if ( hasheaders ) {
-			// "Tokenizes" line 1.
-			char **restrict pdata = NULL;
-			if ( ! tokenize( data, &pdata, (int) '\t' ) ) {
-				fprintf(stderr,"Error tokenizing line 1.\nError in matrix_int_load_ascii().\n");
-				free(data);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-			if ( hasname ) { // Name and headers
-
-				// Splits line 1 into name and headers.
-
-				// Name: copies the first token.
-				name = (char *restrict) malloc( (strlen(data) + 1) * sizeof(char) );
-				if ( ! name ) {
-					int const err = errno; fflush(stdout); errno = err;
-					perror("\nmalloc( name )");
-					fprintf(stderr,"Error in matrix_int_load_ascii().\n");
-					free(data); free(pdata);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-				strcpy( name, data );
-
-				/* Headers: Sets remaining tokens, starting from the second one, as column headers.
-				 *
-				 *	Instead of allocating memory and copying 'data' to 'headers' (starting from the second token), it just
-				 *	moves that second token to the "beginning" of 'data' (i.e., to the address returned by the read_line()
-				 *	call above) and overwrites the first token (already copied to 'name'). Remaining tokens are kept
-				 *	untouched, and the previous place of the second token is left as "garbage".
-				 *
-				 *	This way data == headers == pheaders[0], and it is possible to call free(headers).
-				 */
-				char **p_pdata = pdata + 1;	// Second token.
-				char *p = *p_pdata;
-				headers = memmove( data, p, (strlen(p) + 1) * sizeof(char) ); // Overwrites first token.
-				if ( ! headers )  {
-					int const err = errno; fflush(stdout); errno = err;
-					perror("\nmemmove( headers )");
-					fprintf(stderr,"Error in matrix_int_load_ascii().\n");
-					free(name);
-					free(pdata); free(data);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-
-				// pheaders: Copies pdata[i+1] to pheaders[i]
-				pheaders = (char **restrict) malloc( ncols * sizeof(char *) );
-				if ( ! pheaders ) {
-					int const err = errno; fflush(stdout); errno = err;
-					perror("\nmalloc( pheaders )");
-					fprintf(stderr,"Error in matrix_int_load_ascii().\n");
-					free(name);
-					free(pdata); free(data);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-				memcpy( pheaders, p_pdata, ncols * sizeof(char *) ); // pheaders[i] = pdata[i+1]
-				free(pdata);
-
-			} else { // No name. Headers only.
-				headers = data;
-				pheaders = pdata;
-			}
-
-		} else // No headers. Name only.
-			name = data;
-
-	} // if has name or headers
-
-
-	// ----------------------------
-
-
-	// Labels
-
-	size_t max_len_labels = 0;
-	size_t len_labels = 0;
-	char *p_labels = NULL;
-	char **p_plabels = NULL;
-
-	if ( haslabels * ( ! skip ) ) {
-		max_len_labels = 64 * nrows;				// Initial size for <nrows> labels of 64 characters each.
-		labels = (char *restrict) malloc( max_len_labels * sizeof(char) );	// Memory size will be adjusted later.
-		if ( ! labels ) {
-			int const err = errno; fflush(stdout); errno = err;
-			perror("\nmalloc( labels )");
-			fprintf(stderr,"Error in matrix_int_load_ascii().\n");
-			if ( headers ) { free(pheaders); free(headers); }
-			if ( name ) free(name);
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		p_labels = labels;
-
-		plabels = (char **restrict) malloc( nrows * sizeof(char *) );
-		if ( ! plabels ) {
-			int const err = errno; fflush(stdout); errno = err;
-			perror("\nmalloc( plabels )");
-			fprintf(stderr,"Error in matrix_int_load_ascii().\n");
-			free(labels);
-			if ( headers ) { free(pheaders); free(headers); }
-			if ( name ) free(name);
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		p_plabels = plabels;
-	} // if has labels.
-
-
-	// ----------------------------
-
-
-	// Reading file...
-
-	for ( index_t r=0, idx=0 ; r<nrows ; r++ ) {
-
-		if ( haslabels ) {
-			// Reads a token.
-			char *restrict data = NULL;
-			int last_char = 0;	// Last char read.
-			size_t const len_data = read_token( file, (int) '\t', &data, &last_char );
-			if ( ! data ) {
-				if ( len_data )
-					fprintf(stderr,"Error in matrix_int_load_ascii().\n");
-				else { // EOF
-					fflush(stdout);
-					fprintf(stderr, "\nError reading label for matrix row %" PRI_IDX ": premature end of file.\n", r );
-				}
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				clean_matrix_labels(l_ml);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-			if ( !skip ) {
-				// Before setting the label, checks if there is enough memory.
-				size_t len = len_labels + len_data + 1;
-				if ( len > max_len_labels ) { // Allocates more memory
-					do {
-						max_len_labels *= 2;
-					} while ( len >= max_len_labels );
-					char *const tmp = (char *) realloc( labels, max_len_labels * sizeof(char) );
-					if ( ! tmp ) {
-						int const err = errno; fflush(stdout); errno = err;
-						perror("\nrealloc( labels )");
-						fprintf( stderr, "Error in matrix_int_load_ascii().\n" );
-						struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-						clean_matrix_labels(l_ml);
-						fclose(file);
-						return EXIT_FAILURE;
-					}
-					labels = tmp;
-					p_labels = tmp + len_labels; // Pointer to place for new label.
-
-					// Resets 'plabels'.
-					retok( (char const *)labels, (char const **)plabels, r );
-					p_plabels = plabels + r;	// Pointer to place for new label.
-
-				} // If allocate more memory for labels
-
-				// Sets vector of pointers to labels
-				strcpy(p_labels, data);		// Copies the token.
-				*p_plabels = p_labels;		// Sets p_plabels[r].
-
-				// pointer to place for next label
-				p_labels += (len_data + 1);
-				p_plabels++;
-
-				len_labels = len;	// len == (len_labels + len_data + 1)
-
-			} // If set the label.
-
-			free(data);
-
-		} // if haslabels
-
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("Reading row %" PRI_IDX "...\n",r);
-			fflush(stdout);
-		#endif
-
-		for ( index_t col=0 ; col<ncols ; col++, idx++ ) {
-
-			int const conv = fscanf( file, "%" PRI_IDX " ", &matrix[ idx ] );
-			if ( conv < 1 ) {
-				int const err = errno; fflush(stdout); errno = err;
-				if ( ferror(file) ) {	// Error.
-					perror("\nfscanf()");
-					fprintf( stderr, "Error in matrix_int_load_ascii() reading row %" PRI_IDX ", column %" PRI_IDX "\n",
-						r, col);
-				}
-				else if ( (conv == EOF) + feof(file) ) // Premature EOF.
-					fprintf( stderr, "\nError reading input file:\nPremature end of file detected in row %" PRI_IDX ".\n"
-						"Invalid file format.\n\n", r );
-				else	// Not a number
-					fprintf( stderr, "\nError reading input file:\nRow %" PRI_IDX ", column %" PRI_IDX
-							": Invalid numeric format.\nThe file contains non-numeric data.\n\n",r,col);
-				struct matrix_labels l_ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-				clean_matrix_labels(l_ml);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-		} // for (0 <= col < ncols-1)
-
-	} // for ( 0 <= r < nrows )
-
-	// Resizes labels.
-	if ( haslabels * (! skip) ) {
-		#if NMFGPU_DEBUG_READ_MATRIX
-			printf("Resizing labels from %zu to %zu\n",max_len_labels,len_labels);
-			fflush(stdout);
-		#endif
-		labels = (char *) realloc( labels, len_labels * sizeof(char) );
-	}
-
-	fclose(file);
-
-	// Sets output values.
-	if ( ! skip )
-		*ml = NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-
-	return EXIT_SUCCESS;
-
-} // matrix_int_load_ascii
-
-//////////////////////////////////////////////////
-
-/*
- * Loads an integer matrix from a binary file.
- * Skips name, headers and labels if 'ml' is set to NULL.
- *
- * WARNING:
- *	For internal use only. NO ERROR CHECKING IS PERFORMED.
- *	'matrix' must be a non-NULL pointer with ENOUGH MEMORY ALREADY ALLOCATED.
- *
- * Returns EXIT_SUCCESS (or EXIT_FAILURE if could not open filename).
- */
-int matrix_int_load_binary( char const *restrict filename, index_t *restrict matrix, index_t nrows, index_t ncols,
-				struct matrix_labels *restrict ml )
-{
-
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_int_load_binary( matrix )");
-		return EXIT_FAILURE;
-	}
-
-	{
-		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
-
-		if ( (nrows <= 0) + (ncols <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_int_load_binary( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-				nrows, ncols, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf( stderr, "Matrix size (%" PRIuMAX ") exceeds the limits used for matrix dimensions (%" PRI_IDX ").\n",
-					nitems, IDX_MAX);
-			return EXIT_FAILURE;
-		}
-	}
-
-	// Starts Reading ...
-	FILE *restrict const file = fopen( filename, "rb" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_int_load_binary().\n");
-		return EXIT_FAILURE;
-	}
-
-	// Reads data matrix
-	size_t const nitems = nrows * ncols;
-	size_t const nread = fread( matrix, sizeof(index_t), nitems, file );
-	if ( nread != nitems ) {
-		fflush(stdout);
-		fprintf(stderr, "\nError reading input file: %zu items read, %zu expected.\nError in matrix_int_load_binary().\n",
-			nread, nitems);
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
-	/////////////////////////////////
-
-
-	// Reads headers, labels and name (as plain text) if they exists.
-
-	// Skips them if ml is set to NULL
-	if ( ! ml ) {
-		fclose(file);
-		return EXIT_SUCCESS;
-	}
-
-	char *restrict name = NULL;
-	char *restrict headers = NULL;
-	char **restrict pheaders = NULL;
-	char *restrict labels = NULL;
-	char **restrict plabels = NULL;
-
-
-	// Checks for row labels
-	size_t len = read_line( file, &labels );
-	if ( ! labels ) {
-		fclose(file);
-		if ( len ) { // Error
-			fprintf(stderr, "Error reading row labels.\nError in matrix_int_load_binary().\n");
-			return EXIT_FAILURE;
-		}
-		*ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
-		return EXIT_SUCCESS;
-	}
-	if ( len ) {
-		// Divides into tokens by replacing all tabs characters by '\0'.
-		if ( ! tokenize( labels, &plabels, (int) '\t' ) ) {
-			fprintf(stderr, "Error reading row labels.\nError in matrix_int_load_binary().\n");
-			fclose(file);
-			free(labels);
-			return EXIT_FAILURE;
-		}
-	}
-	else {	// No labels.
-		free(labels);
-		labels = NULL;
-	}
-
-
-	// Checks for columns headers
-	len = read_line( file, &headers );
-	if ( ! headers ) {
-		fclose(file);
-		if ( len ) {
-			fprintf(stderr,
-				"Error reading column headers.\nError in matrix_int_load_binary().\n");
-			if ( labels ) { free(plabels); free(labels); }
-			return EXIT_FAILURE;
-		}
-		*ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, labels, plabels );
-		return EXIT_SUCCESS;
-	}
-	if ( len ) {
-		// Divides into tokens by replacing all tabs characters by '\0'.
-		if ( ! tokenize( headers, &pheaders, (int) '\t' ) ) {
-			fprintf(stderr, "Error reading column headers.\nError in matrix_int_load_binary().\n");
-			fclose(file);
-			free(headers);
-			if ( labels ) { free(plabels); free(labels); }
-			return EXIT_FAILURE;
-		}
-	}
-	else{	// No headers
-		free(headers);
-		headers = NULL;
-	}
-
-
-	// Checks for name.
-	len = read_token( file, (int) '\t', &name, NULL );
-
-	fclose(file);
-
-	if ( (! name) * len ) {
-		fprintf(stderr, "Error reading description string.\nError in matrix_int_load_binary().\n");
-		struct matrix_labels l_ml = NEW_MATRIX_LABELS( NULL, headers, pheaders, labels, plabels );
-		clean_matrix_labels(l_ml);
-		return EXIT_FAILURE;
-	} // if has name
-
-	*ml = (struct matrix_labels) NEW_MATRIX_LABELS( name, headers, pheaders, labels, plabels );
-
-	return EXIT_SUCCESS;
-
-} // matrix_int_load_binary
-
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
-
-/*
- * Saves an integer matrix to an ASCII-text file.
- * Skips name, headers and labels if 'ml' is set to NULL.
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE.
- */
-int matrix_int_save_ascii( char const *restrict filename, index_t const *restrict matrix, index_t nrows, index_t ncols,
-				struct matrix_labels const *restrict ml )
-{
-
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_int_save_ascii( matrix )");
-		return EXIT_FAILURE;
-	}
-
-	{
-		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
-
-		if ( (nrows <= 0) + (ncols <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_int_save_ascii( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-				nrows, ncols, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf( stderr, "Matrix size (%" PRIuMAX ") exceeds the limits used for matrix dimensions (%" PRI_IDX ").\n",
-					nitems, IDX_MAX);
-			return EXIT_FAILURE;
-		}
-	}
-
-
-	FILE *restrict const file = fopen( filename, "w" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_int_save_ascii().\n");
-		return EXIT_FAILURE;
-	}
-
-
-	char const *restrict name = NULL;
-	char const *restrict headers = NULL;
-	char const *const *restrict pheaders = NULL;
-	char const *restrict labels = NULL;
-	char const *const *restrict plabels = NULL;
-
-	if ( ml ) {
-		struct matrix_labels lml = *ml;
-		name = lml.name;
-		headers = lml.headers.tokens;
-		pheaders = lml.headers.ptokens;
-		labels = lml.labels.tokens;
-		plabels = lml.labels.ptokens;
-	}
-
-
-	// Name
-	if ( name ) {
-		if ( fprintf(file,"%s",name) < 0 ) {
-			fflush(stdout);
-			fprintf(stderr,
-				"\nInternal error in fprintf(name).\nError in matrix_int_save_ascii().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		if ( headers == NULL && fprintf(file,"\n") <= 0 ) {
-			fflush(stdout);
-			fprintf(stderr,
-				"\nInternal error in fprintf(name\\n).\nError in matrix_int_save_ascii().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-	}
-
-
-	// Column headers
-	if ( headers ) {
-
-		index_t i = 0;
-
-		// Starts with a delimiter or not.
-		if ( ! name ) {
-			if ( fprintf(file,"%s",headers) < 0 ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fprintf(pheaders[0]).\nError in matrix_int_save_ascii().\n");
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-			i = 1;
-		}
-
-		for (; i<ncols; i++)
-			if ( fprintf(file,"\t%s",pheaders[i]) <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fprintf(pheaders[%" PRI_IDX "]).\nError in matrix_int_save_ascii().\n", i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-
-		if ( fprintf(file,"\n") <= 0 ) {
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(headers\\n).\nError in matrix_int_save_ascii().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-
-	} // if headers
-
-
-	// Row labels
-	if ( labels ) {
-		for ( index_t i=0, idx=0 ; i<nrows ; i++ ) {
-			if ( fprintf(file,"%s",plabels[i]) < 0 ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fprintf(plabels[%" PRI_IDX "]).\nError in matrix_int_save_ascii().\n",i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-			for (index_t j=0 ; j<ncols ; j++, idx++)
-				if ( fprintf(file,"\t%" PRI_IDX "",matrix[idx]) <= 0 ) {
-					fflush(stdout);
-					fprintf(stderr,"\nInternal error in fprintf(matrix[%" PRI_IDX "][%" PRI_IDX
-							"]).\nError in matrix_int_save_ascii().\n",i,j);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-			if ( fprintf(file,"\n") <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr,"\nInternal error in fprintf(matrix[%" PRI_IDX "][]\\n).\nError in matrix_int_save_ascii().\n",i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-		} // for
-	} else { // No labels
-		for ( index_t i=0, idx=0 ; i<nrows ; i++ ) {
-			if ( fprintf(file,"%" PRI_IDX "",matrix[idx]) <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr, "\nInternal error in fprintf(matrix[%" PRI_IDX "][0]).\nError in matrix_int_save_ascii().\n",i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-			idx++;
-			for ( index_t j=1 ; j<ncols ; j++, idx++)
-				if ( fprintf(file,"\t%" PRI_IDX "",matrix[idx]) <= 0 ) {
-					fflush(stdout);
-					fprintf(stderr,"\nInternal error in fprintf(matrix[%" PRI_IDX "][%" PRI_IDX
-							"]).\nError in matrix_int_save_ascii().\n",i,j);
-					fclose(file);
-					return EXIT_FAILURE;
-				}
-			if ( fprintf(file,"\n") <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr,"\nInternal error in fprintf(matrix[%" PRI_IDX "][]\\n).\nError in matrix_int_save_ascii().\n",i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-		} // for
-	} // if labels
-
-	if ( fclose(file) ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_int_save_ascii().\n");
-		return EXIT_FAILURE;
-	}
-
-	return EXIT_SUCCESS;
-
-} // matrix_int_save_ascii
-
-//////////////////////////////////////////////////
-
-/*
- * Saves an integer matrix to a binary file.
- * Skips name, headers and labels if 'ml' is set to NULL.
- *
- * WARNING: For internal use only. No error checking is performed.
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE.
- */
-int matrix_int_save_binary( char const *restrict filename, index_t const *restrict matrix, index_t nrows, index_t ncols,
-				struct matrix_labels const *restrict ml )
-{
-
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_int_save_binary( matrix )");
-		return EXIT_FAILURE;
-	}
-
-	{
-		uintmax_t const nitems = ((uintmax_t) nrows) * ((uintmax_t) ncols);
-
-		if ( (nrows <= 0) + (ncols <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_int_save_binary( rows=%" PRI_IDX ", columns=%" PRI_IDX " ): %s\n",
-				nrows, ncols, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf( stderr, "Matrix size (%" PRIuMAX ") exceeds the limits used for matrix dimensions (%" PRI_IDX ").\n",
-					nitems, IDX_MAX);
-			return EXIT_FAILURE;
-		}
-	}
-
-	FILE *restrict const file = fopen( filename, "wb" );
-	if( ! file ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfopen '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_int_save_binary().\n");
-		return EXIT_FAILURE;
-	}
-
-	// Data matrix
-	size_t const nitems = nrows * ncols;
-	size_t const nwritten = fwrite( matrix, sizeof(index_t), nitems, file );
-	if ( nwritten != nitems ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fwrite(). %zu items written, %zu expected.\nError in matrix_int_save_binary().\n",
-			nwritten, nitems );
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
-	// ----------------------------------
-
-
-	// Returns if there is no labels.
-	if ( ! ml ) {
-		if ( fclose(file) ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-			fprintf(stderr,"Error in matrix_int_save_binary().\n");
-			return EXIT_FAILURE;
-		}
-		return EXIT_SUCCESS;
-	}
-
-	struct matrix_labels lml = *ml;
-
-	char const *restrict name = lml.name;
-	char const *restrict headers = lml.headers.tokens;
-	char const *const *restrict pheaders = lml.headers.ptokens;
-	char const *restrict labels = lml.labels.tokens;
-	char const *const *restrict plabels = lml.labels.ptokens;
-
-
-	// Returns if there is no labels.
-	if ( ! ( (size_t) labels + (size_t) headers + (size_t) name) ) {	// (labels == NULL) && (headers == NULL) && (name == NULL)
-		if ( fclose(file) ) {
-			int const err = errno; fflush(stdout); errno = err;
-			fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-			fprintf(stderr,"Error in matrix_int_save_binary().\n");
-			return EXIT_FAILURE;
-		}
-		return EXIT_SUCCESS;
-	}
-
-
-	// ----------------------------------
-
-
-	// Row Labels
-	if ( labels ) {
-		if ( fprintf(file,"%s",labels) < 0 ) {	// Saves the first label
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(plabels[0]).\nError in matrix_int_save_binary().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		for (index_t i=1; i<nrows; i++)
-			if ( fprintf(file,"\t%s",plabels[i]) <= 0 ) {
-				fflush(stdout);
-				fprintf( stderr,"\nInternal error in fprintf(plabels[%" PRI_IDX "]).\nError in matrix_int_save_binary().\n",i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-	} // if labels
-
-	if ( fprintf(file,"\n")  <= 0 ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fprintf(plabels[]\\n).\nError in matrix_int_save_binary().\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
-
-	// Column headers
-	if ( headers ) {
-		if ( fprintf(file,"%s",headers) < 0 ) {	// Saves the first header
-			fflush(stdout);
-			fprintf(stderr,"\nInternal error in fprintf(pheaders[0]).\nError in matrix_int_save_binary().\n");
-			fclose(file);
-			return EXIT_FAILURE;
-		}
-		for (index_t i=1; i<ncols; i++)
-			if ( fprintf(file,"\t%s",pheaders[i])  <= 0 ) {
-				fflush(stdout);
-				fprintf(stderr,"\nInternal error in fprintf(pheaders[%" PRI_IDX "]).\nError in matrix_int_save_binary().\n",i);
-				fclose(file);
-				return EXIT_FAILURE;
-			}
-	} // if headers
-
-	if ( fprintf(file,"\n")  <= 0 ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fprintf(pheaders[]\\n).\nError in matrix_int_save_binary().\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
-
-	// Name
-	if ( name && fprintf(file,"%s",name)  < 0 ) {
-		fflush(stdout);
-		fprintf(stderr,"\nInternal error in fprintf(name).\nError in matrix_int_save_binary().\n");
-		fclose(file);
-		return EXIT_FAILURE;
-	}
-
-
-	if ( fclose(file) ) {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nfclose '%s' :\n\t%s.\n", filename, strerror(errno) );
-		fprintf(stderr,"Error in matrix_int_save_binary().\n");
-		return EXIT_FAILURE;
-	}
-
-	return EXIT_SUCCESS;
-
-} // matrix_int_save_binary
-
-//////////////////////////////////////////////////
-
-/*
- * Shows matrix's content (data, name, headers and/or labels).
- *
- * If 'transpose' is 'true', transposes matrix as follows:
- * - Matrix dimensions in memory: <numcols> rows, <numrows> columns.
- * - Matrix dimensions on screen: <numrows> rows, <numcols> columns.
- * - Shows <numcols> ml->headers (as column headers) and <numrows> ml->labels (as row labels).
- *
- * numcols <= padding, unless matrix transposing is set (in that case, numrows <= padding).
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE
- */
-int matrix_int_show( index_t const *restrict matrix, index_t numrows, index_t numcols, index_t padding, bool transpose,
-			struct matrix_labels const *restrict ml )
-{
-
-	if ( ! matrix ) {
-		fflush(stdout);
-		errno = EFAULT;
-		perror("\nmatrix_int_show( matrix )");
-		return EXIT_FAILURE;
-	}
-
-	{
-		uintmax_t const nitems = ((uintmax_t) numrows) * ((uintmax_t) numcols);
-
-		if ( (numrows <= 0) + (numcols <= 0) + (padding <= 0) + (nitems > IDX_MAX) ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_int_show( rows=%" PRI_IDX ", columns=%" PRI_IDX ", padding=%" PRI_IDX " ): %s\n",
-				numrows, numcols, padding, strerror(errno));
-			if ( nitems > IDX_MAX )
-				fprintf( stderr, "Matrix size (%" PRIuMAX ") exceeds the limits used for matrix dimensions (%" PRI_IDX ").\n",
-					nitems, IDX_MAX);
-			return EXIT_FAILURE;
-		}
-	}
-
-	if ( transpose ) {
-		if ( numrows > padding ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_int_show( rows=%" PRI_IDX " [number of columns since matrix transposing is selected], "
-					"padding=%" PRI_IDX " ): %s\n", numrows, padding, strerror(errno));
-			return EXIT_FAILURE;
-		}
-	} else if ( numcols > padding ) {
-			fflush(stdout);
-			errno = EINVAL;
-			fprintf( stderr, "\nmatrix_int_show( columns=%" PRI_IDX ", padding=%" PRI_IDX " ): %s\n",
-				numrows, padding, strerror(errno));
-			return EXIT_FAILURE;
-	}
-
-	index_t nrows, ncols;
-
-	#if NMFGPU_TESTING
-		ncols = numcols;
-		nrows = numrows;
-	#else
-		if ( numrows == 1 ) {	// 'matrix' is a vector.
-			ncols = MIN( numcols, 225 ) ;
-			nrows = 1;
-		} else {
-			ncols = MIN( numcols, 15 ) ;
-			nrows = MIN( numrows, 9 ) ;
-		}
-	#endif
-
-
-	// --------------------------------
-
-
-	char const *restrict name = NULL;
-	char const *restrict headers = NULL;
-	char const *const *restrict pheaders = NULL;
-	char const *restrict labels = NULL;
-	char const *const *restrict plabels = NULL;
-
-	if ( ml ) {
-		struct matrix_labels lml = *ml;
-		name = lml.name;
-		headers = lml.headers.tokens;
-		pheaders = lml.headers.ptokens;
-		labels = lml.labels.tokens;
-		plabels = lml.labels.ptokens;
-	}
-
-
-	// Name
-	if ( name )
-		printf("Name: '%s'\n\n", name);
-
-
-	// Column headers
-	if ( headers ) {
-		printf( "Headers (%" PRI_IDX "):\n", numcols );
-		for( index_t i=0; i<ncols; i++ )
-			printf("'%s' ", pheaders[i] );
-		if ( ncols < numcols )
-			printf(" ... '%s'", pheaders[numcols-1]);
-		printf("\n\n");
-	}
-
-
-	// ----------------------------
-
-	// Show matrix (with row labels if exist)
-
-	if ( ((size_t) ml) + transpose ) {	// (ml != NULL) || (transpose == true)
-		printf("Data matrix: %" PRI_IDX " rows x %" PRI_IDX " columns.\n", numrows, numcols );
-		fflush( stdout );
-	}
-
-	// Steps for outer and inner loops.
-	index_t incr_outer_loop = padding;	// Step for outer loop
-	index_t incr_inner_loop = 1;		// Step for inner loop.
-	if ( transpose ) {
-		incr_outer_loop = 1;
-		incr_inner_loop = padding;
-	}
-
-	index_t const *pmatrix = matrix;	// &matrix[i][0] (or &matrix[0][i] if transpose)
-	for ( index_t i=0 ; i<nrows ; i++,pmatrix+=incr_outer_loop ) {
-
-		index_t j = 0;
-		index_t const *pmatrix_r = pmatrix; // &matrix[i][j] (or &matrix[j][i] if transpose)
-
-		printf( "Line %" PRI_IDX ": ", i );
-
-		if ( labels )
-			printf( "%s", plabels[i] );
-
-		else { // No labels. Writes the first value.
-
-			printf( "%" PRI_IDX, *pmatrix_r );
-			pmatrix_r += incr_inner_loop;	// &matrix[i][1] (or &matrix[1][i] if transpose)
-			j = 1;
-
-		} // If has labels
-
-		// Rest of values.
-		for ( ; j<ncols ; j++,pmatrix_r+=incr_inner_loop )
-			printf( " %" PRI_IDX, *pmatrix_r );
-
-		if ( ncols < numcols )
-			printf( " ... %" PRI_IDX, pmatrix[ (numcols - 1) * incr_inner_loop ] ); // NOTE: we use 'pmatrix', not 'pmatrix_r'
-
-		printf( "\n" );
-
-	} // for ( 0 <= i < nrows )
-
-	// Last row.
-	if ( nrows < numrows ) {
-
-		index_t i = numrows - 1;
-		pmatrix = matrix + i * incr_outer_loop;
-
-		index_t j = 0;
-		index_t const *pmatrix_r = pmatrix; // &matrix[i][j] (or &matrix[j][i] if transpose)
-
-		printf( "...\nLine %" PRI_IDX ": ", i );
-
-		if ( labels )
-			printf( "%s", plabels[i] );
-
-		else { // No labels. Writes the first value.
-
-			printf( "%" PRI_IDX, *pmatrix_r );
-			pmatrix_r += incr_inner_loop;	// &matrix[i][1] (or &matrix[1][i] if transpose)
-			j = 1;
-
-		} // If has labels
-
-		// Rest of values.
-		for ( ; j<ncols ; j++,pmatrix_r+=incr_inner_loop )
-			printf( " %" PRI_IDX, *pmatrix_r );
-
-		if ( ncols < numcols )
-			printf( " ... %" PRI_IDX, pmatrix[ (numcols - 1) * incr_inner_loop ] ); // NOTE: we use 'pmatrix', not 'pmatrix_r'
-
-		printf( "\n" );
-
-	} // if ( nrows < numrows )
-
-	printf( "\n" );
-
-	fflush( stdout );
-
-	return EXIT_SUCCESS;
-
-} // matrix_int_show
-
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////

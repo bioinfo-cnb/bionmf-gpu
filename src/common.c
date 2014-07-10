@@ -1,8 +1,11 @@
 /************************************************************************
- * Copyright (C) 2011-2013:
  *
- *	Edgardo Mejia-Roa(*), Carlos Garcia, Jose Ignacio Gomez,
- *	Manuel Prieto, Francisco Tirado and Alberto Pascual-Montano(**).
+ * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ *
+ * Copyright (C) 2011-2014:
+ *
+ *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
+ *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
  *
  *	(*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
  *	(**) Functional Bioinformatics Group, Biocomputing Unit,
@@ -12,25 +15,25 @@
  *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-mGPU..
+ * This file is part of bioNMF-GPU.
  *
- * BioNMF-mGPU is free software: you can redistribute it and/or modify
+ * BioNMF-GPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-mGPU is distributed in the hope that it will be useful,
+ * BioNMF-GPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-mGPU.  If not, see <http://www.gnu.org/licenses/>.
+ * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ***********************************************************************/
 /**********************************************************
  * common.c
- *	Some generic definitions, constants, macros and functions used by bioNMF-mGPU.
+ *	Some generic definitions, constants, macros and functions used by bioNMF-GPU.
  *
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
@@ -43,34 +46,67 @@
  **********************************************************
  *
  * Data matrices:
- * 	V (N rows, M columns): Input matrix,
- * 	K: Factorization Rank,
- * 	W (N,K): Output matrix,
- * 	H (K,M): Output matrix,
- * so that V ~ W*H
+ *	V (N rows, M columns): input matrix
+ *	W (N,K): output matrix
+ *	H (K,M): output matrix,
+ * such that: V  ~  W * H.
+ *
+ * Arguments:
+ *	Matrix V (and its dimensions)
+ *	K: Factorization Rank
+ *
  *
  * NOTE: In order to improve performance:
- *	- Matrix H is stored in memory as COLUMN-major (i.e., it is transposed).
  *
- *	- All matrices include useless data for padding. Padded dimensions
- *	  are denoted with the 'p' character, e.g., 'Mp' (i.e.,, M + padding)
- *	  or 'Kp' (factorization_rank + padding).
+ *	+ Matrix H is stored in memory as COLUMN-major (i.e., it is transposed).
  *
- *	- Padded dimensions are a multiple of memory_alignment
- *	  (a global variable which currently is equal to warpSize or warpSize/2).
+ *	+ All matrices include useless data for padding. Padded dimensions
+ *	  are denoted with the 'p' character. For instance:
+ *		Mp, which is equal to <M + padding>
+ *		Kp, which is equal to <K + padding>.
  *
- ***************
+ *	  Data alignment is controlled by the global variable: memory_alignment.
+ *
+ *	  This leads to the following limits:
+ *		- Maximum number of columns (padded or not): matrix_max_pitch.
+ *		- Maximum number of rows: matrix_max_non_padded_dim.
+ *		- Maximum number of items: matrix_max_num_items.
+ *
+ *	  All four GLOBAL variables must be initialized with the set_matrix_limits()
+ *	  function.
+ *
+ ****************
+ *
+ * Matrix tags:
+ *
+ * Any matrix may include the following "tag" elements:
+ *
+ *	+ A short description string, referred as "name".
+ *	+ A list of column headers.
+ *	+ A list of row labels.
+ *
+ * Each list is stored in a "struct tag_t" structure, which is composed by:
+ *	+ All tokens stored as a (large) single string.
+ *	+ An array of pointers to such tokens.
+ *
+ * All three elements (the "name" string, and the two tag_t structures) are
+ * then stored in a "struct matrix_tags_t" structure.
+ *
+ * Both types of structure are defined in "matrix_io_routines.h".
+ *
+ ****************
  *
  * Multi-GPU version:
  *
  * When the input matrix V is distributed among multiple devices each host thread processes
  * the following sets of rows and columns:
+ *
  *	Vrow[ 1..NnP ][ 1..M ] <-- V[ bN..(bN+NnP) ][ 1..M ]	(i.e., NnP rows, starting from bN)
  *	Vcol[ 1..N ][ 1..MnP ] <-- V[ 1..N ][ bM..(bM+MnP) ]	(i.e., MnP columns, starting from bM)
  *
  * Such sets allow to update the corresponding rows and columns of W and H, respectively.
  *
- * Note that each host thread has a private copy of matrices W and H, which must be synchronized
+ * Note that each host thread has a private full copy of matrices W and H, which must be synchronized
  * after being updated.
  *
  ****************
@@ -79,6 +115,7 @@
  *
  * If the input matrix (or the portion assigned to this device) is too large for the GPU memory,
  * it must be blockwise processed as follow:
+ *
  *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(i.e., BLN <= NnP rows)
  *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ offset_Vcol..(offset_Vcol + BLMp) ]	(i.e., BLM <= MnP columns)
  *
@@ -87,62 +124,407 @@
  * In any case, matrices W and H are fully loaded into the GPU memory.
  *
  * Information for blockwise processing is stored in two block_t structures (one for each dimension).
- * Such structures ('block_N' and 'block_M') are initialized in init_block_conf() routine.
+ * Such structures ('block_N' and 'block_M') are initialized in the init_block_conf() routine.
+ *
+ ****************
+ *
+ * Mapped Memory on integrated GPUs:
+ *
+ * On integrated systems, such as notebooks, where device memory and host memory are physically the
+ * same (but disjoint regions), any data transfer between host and device memory is superfluous.
+ * In such case, host memory is mapped into the address space of the device, and all transfer
+ * operations are skipped. Memory for temporary buffers (e.g., d_WH or d_Aux) is also allocated
+ * on the HOST and then mapped. This saves device memory, which is typically required for graphics/video
+ * operations.
+ *
+ * This feature is disabled if NMFGPU_FORCE_BLOCKS is non-zero.
  *
  ****************
  *
  * WARNING:
- *	- Requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
+ *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
  *
  *********************************************************/
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-#include <inttypes.h>	/* strtoumax */
-#include <unistd.h>	/* getopt */
-#include <ctype.h>	/* isprint */
-#if ! NMFGPU_FIXED_INIT
-	#include <sys/time.h>	/* gettimeofday */
+// Required by <stdint.h>
+#ifndef __STDC_CONSTANT_MACROS
+	#define __STDC_CONSTANT_MACROS (1)
 #endif
 
 #include "common.h"
 
-///////////////////////////////////////////////////////
-///////////////////////////////////////////////////////
+#include <stdlib.h>
+#include <unistd.h>		/* getopt */
+#include <errno.h>
+#include <string.h>
+#include <stdarg.h>		/* vfprintf */
+#include <stdio.h>
+#include <ctype.h>		/* isprint */
+#include <inttypes.h>		/* strtoimax, INTMAX_C, uintptr_t */
+#if ! NMFGPU_FIXED_INIT
+	#include <sys/time.h>	/* gettimeofday */
+#endif
+
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+/* Constants */
+
+// Fixed seed for the random-values generator.
+#ifndef FIXED_SEED
+	#define FIXED_SEED ( INDEX_C(3) )
+#endif
+
+// Default alignment for data on memory.
+#ifndef DEFAULT_MEMORY_ALIGNMENT		/* 64 bytes, expressed in real-type items. */
+	#define DEFAULT_MEMORY_ALIGNMENT ( INDEX_C(64) / sizeof(real) )
+#endif
+
+// Default values of some input parameters.
+#ifndef DEFAULT_K
+	#define DEFAULT_K ( INDEX_C(2) )
+#endif
+
+#ifndef DEFAULT_NITERS
+	#define DEFAULT_NITERS ( INDEX_C(2000) )
+#endif
+
+#ifndef DEFAULT_NITER_CONV
+	#define DEFAULT_NITER_CONV ( INDEX_C(10) )
+#endif
+
+#ifndef DEFAULT_STOP_THRESHOLD
+	#define DEFAULT_STOP_THRESHOLD ( INDEX_C(40) )
+#endif
+
+#ifndef DEFAULT_GPU_DEVICE
+	#define DEFAULT_GPU_DEVICE ( INDEX_C(0) )
+#endif
+
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* Global variables */
+
+index_t process_id = 0;		// Current process ID.
+index_t num_processes = 1;	// Number of processes.
+
+// Matrix dimension limits (NOTE: they may be modified if the program is executed in a GPU device).
+index_t memory_alignment = 1;									// Data alignment on memory.
+size_t matrix_max_nitems = SIZE_MAX / ( 2 * sizeof(real) );					// Maximum number of items in a matrix.
+index_t matrix_max_pitch = MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );		// Maximum multiple of <memory_alignment>.
+index_t matrix_max_non_padded_dim = MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );	// Maximum non-padded dimension.
+
+// Matrix dimensions:
+index_t N = 0;		// Number of rows of input matrix V.
+index_t M = 0;		// Number of columns of input matrix V.
+index_t K = 0;		// Factorization rank.
+
+// Dimensions for multi-process version:
+index_t NnP = 0;	// Number of rows of V assigned to this process (NnP <= N).
+index_t MnP = 0;	// Number of columns of V assigned to this process (MnP <= M).
+
+// Padded dimensions:
+index_t Mp = 0;		// 'M' rounded up to the next multiple of <memory_alignment>.
+index_t Kp = 0;		// 'K' rounded up to the next multiple of <memory_alignment>.
+index_t MnPp = 0;	// 'MnP' rounded up to the next multiple of <memory_alignment> (MnPp <= Mp).
+
+// Data Matrices
+real *restrict V = NULL;
+real *restrict W = NULL;
+real *restrict H = NULL;
+
+// Classification vectors.
+index_t *restrict classification = NULL;
+index_t *restrict last_classification = NULL;
+
+// Data matrices (host side)
+real *Vcol = NULL;	// Block of NnP rows from input matrix V.
+real *Vrow = NULL;	// Block of MnP columns from input matrix V.
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Prints to the specified file all arguments regarding
- * the input matrix (e.g., matrix dimensions and format).
+ * Prints the given message composed by the format string "fmt" and the arguments list "args".
+ *
+ * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
+ * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
+ * process 0, with no prefix at all.
+ *
+ * Output mode (err_mode == false):
+ *	- The string is printed to the standard output stream ('stdout').
+ *	- "errnum" is ignored.
+ *
+ * Error mode (err_mode == true):
+ *	- The standard output stream ('stdout') is flushed for all processes.
+ *	- The message is printed to the standard error stream ('stderr').
+ *	- If errnum is non-zero, this function behaves similar to perror(3).
+ *	  That is, it appends to the message a colon, the string given by
+ *	  strerror(errnum) and a newline character.
+ *
+ * Note that error messages from this function (i.e., if it fails) are always
+ * prefixed and suffixed with a newline character, regardless the arguments.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void help_matrix( FILE *restrict file )
+static int print_string( bool shown_by_all, bool err_mode, int errnum, char const *restrict const fmt, va_list args )
 {
 
-	// Checks for NULL parameters
-	if ( ! file ) {
+	if ( ! fmt ) {
 		fflush( stdout );
 		errno = EFAULT;
-		perror("\nhelp_matrix( file=NULL )");
-		return;
+		if ( ! process_id )
+			perror("\nprint_string( fmt )");
+		return EXIT_FAILURE;
 	}
 
-	// ---------------------------
+	errno = 0;
+	int error = 0;
 
-	fprintf( file, "<filename>\n\tInput data matrix (mandatory if 'help' is not requested).\n\n");
+	// Output stream
+	FILE *const file = ( err_mode ? stderr : stdout );
 
-	fprintf( file, "-B,-b <native>\n\tBinary input file in \"native\" ('-b 1') or \"non-native\" format ('-b 0').\n"
+	// --------------------------
+
+	// Error mode: flushes the standard output stream
+
+	if ( err_mode && fflush( stdout ) ) {
+		int const err = errno;
+		fprintf( stderr, "\n" );
+		if ( num_processes > 1 )
+			fprintf( stderr, "[P%" PRI_IDX "] ", process_id );
+		fprintf( stderr, "Warning: Could not flush the standard output stream (stdout), so previous messages "
+			"not printed yet can be delayed or lost.\n" );
+		if ( err )
+			fprintf( stderr, "%s\n", strerror(err) );
+		errno = 0;	// Resets errno.
+		error = 1;
+	}
+
+	// --------------------------
+
+	if ( shown_by_all + ( ! process_id ) ) {
+
+		if ( shown_by_all ) {
+			error += ( fprintf( file, "\n" ) <= 0 );
+			if ( num_processes > 1 )
+				error += ( fprintf( file, "[P%" PRI_IDX "] ", process_id ) <= 0 );
+		}
+
+		error += ( vfprintf( file, fmt, args ) <= 0 );
+
+		if ( err_mode * errnum )
+			error += ( fprintf( file, ": %s\n", strerror(errnum) ) <= 0 );
+	}
+
+	if ( error ) {
+		int const err = errno; fflush(stdout);
+		fprintf( stderr, "\n" );
+		if ( num_processes > 1 )
+			fprintf( stderr, "[P%" PRI_IDX "] ", process_id );
+		fprintf( stderr, "Error in print_string()\n" );
+		if ( err )
+			fprintf( stderr, "%s\n", strerror(err) );
+		return EXIT_FAILURE;
+	}
+
+	errno = 0;
+
+	return EXIT_SUCCESS;
+
+} // print_string
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given message composed by the format string "fmt" and the subsequent arguments.
+ *
+ * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
+ * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
+ * process 0, with no prefix at all.
+ *
+ * The string is always printed to the standard output stream ('stdout').
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int print_message( bool shown_by_all, char const *restrict const fmt, ... )
+{
+
+	va_list args;
+
+	va_start( args, fmt );
+
+	int const status = print_string( shown_by_all, false, 0, fmt, args );
+
+	va_end( args );
+
+	return status;
+
+} // print_message
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given message composed by the format string "fmt" and the subsequent arguments.
+ *
+ * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
+ * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
+ * process 0, with no prefix at all.
+ *
+ * The string is always printed to the standard error stream ('stderr'). The standard output
+ * stream ('stdout') is previously flushed for all processes.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int print_error( bool shown_by_all, char const *restrict const fmt, ... )
+{
+
+	va_list args;
+
+	va_start( args, fmt );
+
+	int const status = print_string( shown_by_all, true, 0, fmt, args );
+
+	va_end( args );
+
+	return status;
+
+} // print_error
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given message composed by the format string "fmt" and the subsequent arguments.
+ *
+ * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
+ * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
+ * process 0, with no prefix at all.
+ *
+ * The string is always printed to the standard error stream ('stderr'). The standard output
+ * stream ('stdout') is previously flushed for all processes. Finally, if errnum is non-zero,
+ * this function behaves similar to perror(3). That is, it appends to the message a colon,
+ * the string given by strerror(errnum) and a newline character.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int print_errnum( bool shown_by_all, int errnum, char const *restrict const fmt, ... )
+{
+
+	va_list args;
+
+	va_start( args, fmt );
+
+	int const status = print_string( shown_by_all, true, errnum, fmt, args );
+
+	va_end( args );
+
+	return status;
+
+} // print_errnum
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given string expanding white-space, control, and some punctuation
+ * characters to escaped sequences. The string must be non-NULL and NULL-terminated.
+ *
+ * shown_by_all: If 'true', the message is printed by all existing processes,
+ *		 prefixed with a newline character ('\n') and the process ID.
+ *		 Otherwise, the message only is printed by process 0, with no
+ *		 prefix at all.
+ *
+ * err_mode:	If 'true', prints the string as done in print_error().
+ *		Otherwise, the string is printed as done in print_message().
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
+ */
+int print_escaped( bool shown_by_all, bool err_mode, char const *restrict str )
+{
+
+	if ( ! str ) {
+		print_errnum( false, EFAULT, "\nprint_escaped( str )" );
+		return EXIT_FAILURE;
+	}
+
+	int status = EXIT_SUCCESS;
+
+	// -----------------------------
+
+	if ( ! str[0] )
+		status = print_string( shown_by_all, err_mode, "(empty)" );
+
+
+	// -----------------------------
+
+	return EXIT_SUCCESS;
+
+} // print_escaped
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+/*
+ * Flushes the buffer associated to the standard output stream (stdout).
+ *
+ * If "permanently" is 'true', the buffer is also disabled.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int flush_output( bool permanently )
+{
+
+	int status = EXIT_SUCCESS;
+
+	if ( fflush( stdout ) ) {
+		print_errnum( true, errno, "Warning: Could not flush the standard output stream, so previous messages not "
+				"printed yet can be lost" );
+		errno = 0; // Resets errno.
+		status = EXIT_FAILURE;
+	}
+
+	if ( permanently && setvbuf( stdout, NULL, _IONBF, 0 ) ) {
+		print_errnum( true, errno, "Warning: could not permanently flush the standard output stream, so "
+				"not all messages might be shown on program error" );
+		status = EXIT_FAILURE;
+	}
+
+	return status;
+
+} // flush_output
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Prints all arguments regarding the input matrix (e.g., matrix dimensions and format).
+ *
+ * This message is printed by process 0 only.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int help_matrix( void )
+{
+
+	// Messages shown by process 0 only.
+	int const status = print_message( false,
+
+		"\n<filename>\n\tInput data matrix (mandatory if 'help' is not requested).\n\n"
+
+		"-B,-b <native>\n\tBinary input file in \"native\" ('-b 1') or \"non-native\" format ('-b 0').\n"
 			"\tIn NON-native format, the file is read assuming it was written using double-precision data, and unsigned "
 			"integers for matrix\n\tdimensions, regardless how the program was compiled.\n"
 			"\tOtherwise, in \"native\" format, the file is read using the data types specified at compilation "
-			"(e.g., floats and signed int).\n\tPlease note that native mode skips most error-checking and information messages.\n"
-			"\tThe default (if '-b' is not specified) is to read input data from an ASCII-text file.\n\n" );
+			"(e.g., floats and signed int).\n\tPlease note that \"native\" mode skips most error checking and information messages.\n"
+			"\tThe default (if '-b' is not specified) is to read input data from an ASCII-text file.\n\n"
 
-	fprintf( file, "-C,-c\tInput text file has numeric column headers (disabled by default, ignored for binary files).\n\n");
+		"-C,-c\tInput text file has numeric column headers (disabled by default, ignored for binary files).\n\n"
 
-	fprintf( file, "-R,-r\tInput text file has numeric row labels (disabled by default, ignored for binary files).\n\n");
+		"-R,-r\tInput text file has numeric row labels (disabled by default, ignored for binary files).\n\n"
 
-	fprintf( file, "-E,-e <native>\n\tWrite output files as \"native\" ('-e 1') or \"non-native\" binary format ('-e 0').\n"
+		"-E,-e <native>\n\tWrites output files as \"native\" ('-e 1') or \"non-native\" binary format ('-e 0').\n"
 			"\tIn NON-native format, the file is written using double-precision data, and unsigned integers for matrix dimensions, "
 			"regardless\n\thow the program was compiled.\n"
 			"\tOtherwise, in \"native\" or raw format, the file is written using the data types specified at compilation "
@@ -150,101 +532,203 @@ void help_matrix( FILE *restrict file )
 			"data transformation (e.g., matrix transposing).\n"
 			"\tThe default (if '-e' is not specified) is to write output data to an ASCII-text file.\n\n" );
 
+	return status;
+
 } // help_matrix
 
-///////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Prints to the specified file all arguments regarding
- * the NMF algorithm (e.g., factorization rank, number of iterations, etc).
+ * Prints all arguments regarding the NMF algorithm (e.g., factorization rank, number of iterations, etc).
+ *
+ * This message is printed by process 0 only.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void help_nmf( FILE *restrict file )
+int help_nmf( void )
 {
 
-	if ( ! file ) {
-		fflush( stdout );
-		errno = EFAULT;
-		perror("\nhelp_nmf( file=NULL )");
-		return;
-	}
+	// Messages shown by process 0 only
+	int const status = print_message( false,
 
-	// ---------------------------
+		"\n-K,-k <factorization_rank>\n\tFactorization Rank (default: K=%" PRI_IDX ").\n\n"
 
-	fprintf( file, "-K,-k <factorization_rank>\n\tFactorization Rank (default: K=%" PRI_IDX ").\n\n", DEFAULT_K );
+		"-I,-i <nIters>\n\tMaximum number of iterations (%" PRI_IDX " by default).\n\n"
 
-	fprintf( file, "-I,-i <nIters>\n\tMaximum number of iterations (%" PRI_IDX " by default).\n\n", DEFAULT_NITERS );
+		"-J,-j <niter_test_conv>\n\tPerform a convergence test each <niter_test_conv> iterations (default: %" PRI_IDX ").\n"
+			"\tIf this value is greater than <nIters> (see '-i' option), no test is performed\n\n"
 
-	fprintf( file, "-J,-j <niter_test_conv>\n\tPerform a convergence test each <niter_test_conv> iterations (default: %" PRI_IDX ").\n"
-			"\tIf this value is greater than <nIters> (see '-i' option), no test is performed\n\n", DEFAULT_NITER_CONV );
-
-	fprintf( file, "-T,-t <stop_threshold>\n\tStopping threshold (default: %" PRI_IDX ").\n"
+		"-T,-t <stop_threshold>\n\tStopping threshold (default: %" PRI_IDX ").\n"
 			"\tWhen matrix H has not changed on the last <stop_threshold> times that the convergence test\n\thas been performed, "
-			"it is considered that the algorithm has converged to a solution and stops it.\n\n", DEFAULT_STOP_THRESHOLD );
+			"it is considered that the algorithm has converged to a solution and stops it.\n\n",
+
+		DEFAULT_K, DEFAULT_NITERS, DEFAULT_NITER_CONV, DEFAULT_STOP_THRESHOLD );
+
+	return status;
 
 } // help_nmf
 
-///////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Prints to the specified file all arguments regarding
- * bioNMF-mGPU main program (single or multi-GPU version).
+ * Prints all arguments regarding the main program <execname>.
+ *
+ * This message is printed by process 0 only.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void print_nmf_gpu_help( char const *restrict const execname, FILE *restrict file )
+int print_nmf_gpu_help( char const *restrict const execname )
 {
 
+	bool const shown_by_all = false; // Messages shown by process 0 only
+
 	// Checks for NULL parameters
-	if ( ! ( (size_t) execname * (size_t) file ) ) {
-		fflush( stdout );
-		errno = EFAULT;
-		if ( ! execname ) perror("\nprint_nmf_gpu_help( execname )");
-		if ( ! file )	perror("\nprint_nmf_gpu_help( file )");
-		return;
+	if ( ! execname ) {
+		print_errnum( shown_by_all, EFAULT, "\nprint_nmf_gpu_help( execname )" );
+		return EXIT_FAILURE;
 	}
+
+	int status = EXIT_SUCCESS;
 
 	// ---------------------------
 
-	fprintf( file, "\n\t<< bioNMF-mGPU: Non-negative Matrix Factorization on GPU >>\n\n"
-			"Usage:\n\t%s <filename> [ -b native_format ] [ -cr ] [ -k <factorization_rank> ] [ -i <nIters> ] "
-			"[ -j <niter_test_conv> ] [ -t <stop_threshold> ] [ -e native_format ] [ -z device_ID ]\n\t%s -h\n\n",
-			execname, execname );
+	status = print_message( shown_by_all,
+				"\n\t<< bioNMF-GPU: Non-negative Matrix Factorization on GPU >>\n\n"
+				"Usage:\n\t%s <filename> [ -b <native> ] [ -cr ] [ -k <factorization_rank> ] [ -i <nIters> ] "
+				"[ -j <niter_test_conv> ]\n\t\t[ -t <stop_threshold> ] [ -e <native> ] [ -z <GPU_device> ]\n\t%s -h\n\n"
+				"---------------\n\nData matrix options:\n", execname, execname );
 
-	fprintf( file, "---------------\n\nData matrix options:\n\n" );
-	help_matrix( file );
+	if ( help_matrix() != EXIT_SUCCESS )
+		status = EXIT_FAILURE;
 
-	fprintf( file, "---------------\n\nNMF options:\n\n" );
-	help_nmf( file );
+	if ( print_message( shown_by_all, "\n---------------\n\nNMF options:\n" ) != EXIT_SUCCESS )
+		status = EXIT_FAILURE;
 
-	fprintf( file, "---------------\n\nOther options:\n\n" );
+	if ( help_nmf() != EXIT_SUCCESS )
+		status = EXIT_FAILURE;
 
-	fprintf( file, "-Z,-z <GPU device>\n\tGPU device ID to attach on (default: %i).\n\t"
-			"On the multi-GPU version, devices will be selected from this value.\n\n", DEFAULT_GPU_DEVICE );
+	if ( print_message( shown_by_all, "\n---------------\n\nOther options:\n\n"
+				"-Z,-z <GPU_device>\n\tGPU device ID to attach on (default: %i).\n"
+				"\tOn multi-GPU version, devices will be selected from this value.\n\n"
+				"-h,-H\tPrints this help message.\n\n", DEFAULT_GPU_DEVICE ) != EXIT_SUCCESS )
+		status = EXIT_FAILURE;
 
-	fprintf( file, "-h,-H\tPrints this help message.\n\n" );
+	return status;
 
 } // print_nmf_gpu_help
 
-///////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+/*
+ * Sets the maximum dimensions and number of items, for the given data
+ * alignment and dimension limit.
+ *
+ * The resulting values are stored in the global variables "matrix_max_pitch",
+ * "matrix_max_non_padded_dim" and "matrix_max_nitems". In addition, the first
+ * and third variables are rounded down to a multiple of the given data alignment.
+ *
+ * data_alignment:
+ *		If set to '0', uses the default padding, <DEFAULT_MEMORY_ALIGNMENT>.
+ *		Else, if set to '1', disables padding.
+ *		Otherwise, it must be a positive value expressed in number of
+ *		real-type items (not in bytes).
+ *
+ * max_dimension:
+ *		If greater than or equal to <data_alignment>, uses the given
+ *		value as an additional upper limit for matrix dimensions. That
+ *		is, the result will be the minimum between the value calculated
+ *		from "data_alignment" and <max_dimension>.
+ *		On "matrix_max_pitch", the result is subsequently rounded down
+ *		to a multiple of <data_alignment>.
+ *		It is ignored if set to a non-negative value less than
+ *		<data_alignment>.
+ *		Default value: 'IDX_MAX'.
+ *
+ * WARNING:
+ *	This function must be called *BEFORE* loading any input matrix. Otherwise,
+ *	no padding will be set.
+ *
+ * Returns EXIT_SUCCESS, or EXIT_FAILURE on invalid input values (i.e.,
+ * data_alignment < 0, or max_dimension < 0).
+ */
+int set_matrix_limits( index_t data_alignment, index_t max_dimension )
+{
+
+	#if NMFGPU_VERBOSE_2
+		print_message( false, "set_matrix_limits( data_alignment=%" PRI_IDX ", max_dimension=%" PRI_IDX ").\n",
+				data_alignment, additional_limit );
+	#endif
+
+	if ( (data_alignment < 0) + (max_dimension < 0) ) {
+		bool const shown_by_all = false;
+		int const errnum = EINVAL;
+		if (data_alignment < 0) print_errnum(shown_by_all,errnum,"\nset_matrix_limits(data_alignment=%" PRI_IDX ")",data_alignment);
+		if (max_dimension < 0)  print_errnum(shown_by_all,errnum,"\nset_matrix_limits(max_dimension=%" PRI_IDX ")",max_dimension);
+		return EXIT_FAILURE;
+	}
+
+	// ------------------
+
+	index_t const l_memory_alignment = ( data_alignment ? data_alignment : DEFAULT_MEMORY_ALIGNMENT );
+
+	index_t const l_max_dim = ( (max_dimension >= data_alignment) ? max_dimension : IDX_MAX );
+
+	// ------------------
+
+	// Maximum number of items.
+	size_t l_max_nitems = SIZE_MAX / ( 2 * sizeof(real) );
+	l_max_nitems -= ( l_max_nitems % l_memory_alignment );		// Makes sure it is a multiple of memory_alignment.
+
+	// Maximum padded dimension.
+	index_t l_max_pitch = MIN( (l_max_nitems / 2), (size_t) l_max_dim );
+	l_max_pitch -= (l_max_pitch % l_memory_alignment);		// Makes sure it is a multiple of memory_alignment.
+
+	// The other dimension.
+	index_t const l_max_alignment = MAX( l_memory_alignment, 2 );	// Padding or 2 columns
+	index_t const l_max_non_padded_dim = MIN( (l_max_nitems/l_max_alignment), (size_t) l_max_dim );
+
+	// ------------------
+
+	#if NMFGPU_VERBOSE_2
+		print_message( false, "set_matrix_limits( data_alignment=%" PRI_IDX ", max_dimension=%" PRI_IDX "):\n\tResulting values: "
+				"matrix_max_nitems=%zu, matrix_max_pitch=%" PRI_IDX ", matrix_max_non_padded_dim=%" PRI_IDX ".\n",
+				data_alignment, max_dimension, matrix_max_nitems, matrix_max_pitch, matrix_max_non_padded_dim );
+	#endif
+
+	// Sets output values.
+	memory_alignment = l_memory_alignment;
+	matrix_max_nitems = l_max_nitems;
+	matrix_max_pitch = l_max_pitch;
+	matrix_max_non_padded_dim = l_max_non_padded_dim;
+
+	return EXIT_SUCCESS;
+
+} // set_matrix_limits
+
+////////////////////////////////////////////////
 
 /*
  * Checks all arguments.
  *
- * If verbose_error is 'true', shows error messages.
- *
  * Sets 'help' to 'true' if help message was requested ('-h' or '-H' options).
+ *
+ * Error messages will be shown by process 0 only.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int check_arguments( int argc, char const *restrict *restrict argv, bool verbose_error, bool *restrict help,
-			struct input_arguments *restrict arguments )
+int check_arguments( int argc, char const *restrict *restrict argv, bool *restrict help, struct input_arguments *restrict arguments )
 {
 
+	bool const shown_by_all = false; // Messages shown by process 0 only
+
 	// Checks for invalid parameters
-	if ( ! ( (argc > 0) * (size_t) argv * (size_t) arguments * (size_t) help ) ) {
-		fflush( stdout );
-		errno = EFAULT;
-		if ( ! argv )	perror("\ncheck_arguments( argv )");
-		if ( ! help )	perror("\ncheck_arguments( help )");
-		if ( ! arguments ) perror("\ncheck_arguments( arguments )");
+	if ( ! ( (argc > 0) * (uintptr_t) argv * (uintptr_t) help * (uintptr_t) arguments ) ) {
+		int const errnum = EFAULT;
+		if ( argc <= 0 ) print_errnum( shown_by_all, errnum, "\ncheck_arguments( argc=%i )", argc );
+		if ( ! argv )	print_errnum( shown_by_all, errnum, "\ncheck_arguments( argv )" );
+		if ( ! help )	print_errnum( shown_by_all, errnum, "\ncheck_arguments( help )" );
+		if ( ! arguments ) print_errnum( shown_by_all, errnum, "\ncheck_arguments( arguments )" );
 		return EXIT_FAILURE;
 	}
 
@@ -266,6 +750,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 					// > 1 for native format (i.e., the compiled types for matrix data and dimensions).
 
 	index_t l_k = DEFAULT_K;				// Factorization rank.
+	index_t l_kp = get_padding( DEFAULT_K );		// (Initial) padded factorization rank.
 	index_t l_nIters = DEFAULT_NITERS;			// Maximum number of iterations per run.
 	index_t l_niter_test_conv = DEFAULT_NITER_CONV;		// Number of iterations before testing convergence.
 	index_t l_stop_threshold = DEFAULT_STOP_THRESHOLD;	// Stopping criterion.
@@ -305,12 +790,10 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 			case 'b': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( optarg, &endptr, 10 );
-				if ( (*endptr != '\0') + errno ) {
-					fflush(stdout);
-					if ( verbose_error )
-						fprintf( stderr, "\nError. Invalid binary mode for input file: '%s'. It must be a "
-								"non-negative integer value.\n", optarg );
+				intmax_t const val = strtoimax( optarg, &endptr, 10 );
+				if ( *endptr + errno + (val < INTMAX_C(0)) ) {
+					print_error( shown_by_all, "\nError: Invalid binary mode for input file: '%s'. "
+							"It must be a non-negative integer value.\n", optarg );
 					return EXIT_FAILURE;
 				}
 				l_is_bin = (index_t) ( val ? 2 : 1 );
@@ -319,9 +802,9 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 
 			// Input file has numeric column headers
 			case 'C':
-			case 'c':
+			case 'c': {
 				l_numeric_hdrs = true;
-			break;
+			} break;
 
 
 			// Saves as a binary file.
@@ -329,12 +812,10 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 			case 'e': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( optarg, &endptr, 10 );
-				if ( (*endptr != '\0') + errno ) {
-					fflush(stdout);
-					if ( verbose_error )
-						fprintf( stderr, "\nError. Invalid binary mode for output file(s): '%s'. It must be a "
-								"non-negative integer value.\n", optarg );
+				intmax_t const val = strtoimax( optarg, &endptr, 10 );
+				if ( *endptr + errno + (val < INTMAX_C(0)) ) {
+					print_error( shown_by_all, "\nError: Invalid binary mode for output file(s): '%s'. "
+							"It must be a non-negative integer value.\n", optarg );
 					return EXIT_FAILURE;
 				}
 				l_save_bin = (index_t) ( val ? 2 : 1 );
@@ -343,10 +824,10 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 
 			// Prints a help message.
 			case 'H':
-			case 'h':
+			case 'h': {
 				*help = true;		// Help is printed on return of this function.
 				return EXIT_SUCCESS;
-			// break;	// Unreachable statement
+			} // break;	// Unreachable statement
 
 
 			// nIters
@@ -354,13 +835,11 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 			case 'i': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( optarg, &endptr, 10 );
-				if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
-					fflush(stdout);
-					if ( verbose_error )
-						fprintf( stderr, "\nError. Invalid number of iterations: '%s'. "
-								"It must be a positive integer value less than or equal to %" PRI_IDX "\n",
-								optarg, IDX_MAX );
+				intmax_t const val = strtoimax( optarg, &endptr, 10 );
+				if ( *endptr + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
+					print_error( shown_by_all, "\nError: Invalid number of iterations: '%s'. "
+							"It must be a positive integer value less than or equal to %" PRI_IDX ".\n",
+							optarg, IDX_MAX );
 					return EXIT_FAILURE;
 				}
 				l_nIters = (index_t) val;
@@ -372,40 +851,39 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 			case 'j': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( optarg, &endptr, 10 );
-				if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
-					fflush(stdout);
-					if ( verbose_error )
-						fprintf( stderr, "\nError. Invalid number of iterations for convergence test: '%s'. "
-								"It must be a positive integer value less than or equal to %" PRI_IDX "\n",
-								optarg, IDX_MAX );
+				intmax_t const val = strtoimax( optarg, &endptr, 10 );
+				if ( *endptr + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
+					print_error( shown_by_all, "\nError: Invalid number of iterations for "
+							"convergence test: '%s'. It must be a positive integer value less than or equal to %"
+							PRI_IDX ".\n", optarg, IDX_MAX );
+					return EXIT_FAILURE;
 				}
 				l_niter_test_conv = (index_t) val;
 			} break; // niter_test_conv
 
 
-			// kStart
+			// Factorization rank
 			case 'K':
 			case 'k': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( optarg, &endptr, 10 );
-				if ( (*endptr != '\0') + errno + (val < 2) + (val > IDX_MAX) ) {
-					fflush(stdout);
-					if ( verbose_error )
-						fprintf( stderr, "\nError: invalid factorization rank: '%s'. "
-								"It must be an integer value between 2 and %" PRI_IDX "\n", optarg, IDX_MAX );
+				intmax_t const val = strtoimax( optarg, &endptr, 10 );
+				if ( *endptr + errno + (val < INTMAX_C(2)) + (val > (intmax_t) MATRIX_MAX_DIMENSION) ) {
+					print_error( shown_by_all, "\nError: invalid factorization rank: '%s'. "
+							"It must be an integer value in the range [2 .. %" PRI_IDX "].\n",
+							optarg, MATRIX_MAX_DIMENSION );
 					return EXIT_FAILURE;
 				}
 				l_k = (index_t) val;
+				l_kp = get_padding( val );
 			} break; // k
 
 
 			// Input file has numeric row labels
 			case 'R':
-			case 'r':
+			case 'r': {
 				l_numeric_lbls = true;
-			break;
+			} break;
 
 
 			// stop_threshold
@@ -413,13 +891,11 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 			case 't': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( optarg, &endptr, 10 );
-				if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
-					fflush(stdout);
-					if ( verbose_error )
-						fprintf( stderr, "\nError: invalid stopping threshold '%s'. "
-								"It must be a positive integer value less than or equal to %" PRI_IDX "\n",
-								optarg, IDX_MAX );
+				intmax_t const val = strtoimax( optarg, &endptr, 10 );
+				if ( *endptr + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
+					print_error( shown_by_all, "\nError: invalid stopping threshold '%s'. "
+							"It must be a positive integer value less than or equal to %" PRI_IDX ".\n",
+							optarg, IDX_MAX );
 					return EXIT_FAILURE;
 				}
 				l_stop_threshold = (index_t) val;
@@ -431,13 +907,11 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 			case 'z': {
 				errno = 0;
 				char *endptr = NULL;
-				uintmax_t val = strtoumax( optarg, &endptr, 10 );
-				if ( (*endptr != '\0') + errno + (val > INT_MAX) ) {
-					fflush(stdout);
-					if ( verbose_error )
-						fprintf( stderr, "\nError: invalid basis device ID number '%s'. "
-								"It must be a non-negative integer value less than or equal to %" PRI_IDX "\n",
-								optarg, INT_MAX );
+				intmax_t const val = strtoimax( optarg, &endptr, 10 );
+				if ( *endptr + errno + (val < INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
+					print_error( shown_by_all, "\nError: invalid basis device ID number '%s'. "
+							"It must be a non-negative integer value less than or equal to %" PRI_IDX ".\n",
+							optarg, IDX_MAX );
 					return EXIT_FAILURE;
 				}
 				l_gpu_device = (index_t) val;
@@ -446,29 +920,16 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 
 
 			// Missing argument
-			case ':':
-				fflush(stdout);
-				if ( verbose_error )
-					fprintf( stderr, "\nError: option -%c requires an argument.\n", optopt );
+			case ':': {
+				print_error( shown_by_all, "\nError: option -%c requires an argument.\nSee help (option '-h').\n", optopt );
 				return EXIT_FAILURE;
-			// break;	// Unreachable statement
+			} // break;	// Unreachable statement
 
 
-			// Invalid option
+			// Invalid option. It is just ignored.
 			case '?':
-				fflush(stdout);
-				if ( verbose_error ) {
-					if ( optopt ) {
-						if ( isprint( optopt ) )
-							fprintf( stderr, "\nError: invalid option: '-%c'.\n", optopt );
-						else
-							fprintf( stderr, "\nError: invalid option character: '\\x%x'.\n", optopt );
-					}
-					else
-						fprintf( stderr, "\nError: invalid option: '%s'.\n", argv[optind-1] );
-				}
-				return EXIT_FAILURE;
-			// break;	// Unreachable statement
+			default :
+			break;
 
 		} // switch( opt )
 
@@ -480,10 +941,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 
 	// Filename
 	if ( optind >= argc ) {
-		fflush(stdout);
-		if ( verbose_error )
-			fprintf( stderr, "\nError: No filename. Not enough arguments.\n" );
-		*help = true;		// Help is printed on return of this function.
+		print_error( shown_by_all, "\nError: No filename. Not enough arguments.\nSee help (option '-h').\n" );
 		return EXIT_FAILURE;
 	}
 	l_filename = argv[optind];
@@ -514,6 +972,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 	l_arguments.save_bin = l_save_bin;
 
 	l_arguments.k = l_k;
+	l_arguments.kp = l_kp;
 	l_arguments.nIters = l_nIters;
 	l_arguments.niter_test_conv = l_niter_test_conv;
 	l_arguments.stop_threshold = l_stop_threshold;
@@ -528,14 +987,135 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool verbose
 
 } // check_arguments
 
-///////////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+/*
+ * Computes the padded dimension of "dim". That is, the next multiple of <memory_alignment>.
+ *
+ * Returns:
+ *	+ <dim>, if it was already a multiple of <memory_alignment>.
+ *	+ The next multiple, if "dim" was not a multiple of <memory_alignment>,
+ *	  and the former is not greater than <matrix_max_pitch>.
+ *	+ <matrix_max_pitch>, if "dim" is greater than or equal to.
+ *
+ * WARNING:
+ *	memory_alignment must have been properly initialized with set_matrix_limits() function.
+ */
+index_t get_padding( index_t dim )
+{
+
+	#if NMFGPU_VERBOSE_2
+		print_message( true, "get_padding( dim=%" PRI_IDX ", matrix_max_pitch=%" PRI_IDX ", memory_alignment=%" PRI_IDX ")\n",
+				dim, matrix_max_pitch, memory_alignment );
+	#endif
+
+	// ------------------
+
+	index_t padded_dim = matrix_max_pitch;
+
+	if ( dim < matrix_max_pitch ) {		// The result must be <= matrix_max_pitch
+
+		padded_dim = dim;
+
+		// If "dim" is NOT a multiple of <memory_alignment>, computes the next multiple.
+		index_t const dim_mod_ma = ( dim % memory_alignment );
+		if ( dim_mod_ma )
+			padded_dim += (memory_alignment - dim_mod_ma);
+	}
+
+	// ------------------
+
+	#if NMFGPU_VERBOSE_2
+		print_message( true, "get_padding( dim=%" PRI_IDX " )...Done.\n\tpadding=%" PRI_IDX "\n", dim, padded_dim );
+	#endif
+
+	return padded_dim;
+
+} // get_padding
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+/* Helper function for next_power_2() and prev_power_2().
+ *
+ * Computes the lowest previous-to-a-power-of-2 value >= x.
+ *
+ * WARNING:
+ *	x >= 0
+ *
+ * Returns:
+ *	y >= x, such that <y+1> is a power of 2.
+ *	0, if x == 0
+ */
+static index_t next_prev_power_2( index_t x )
+{
+
+	for ( index_t i = 0, b = 1 ; i <= (index_t) sizeof(index_t) ; i++, b <<= 1 )
+		x |= ( x >> b );
+
+	return x;
+
+} // next_prev_power_2
+
+// ---------------------------------------------
+
+/*
+ * Computes the lowest power of 2 >= x.
+ *
+ * WARNING:
+ *	0 <= x <= (IDX_MAX+1)/2
+ *
+ * Returns:
+ *	x, if it is already a power of 2, or x == 0
+ *	The next power of 2, if "x" is not a power of 2.
+ */
+index_t next_power_2( index_t x )
+{
+
+	if ( x & (x-1) ) {	// If it is not already a power of 2.
+
+		x = next_prev_power_2( x );
+		x++;
+	}
+
+	return x;
+
+} // next_power_2
+
+////////////////////////////////////////////////
+
+/*
+ * Computes the highest power of 2 <= x.
+ *
+ * WARNING:
+ *	x >= 0
+ *
+ * Returns:
+ *	x, if it is already a power of 2, or x == 0
+ *	The previous power of 2, if "x" is not a power of 2.
+ */
+index_t prev_power_2( index_t x )
+{
+
+	if ( x & (x-1) ) {	// If it is not already a power of 2.
+
+		x = next_prev_power_2( x );
+		x -= (x >> 1);
+	}
+
+	return x;
+
+} // prev_power_2
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
  * Gets the difference between classification and last_classification vectors
  */
-index_t get_difference( index_t const *restrict classification, index_t const *restrict last_classification, index_t m )
+size_t get_difference( index_t const *restrict classification, index_t const *restrict last_classification, index_t m )
 {
-	index_t diff = 0;
+	size_t diff = 0;
 
 	for ( index_t i = 0 ; i < (m-1); i++ ) {
 		for ( index_t j = (i+1) ; j < m ; j++ ) {
@@ -549,7 +1129,7 @@ index_t get_difference( index_t const *restrict classification, index_t const *r
 
 } // get_difference
 
-///////////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
  * Retrieves a "random" value that can be used as seed.
@@ -563,15 +1143,15 @@ index_t get_seed( void )
 
 	#if ! NMFGPU_FIXED_INIT
 
-		// Reads the seed from the special file /dev/urandom
+		// Reads the seed from /dev/urandom
 		FILE *restrict file = fopen("/dev/urandom", "r");
 
 		if ( ( ! file ) || ( ! fread( &seed, sizeof(index_t), 1, file ) ) ) {
 
+			// Failed to read: Sets the seed from the clock.
+
 			if ( file )
 				fclose(file);
-
-			// Failed to read: Sets the seed from the clock.
 
 			struct timeval tv;
 			gettimeofday(&tv, NULL);
@@ -586,4 +1166,5 @@ index_t get_seed( void )
 
 } // get_seed
 
-///////////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////

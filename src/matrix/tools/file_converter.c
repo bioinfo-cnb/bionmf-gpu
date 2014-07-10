@@ -1,8 +1,11 @@
 /************************************************************************
- * Copyright (C) 2011-2013:
  *
- *	Edgardo Mejia-Roa(*), Carlos Garcia, Jose Ignacio Gomez,
- *	Manuel Prieto, Francisco Tirado and Alberto Pascual-Montano(**).
+ * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ *
+ * Copyright (C) 2011-2014:
+ *
+ *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
+ *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
  *
  *	(*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
  *	(**) Functional Bioinformatics Group, Biocomputing Unit,
@@ -12,20 +15,20 @@
  *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-mGPU..
+ * This file is part of bioNMF-GPU.
  *
- * BioNMF-mGPU is free software: you can redistribute it and/or modify
+ * BioNMF-GPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-mGPU is distributed in the hope that it will be useful,
+ * BioNMF-GPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-mGPU.  If not, see <http://www.gnu.org/licenses/>.
+ * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ***********************************************************************/
 /**********************************************************
@@ -45,55 +48,101 @@
  *	Debug / Testing:
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *
+ **********************************************************
+ **********************************************************
+ **********************************************************
+ *
+ * NOTE: In order to improve performance:
+ *
+ *	+ The number of columns is rounded up to a multiple of <memory_alignment>.
+ *	  The padded dimension is referred as "pitch".
+ *
+ *	  This leads to the following limits:
+ *		- Maximum number of columns (padded or not): matrix_max_pitch.
+ *		- Maximum number of rows: matrix_max_non_padded_dim.
+ *		- Maximum number of items: matrix_max_num_items.
+ *
+ *	  All four GLOBAL variables must be initialized with the
+ *	  set_matrix_limits() function.
+ *
+ **********************************************************
+ *
+ * Matrix tags:
+ *
+ * Any matrix may include the following "tag" elements:
+ *
+ *	+ A short description string, referred as "name".
+ *	+ A list of column headers.
+ *	+ A list of row labels.
+ *
+ * Each list is stored in a "struct tag_t" structure, which is composed by:
+ *	+ All tokens stored as a (large) single string.
+ *	+ An array of pointers to such tokens.
+ *
+ * All three elements (the "name" string, and the two tag_t structures) are
+ * then stored in a "struct matrix_tags_t" structure.
+ *
+ * Both types of structure are defined in "matrix_io_routines.h".
+ *
+ ****************
+ *
  * WARNING:
- *	- Requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
+ *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
  *
  **********************************************************/
 
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
+#include "matrix/matrix_io.h"
+#include "matrix/matrix_io_routines.h"
+#include "common.h"
+#include "index_type.h"
+#include "real_type.h"
+
 #if NMFGPU_PROFILING_GLOBAL
 	#include <sys/time.h>
 #endif
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
-#include "index_type.h"
-#include "real_type.h"
-#include "matrix/matrix_io_routines.h"
-#include "matrix/matrix_io.h"
-#include "common.h"
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
-//////////////////////////////////////////////////
 /*
  * Prints all arguments to the specified file.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static void print_file_converter_help( char const *restrict const execname, FILE *restrict file )
+static int print_file_converter_help( char const *restrict const execname )
 {
 
 	// Checks for NULL parameters
-	if ( ! ( (size_t) execname * (size_t) file ) ) {
-		fflush( stdout );
-		errno = EFAULT;
-		if ( ! execname ) perror("\nprint_file_converter_help( execname )");
-		if ( ! file )	  perror("\nprint_file_converter_help( file )");
-		return;
+	if ( ! execname ) {
+		print_errnum( false, EFAULT, "\nprint_file_converter_help( execname )" );
+		return EXIT_FAILURE;
 	}
+
+	int status = EXIT_SUCCESS;
 
 	// ---------------------------
 
-	fprintf( file, "\n\t<< ASCII-Binary file converter >>\n\n"
-		"Usage:\n\t%s <filename> [ -b <native_format> ] [ -cr ] [ -e <native_format> ]\n\t%s -h\n\n", execname, execname );
+	status = print_message( false, "\n\t<< ASCII-Binary file converter >>\n\n"
+				"Usage:\n\t%s <filename> [ -b <native_format> ] [ -cr ] [ -e <native_format> ]\n\t%s -h\n\n",
+				execname, execname );
 
-	help_matrix( file );
+	if ( help_matrix() != EXIT_SUCCESS )
+		status = EXIT_FAILURE;
 
-	fprintf( file, "-h,-H\tPrints this help message.\n\n" );
+	if ( print_message( false, "\n-h,-H\tPrints this help message.\n\n" ) != EXIT_SUCCESS )
+		status = EXIT_FAILURE;
+
+	return status;
 
 } // print_file_converter_help
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 int main( int argc, char const *restrict *restrict argv )
 {
@@ -101,6 +150,25 @@ int main( int argc, char const *restrict *restrict argv )
 	#if NMFGPU_PROFILING_GLOBAL
 		// Elapsed time
 		struct timeval t_tv;
+	#endif
+
+	process_id = 0;		// Global variables.
+	num_processes = 1;
+
+	/* Default limits for matrix dimensions.
+	 * They may be adjusted later, at device initialization.
+	 */
+	set_matrix_limits( 0 );
+
+	int status = EXIT_SUCCESS;
+
+	// ----------------------------------------
+
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_READ_MATRIX || NMFGPU_DEBUG_READ_MATRIX2 \
+		|| NMFGPU_DEBUG_READ_FILE || NMFGPU_DEBUG_READ_FILE2 || NMFGPU_VERBOSE_2
+
+		// Permanently flushes the output stream in order to prevent losing messages if the program crashes.
+		flush_output( true );
 	#endif
 
 	// ----------------------------------------
@@ -112,21 +180,12 @@ int main( int argc, char const *restrict *restrict argv )
 	struct input_arguments arguments;	// Input arguments
 
 	// Checks all arguments (shows error messages).
-	if ( check_arguments( argc, argv, true, &help, &arguments ) == EXIT_FAILURE ) {
-		if ( help ) {
-			fprintf(stderr, "\n==========\n");
-			print_file_converter_help( argv[0], stderr );
-		}
-		fflush(NULL);
+	if ( check_arguments( argc, argv, &help, &arguments ) != EXIT_SUCCESS )
 		return EXIT_FAILURE;
-	}
 
 	// If help was requested, just prints a help message and returns.
-	if ( help ) {
-		print_file_converter_help( argv[0], stdout );
-		fflush(NULL);
-		return EXIT_SUCCESS;
-	}
+	if ( help )
+		return print_file_converter_help( argv[0] );
 
 	char const *restrict const filename = arguments.filename;	// Input data filename.
 	bool const numeric_hdrs = arguments.numeric_hdrs;		// Has numeric columns headers.
@@ -137,15 +196,8 @@ int main( int argc, char const *restrict *restrict argv )
 	// ----------------------------------------
 
 	real *restrict matrix = NULL;
-	index_t nrows = 0, ncols = 0;
-	struct matrix_labels ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
-	int status = EXIT_SUCCESS;
-
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_READ_MATRIX || NMFGPU_DEBUG_READ_MATRIX2 \
-		|| NMFGPU_DEBUG_READ_FILE || NMFGPU_DEBUG_READ_FILE2
-		// Removes the buffer associated to 'stdout' in order to prevent losing messages if the program crashes.
-		setbuf( stdout, NULL );
-	#endif
+	index_t nrows = 0, ncols = 0, pitch = 0;
+	struct matrix_tags_t mt = new_empty_matrix_tags();
 
 	// --------------------------------------------------------------------- //
 
@@ -158,22 +210,20 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// Loads the file.
 
-	status = matrix_load( filename, numeric_hdrs, numeric_lbls, is_bin, &matrix, &nrows, &ncols, &ml );
-	if ( status == EXIT_FAILURE ) {
-		fprintf( stderr, "Error reading '%s'\n", filename );
-		fflush(NULL);
+	status = matrix_load( filename, numeric_hdrs, numeric_lbls, is_bin, &matrix, &nrows, &ncols, &pitch, &mt );
+	if ( status != EXIT_SUCCESS ) {
+		print_error( false, "Error reading '%s'\n", filename );
 		return EXIT_FAILURE;
 	}
 
 	// --------------------------------------------------------------------- //
 
 	#if NMFGPU_DEBUG
-		// Shows matrix content
-		status = matrix_show( matrix, nrows, ncols, ncols, false, &ml );
-		if ( status == EXIT_FAILURE ) {
-			fprintf( stderr, "Error showing '%s'\n", filename );
-			matrix_clean( matrix, ml );
-			fflush(NULL);
+		// Shows matrix content: No matrix transposing; process 0 only.
+		status = matrix_show( matrix, nrows, ncols, pitch, false, false, &mt );
+		if ( status != EXIT_SUCCESS ) {
+			print_error( false, "Error showing '%s'\n", filename );
+			matrix_clean( matrix, mt );
 			return EXIT_FAILURE;
 		}
 	#endif
@@ -183,15 +233,13 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// Output filename.
 
-	char *restrict const filename_str = malloc( (strlen(filename) + 16)*sizeof(char) );
+	char *restrict const filename_str = malloc( (strlen(filename) + 16) * sizeof(char) );
 	if ( ! filename_str ) {
-		int const err = errno; fflush(stdout); errno = err;
- 		perror("\nmalloc(filename_str)");
-		fprintf(stderr,"Error in '%s'\n",argv[0]);
-		matrix_clean( matrix, ml );
-		fflush(NULL);
+		print_errnum( true, errno, "Error setting output filename: malloc(filename_str)" );
+		matrix_clean( matrix, mt );
 		return EXIT_FAILURE;
 	}
+	errno = 0;	// Resets errno.
 
 	// Saves output as "native" binary.
 	if ( save_bin > 1 ) {
@@ -210,28 +258,26 @@ int main( int argc, char const *restrict *restrict argv )
 		status = EXIT_FAILURE;
 
 
-	if ( status == EXIT_FAILURE )  {
-		int const err = errno; fflush(stdout); errno = err;
-		fprintf( stderr, "\nsprintf( filename='%s' ): ", filename );
-		if ( err ) fprintf( stderr, "%s\n", strerror(err) );
-		fprintf(stderr,"Error setting output filename.\n");
-		free( filename_str ); matrix_clean( matrix, ml );
-		fflush(NULL);
+	if ( status != EXIT_SUCCESS ) {
+		print_errnum( true, errno, "Error setting output filename (sprintf)", filename );
+		free( filename_str ); matrix_clean( matrix, mt );
 		return EXIT_FAILURE;
 	}
 
-	printf("\nOutput file: %s\n",filename_str);
+	print_message( false, "\nOutput file: %s\n", filename_str );
 
 	// --------------------------------------------------------------------- //
 
 	// Saves the file.
 
-	status = matrix_save( filename_str, save_bin, matrix, nrows, ncols, false, &ml, ncols, true ); // be verbose
-	if ( status == EXIT_FAILURE ) {
-		free( filename_str ); matrix_clean( matrix, ml );
-		fflush(NULL);
+	status = matrix_save( filename_str, save_bin, matrix, nrows, ncols, false, &mt, pitch, true ); // no matrix transposing ; be verbose
+
+	free( filename_str );
+
+	matrix_clean( matrix, mt );
+
+	if ( status != EXIT_SUCCESS )
 		return EXIT_FAILURE;
-	}
 
 	// --------------------------------------------------------------------- //
 
@@ -241,21 +287,16 @@ int main( int argc, char const *restrict *restrict argv )
 			struct timeval t_ftv, t_etv;
 			gettimeofday( &t_ftv, NULL );
 			timersub( &t_ftv, &t_tv, &t_etv );	// etv = ftv - tv
-			double const total_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06 );
-			printf( "\nDone in %g seconds.\n", total_time );
+			float const total_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06f );
+			print_message( false, "\nDone in %g seconds.\n", total_time );
 		}
 	#endif
 
 	// --------------------------------------------------------------------- //
 
-	free(filename_str);
-
-	matrix_clean( matrix, ml );
-
-	fflush(NULL);
-
-	return status;
+	return EXIT_SUCCESS;
 
 } // main
 
-///////////////////////////////////////////////////////
+/////////////////////////////////////////////////////
+/////////////////////////////////////////////////////

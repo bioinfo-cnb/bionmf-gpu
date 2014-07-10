@@ -16,11 +16,11 @@
  *	- bNv, NnPv: All bN and NnP*Kp values for all processes. Used only if (N % nProcs != 0)
  *	- bMv, MnPv: All bM and MnP*Kp values for all processes. Used only if (M % nProcs != 0)
  *
- * bN == (my_rank*N)/nProcs	(ie. Starting row)
- * bM == (my_rank*M)/nProcs	(ie. Starting column)
+ * bN == (my_rank*N)/nProcs	(i.e.,Starting row)
+ * bM == (my_rank*M)/nProcs	(i.e.,Starting column)
  *
- * NnP == ((my_rank+1)*N/nProcs) - bN	(ie. Number of rows for this process).
- * MnP == ((my_rank+1)*M/nProcs) - bM	(ie. Number of columns for this process).
+ * NnP == ((my_rank+1)*N/nProcs) - bN	(i.e.,Number of rows for this process).
+ * MnP == ((my_rank+1)*M/nProcs) - bM	(i.e.,Number of columns for this process).
  *
  * MnPp == padding( MnP )
  * Kp == padding( Kp )
@@ -40,7 +40,7 @@
  * There is one for each dimension "BLD" (D == N,M)
  */
 typedef struct {
-	int BL[2];		// Number of rows/columns for this dimension (ie. BLD)
+	int BL[2];		// Number of rows/columns for this dimension (i.e.,BLD)
 	int BLp[2];		// Padding for BLD (if any).
 	int num_steps[2];	// Number of blocks of size BL[] to be processed.
 } block_t;

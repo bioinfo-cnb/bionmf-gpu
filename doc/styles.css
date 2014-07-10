@@ -1,0 +1,95 @@
+/************************************************************************
+ *
+ * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ *
+ * Copyright (C) 2011-2014:
+ *
+ *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
+ *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
+ *
+ *	(*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
+ *	(**) Functional Bioinformatics Group, Biocomputing Unit,
+ *		National Center for Biotechnology-CSIC, Madrid, Spain.
+ *
+ *	E-mail for E. Mejia-Roa: <edgardomejia@fis.ucm.es>
+ *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
+ *
+ *
+ * This file is part of bioNMF-GPU.
+ *
+ * BioNMF-GPU is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * BioNMF-GPU is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
+ *
+ ***********************************************************************/
+/**********************************************************
+ * styles.css
+ *
+ *	Styles for markdown files, just in case they are converted to,
+ *	or shown as, (X)HTML.
+ *
+ *********************************************************/
+
+
+/*
+ * Font and color styles
+ */
+
+body{
+	background: #e7ffdb;
+	color: #203d0d;
+	font-family: Arial, Helvetica, sans-serif;
+	font-size: 90%;
+	margin: auto 4%;
+	text-align: justify;
+}
+
+/* Links */
+a{
+	color: #203d0d;
+	font-weight:bold;
+}
+a:hover { color: #D60808; }
+
+blockquote,pre {
+	background: #daf0ce;
+	/*border: solid #909090 1px;*/
+}
+
+code { font-weight:bold; }
+
+/* ======================== */
+
+/*
+ * Paddings and margins
+ */
+
+h3,h4 {
+	margin-top: 2em; margin-bottom: 0;
+	padding: auto 0;
+}
+
+ol,ul {
+	margin-top:  0; margin-bottom:  2em;
+	padding-top: 0; padding-bottom: 0;
+}
+
+blockquote {
+	margin: 0;
+	padding: 0.3em 2.5em;
+}
+blockquote p { margin: 0; padding: 0; }
+
+pre {
+	margin-top: 0;
+	padding: 0.5em 0;
+}

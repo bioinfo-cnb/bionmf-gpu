@@ -1,8 +1,11 @@
 /************************************************************************
- * Copyright (C) 2011-2013:
  *
- *	Edgardo Mejia-Roa(*), Carlos Garcia, Jose Ignacio Gomez,
- *	Manuel Prieto, Francisco Tirado and Alberto Pascual-Montano(**).
+ * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ *
+ * Copyright (C) 2011-2014:
+ *
+ *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
+ *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
  *
  *	(*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
  *	(**) Functional Bioinformatics Group, Biocomputing Unit,
@@ -12,20 +15,20 @@
  *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-mGPU..
+ * This file is part of bioNMF-GPU.
  *
- * BioNMF-mGPU is free software: you can redistribute it and/or modify
+ * BioNMF-GPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-mGPU is distributed in the hope that it will be useful,
+ * BioNMF-GPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-mGPU.  If not, see <http://www.gnu.org/licenses/>.
+ * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ***********************************************************************/
 /**********************************************************
@@ -39,37 +42,81 @@
  *		NMFGPU_VERBOSE: Shows some messages concerning the progress of the program, as well as some configuration parameters.
  *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
  *
- *	Timing:
- *		NMFGPU_PROFILING_GLOBAL: Compute total elapsed time.
+ *	CPU timing:
+ *		NMFGPU_PROFILING_GLOBAL: Computess total elapsed time.
  *
  *	Debug / Testing:
  *		NMFGPU_FIXED_INIT: Uses "random" values generated from a fixed seed (defined in common.h).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
  *
+ **********************************************************
+ **********************************************************
+ **********************************************************
+ *
+ * NOTE: In order to improve performance:
+ *
+ *	+ The number of columns is rounded up to a multiple of <memory_alignment>.
+ *	  The padded dimension is referred as "pitch".
+ *
+ *	  This leads to the following limits:
+ *		- Maximum number of columns (padded or not): matrix_max_pitch.
+ *		- Maximum number of rows: matrix_max_non_padded_dim.
+ *		- Maximum number of items: matrix_max_num_items.
+ *
+ *	  All four GLOBAL variables must be initialized with the
+ *	  set_matrix_limits() function.
+ *
+ **********************************************************
+ *
+ * Matrix tags:
+ *
+ * Any matrix may include the following "tag" elements:
+ *
+ *	+ A short description string, referred as "name".
+ *	+ A list of column headers.
+ *	+ A list of row labels.
+ *
+ * Each list is stored in a "struct tag_t" structure, which is composed by:
+ *	+ All tokens stored as a (large) single string.
+ *	+ An array of pointers to such tokens.
+ *
+ * All three elements (the "name" string, and the two tag_t structures) are
+ * then stored in a "struct matrix_tags_t" structure.
+ *
+ * Both types of structure are defined in "matrix_io_routines.h".
+ *
+ ****************
+ *
  * WARNING:
- *	- Requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
+ *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
  *
  **********************************************************/
 
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-#include <inttypes.h>	/* strtoumax */
-#include <math.h>	/* isless, isgreater, isfinite */
+// Required by <stdint.h>
+#ifndef __STDC_CONSTANT_MACROS
+	#define __STDC_CONSTANT_MACROS (1)
+#endif
+
+#include "matrix/matrix_io.h"
+#include "matrix/matrix_io_routines.h"
+#include "common.h"
+#include "real_type.h"
+#include "index_type.h"
+
 #if NMFGPU_PROFILING_GLOBAL
 	#include <sys/time.h>
 #endif
+#include <inttypes.h>	/* strtoimax, INTMAX_C, uintptr_t, [u]intmax_t */
+#include <math.h>	/* isless, isgreater, isfinite */
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
-#include "index_type.h"
-#include "real_type.h"
-#include "matrix/matrix_io_routines.h"
-#include "matrix/matrix_io.h"
-#include "common.h"
 
-// ---------------------------------------------
-// ---------------------------------------------
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /* Constants */
 
@@ -79,66 +126,71 @@
 	#define DEFAULT_MAXRAND ( REAL_C( 1.0 ) )
 #endif
 
+#ifndef DEFAULT_MINRAND
+	#define DEFAULT_MINRAND ( R_MIN )
+#endif
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
-
-/*
- * Prints all arguments to the specified file.
- */
-static void print_generate_matrix_help( char const *restrict execname, FILE *restrict file )
-{
-
-	// Checks for NULL parameters
-	if ( ! ( (size_t) execname * (size_t) file ) ) {
-		fflush( stdout );
-		errno = EFAULT;
-		if ( ! execname ) perror("\nprint_generate_matrix_help( execname )");
-		if ( ! file )	  perror("\nprint_generate_matrix_help( file )");
-		return;
-	}
-
-	// ---------------------------
-
-	fprintf( file,	"\nTool to generate (in CPU) a matrix with random values\n\n"
-			"Usage:\n\t%s <filename> <rows> <columns> [ -e <native_format> ] [ <max_value> ]\n"
-			"\t%s -h\n\n", execname, execname );
-
-	help_matrix( file );
-
-	fprintf( file,	"Note: Some of the previous options are read for compatibility reasons, but they are ignored by the program.\n\n" );
-
-	fprintf( file,	"<rows> <columns>\n\tOutput matrix dimensions (both mandatory if 'help' is not requested).\n"
-			"\tNote that <rows> x <columns> must be less than, or equal to, %" PRI_IDX ".\n\n", IDX_MAX);
-
-	fprintf( file,	"<max_value>\n\tRange for random values: [0..<max_value>]. "
-			"Valid values are between %g and %g. The default is %g\n\n", R_MIN, R_MAX, DEFAULT_MAXRAND);
-
-	fprintf( file, "-h,-H\tPrints this help message.\n\n" );
-
-} // print_generate_matrix_help
-
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 /*
- * Checks additional arguments
- * If verbose_error is 'true', shows error messages.
- *
- * Sets "help" to 'true' if not enough arguments.
+ * Prints all arguments.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static int check_additional_arguments( int argc, char const *restrict const *restrict argv, bool verbose_error, index_t idx_other_args,
-					index_t *restrict nrows, index_t *restrict ncols, real *restrict max_value, bool *restrict help )
+static int print_generate_matrix_help( char const *restrict const execname )
 {
+
 	// Checks for NULL parameters
-	if ( ! ( ( argc > 0 ) * (size_t) argv * (size_t) nrows * (size_t) ncols * (size_t) max_value ) ) {
-		fflush( stdout );
-		errno = EFAULT;
-		if ( ! argv )	perror("\ncheck_additional_arguments( argv )");
-		if ( ! nrows )	perror("\ncheck_additional_arguments( nrows )");
-		if ( ! ncols )	perror("\ncheck_additional_arguments( ncols )");
-		if ( ! max_value ) perror("\ncheck_additional_arguments( max_value )");
+	if ( ! execname ) {
+		print_errnum( false, EFAULT, "\nprint_generate_matrix_help( execname )" );
+		return EXIT_FAILURE;
+	}
+
+	int status = EXIT_SUCCESS;
+
+	// ---------------------------
+
+	status = print_message( false, "\nTool to generate (in CPU) a matrix with random values\n\n"
+				"Usage:\n\t%s <filename> <rows> <columns> [ -e <native_format> ] [ <max_value> ]\n"
+				"\t%s -h\n\n", execname, execname );
+
+	if ( help_matrix() != EXIT_SUCCESS )
+		status = EXIT_FAILURE;
+
+	if ( print_message( false, "\nNote: Some of the previous options are read for compatibility reasons, "
+				"but they are ignored by the program.\n\n"
+				"<rows> <columns>\n\tOutput matrix dimensions (both mandatory if 'help' is not requested).\n"
+				"\tNote that <rows> x <columns> must be less than, or equal to, %" PRI_IDX ".\n\n"
+				"<max_value>\n\tRange for random values: [0..<max_value>]. "
+				"Valid values are in range (%g .. %g). The default is %g\n\n"
+				"-h,-H\tPrints this help message.\n\n", IDX_MAX, DEFAULT_MINRAND, R_MAX, DEFAULT_MAXRAND ) != EXIT_SUCCESS )
+		status = EXIT_FAILURE;
+
+	return status;
+
+} // print_generate_matrix_help
+
+////////////////////////////////////////////////
+
+/*
+ * Checks additional arguments
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+static int check_additional_arguments( int argc, char const *restrict const *restrict argv, index_t idx_other_args,
+					index_t *restrict nrows, index_t *restrict ncols, real *restrict max_value )
+{
+
+	// Checks for NULL parameters
+	if ( ! ( ( argc > 0 ) * (uintptr_t) argv * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) max_value ) ) {
+		bool const l_shown_by_all = false;
+		int const errnum = EFAULT;
+		if ( argc <= 0 ) print_errnum( l_shown_by_all, errnum, "\nncheck_additional_arguments( argc=%i )", argc );
+		if ( ! argv )	print_errnum( l_shown_by_all, errnum, "\ncheck_additional_arguments( argv )" );
+		if ( ! nrows )	print_errnum( l_shown_by_all, errnum, "\ncheck_additional_arguments( nrows )" );
+		if ( ! ncols )	print_errnum( l_shown_by_all, errnum, "\ncheck_additional_arguments( ncols )" );
+		if ( ! max_value ) print_errnum( l_shown_by_all, errnum, "\ncheck_additional_arguments( max_value )" );
 		return EXIT_FAILURE;
 	}
 
@@ -147,16 +199,12 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 	// Default values
 	index_t l_nrows = 0, l_ncols = 0;	// Matrix dimensions
 	real l_max_value = DEFAULT_MAXRAND;	// Maximum value
-	*help = false;
 
 	// ---------------------------
 
 	// Fails if no more arguments
 	if ( idx_other_args >= (index_t) (argc-1) ) {
-		fflush(stdout);
-		if ( verbose_error )
-			fprintf( stderr, "\nError: No matrix dimensions. Not enough arguments.\n" );
-		*help = true;		// Help is printed on return of this function.
+		print_error( false, "\nError: No matrix dimensions. Not enough arguments.\nSee help (option '-h').\n" );
 		return EXIT_FAILURE;
 	}
 
@@ -166,12 +214,10 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 	{
 		errno = 0;
 		char *endptr = NULL;
-		uintmax_t val = strtoumax( argv[idx_other_args], &endptr, 10 );
-		if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
-			fflush(stdout);
-			fprintf( stderr, "\nError. Invalid number of rows: '%s'.\n", argv[idx_other_args] );
-			if ( val > IDX_MAX )
-				fprintf( stderr, "It must be less than or equal to %" PRI_IDX ".\n", IDX_MAX );
+		intmax_t const val = strtoimax( argv[idx_other_args], &endptr, 10 );
+		if ( (*endptr != '\0') + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) MATRIX_MAX_DIMENSION) ) {
+			print_error( false, "\nError. Invalid number of rows: '%s'.\nIt must be a positive integer "
+					"less than or equal to %" PRI_IDX ".\n", argv[idx_other_args], MATRIX_MAX_DIMENSION );
 			return EXIT_FAILURE;
 		}
 		l_nrows = (index_t) val;
@@ -182,12 +228,10 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 	{
 		errno = 0;
 		char *endptr = NULL;
-		uintmax_t val = strtoumax( argv[idx_other_args], &endptr, 10 );
-		if ( (*endptr != '\0') + errno + (! val) + (val > IDX_MAX) ) {
-			fflush(stdout);
-			fprintf( stderr, "\nError. Invalid number of columns: '%s'.\n", argv[idx_other_args] );
-			if ( val > IDX_MAX )
-				fprintf( stderr, "It must be less than or equal to %" PRI_IDX ".\n", IDX_MAX );
+		intmax_t const val = strtoimax( argv[idx_other_args], &endptr, 10 );
+		if ( (*endptr != '\0') + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) MATRIX_MAX_DIMENSION) ) {
+			print_error( false, "\nError. Invalid number of columns: '%s'.\nIt must be a positive integer "
+					"less than or equal to %" PRI_IDX ".\n", argv[idx_other_args], MATRIX_MAX_DIMENSION );
 			return EXIT_FAILURE;
 		}
 		l_ncols = (index_t) val;
@@ -198,10 +242,9 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 	// Checks number of items.
 	{
 		uintmax_t const nitems = ((uintmax_t) l_nrows * (uintmax_t) l_ncols);
-		if ( nitems > (uintmax_t) IDX_MAX ) {
-			fflush(stdout);
-			fprintf( stderr, "\nError: output matrix too large. The number of items must be less than, or equal to, %"
-					PRI_IDX ".\n", IDX_MAX );
+		if ( nitems > (uintmax_t) MATRIX_MAX_ITEMS ) {
+			print_error( false, "\nError: output matrix will be too large. The number of items must be "
+					"less than, or equal to, %" PRI_IDX ".\n", MATRIX_MAX_ITEMS );
 			return EXIT_FAILURE;
 		}
 	}
@@ -213,11 +256,13 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 		errno = 0;
 		char *endptr = NULL;
 		l_max_value = STRTOREAL( argv[idx_other_args], &endptr );
-		if ( (errno + (*endptr != '\0')) || (! isfinite(l_max_value)) ||
-			isless( l_max_value, R_MIN ) || isgreater( l_max_value, R_MAX ) ) {
-			fflush(stdout);
-			fprintf(stderr,"\nError: invalid maximum value: '%s'\nValid values are between %g and %g.\n",
-				argv[idx_other_args], R_MIN, R_MAX );
+		if ( (*endptr != '\0') + errno + (! isfinite(l_max_value)) ) {
+			print_errnum( false, errno, "\nError: invalid maximum value: '%s'", argv[idx_other_args] );
+			return EXIT_FAILURE;
+		}
+		if ( islessequal( l_max_value, DEFAULT_MINRAND ) + isgreaterequal( l_max_value, R_MAX ) ) {
+			print_errnum( false, errno, "\nError: invalid maximum value: %g\nValid values are in range (%g .. %g).\n",
+					l_max_value, DEFAULT_MINRAND, R_MAX );
 			return EXIT_FAILURE;
 		}
 		// idx_other_args++; // Not necessary
@@ -233,8 +278,8 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 
 } // check_additional_arguments
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////
 
 int main( int argc, char const *restrict *restrict argv )
 {
@@ -244,30 +289,32 @@ int main( int argc, char const *restrict *restrict argv )
 		struct timeval t_tv;
 	#endif
 
+	int status = EXIT_SUCCESS;
+
 	// ----------------------------------------
 
-	/* Reads all parameters and performs error-checking. */
+	#if NMFGPU_DEBUG || NMFGPU_DEBUG_READ_MATRIX || NMFGPU_DEBUG_READ_MATRIX2 \
+		|| NMFGPU_DEBUG_READ_FILE || NMFGPU_DEBUG_READ_FILE2 || NMFGPU_VERBOSE_2
+
+		// Permanently flushes the output stream in order to prevent losing messages if the program crashes.
+		flush_output( true );
+	#endif
+
+	// ----------------------------------------
+
+	// Reads all parameters and performs error-checking.
 
 	bool help = false;			// Help message requested
 
 	struct input_arguments arguments;	// Input arguments
 
-	// Checks all arguments (shows error messages).
-	if ( check_arguments( argc, argv, true, &help, &arguments ) == EXIT_FAILURE ) {
-		if ( help ) {
-			fprintf(stderr, "\n==========\n");
-			print_generate_matrix_help( argv[0], stderr );
-		}
-		fflush(NULL);
+	// Checks all arguments
+	if ( check_arguments( argc, argv, &help, &arguments ) != EXIT_SUCCESS )
 		return EXIT_FAILURE;
-	}
 
 	// If help was requested, just prints a help message and returns.
-	if ( help ) {
-		print_generate_matrix_help( argv[0], stdout );
-		fflush(NULL);
-		return EXIT_SUCCESS;
-	}
+	if ( help )
+		return print_generate_matrix_help( argv[0] );
 
 	char const *restrict const filename = arguments.filename;	// Output filename
 	index_t const save_bin = arguments.save_bin;			// Output file is binary (native or non-native format).
@@ -280,30 +327,20 @@ int main( int argc, char const *restrict *restrict argv )
 	index_t nrows = 0, ncols = 0;
 	real max_value = DEFAULT_MAXRAND;
 
-	if ( check_additional_arguments( argc, argv, true, idx_other_args, &nrows, &ncols, &max_value, &help ) == EXIT_FAILURE ) {
-		if ( help ) {
-			fprintf(stderr, "\n==========\n");
-			print_generate_matrix_help( argv[0], stderr );
-		}
-		fflush(NULL);
+	if ( check_additional_arguments( argc, argv, idx_other_args, &nrows, &ncols, &max_value ) != EXIT_SUCCESS )
 		return EXIT_FAILURE;
-	}
-
-	// ----------------------------------------
-
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_READ_MATRIX || NMFGPU_DEBUG_READ_MATRIX2 \
-		|| NMFGPU_DEBUG_READ_FILE || NMFGPU_DEBUG_READ_FILE2
-		// Removes the buffer associated to 'stdout' in order to prevent losing messages if the program crashes.
-		setbuf( stdout, NULL );
-	#endif
 
 	// ----------------------------------------
 
 	// Generates the output matrix
-	index_t nitems = nrows * ncols;
+	size_t nitems = nrows * ncols;
 
-	printf( "\nGenerating a %" PRI_IDX "-by-%" PRI_IDX " data matrix (%" PRI_IDX " items, with random values in range [0..%g])...\n",
-		nrows, ncols, nitems, max_value );
+	print_message( false, "\nGenerating a %" PRI_IDX "-by-%" PRI_IDX " data matrix (%zu"
+			" items), with random values in range [0 .. %g]...\n", nrows, ncols, nitems, max_value );
+
+	// Warns if it is a single-row/column matrix.
+	if ( (nrows == 1) + (ncols == 1) )
+		print_error( false, "\nNote, however, that row/column vectors are not a valid input for the NMF algorithm.\n" );
 
 	// ----------------------------------------
 
@@ -314,58 +351,71 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// ----------------------------------------
 
-	real *restrict matrix = malloc( nitems * sizeof(real) );
+	real *restrict const matrix = (real *restrict) malloc( nitems * sizeof(real) );
 	if ( ! matrix ) {
-		int const err = errno; fflush(stdout); errno = err;
-		perror("\nmalloc(matrix)");
-		fflush(NULL);
+		print_errnum( true, errno, "malloc(matrix, items=%zu)", nitems );
 		return EXIT_FAILURE;
 	}
+
 
 	// Seed for the random generator.
 	index_t seed = get_seed();
 
 	srandom( (unsigned int) seed );	// Initializes the random generator.
 
-	for ( index_t i=0 ; i < nitems ; i++ ) {
-		real val = ( ((real) random() ) / ((real) RAND_MAX) ) * max_value;	// Value in range [0..<max_value>]
-		matrix[ i ] = val;
+	real const denominator = (real) RAND_MAX;
+
+	real *pmatrix = matrix;
+	for ( index_t i=0 ; i < nrows ; i++, pmatrix += ncols ) {
+		real *pmatrix_r = pmatrix;
+		for ( index_t j=0 ; j < ncols ; j++, pmatrix_r++ ) {
+			real const numerator = (real) random();
+			real const val0_1    = numerator / denominator;	// Value in range [0..1]
+			real const val	     = val0_1 * max_value;	// Value in range [0..<max_value>]
+			*pmatrix_r = val;
+		}
 	}
 
 	// ----------------------------------------
 
 	// Saves the output matrix.
 
-	struct matrix_labels ml = NEW_MATRIX_LABELS( NULL, NULL, NULL, NULL, NULL );
+	status = matrix_save( filename, save_bin, matrix, nrows, ncols, false, NULL, ncols, true ); // no matrix transposing, be verbose
 
-	int status = matrix_save( filename, save_bin, matrix, nrows, ncols, false, &ml, ncols, true ); // be verbose
-	if ( status == EXIT_FAILURE ) {
-		free( matrix );
-		fflush(NULL);
+	free( matrix );
+
+	if ( status != EXIT_SUCCESS )
 		return EXIT_FAILURE;
-	}
 
 	// ----------------------------------------
 
 	#if NMFGPU_PROFILING_GLOBAL
 		// Elapsed time
 		{
+			//struct timespec ftv, etv;
+
+			//if ( clock_gettime( CLOCK_REALTIME, &ftv) ) {
+				//print_errnum( true, errno, "clock_gettime(ftv)" );
+				//return EXIT_FAILURE;
+			//}
+
+			//my_timersub( stv, ftv, etv );
+			//float const total_time = etv.tv_sec + ( etv.tv_nsec * 1e-09f );
+
 			struct timeval t_ftv, t_etv;
 			gettimeofday( &t_ftv, NULL );
 			timersub( &t_ftv, &t_tv, &t_etv );	// etv = ftv - tv
-			double const total_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06 );
-			printf( "\nDone in %g seconds.\n", total_time );
+			float const total_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06f );
+
+			print_message( false, "\nDone in %g seconds.\n", total_time );
 		}
 	#endif
 
 	// ----------------------------------------
 
-	free( matrix );
-
-	fflush(NULL);
-
 	return EXIT_SUCCESS;
 
 } // main
 
-//////////////////////////////////////////////////
+////////////////////////////////////////////////
+////////////////////////////////////////////////

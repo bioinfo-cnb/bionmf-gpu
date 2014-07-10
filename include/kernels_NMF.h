@@ -11,11 +11,11 @@
  *	- NOTE: W and Htras (CPU matrices) have padding.
  *	- Block configuration.
  *
- * bN == (my_rank*N)/nProcs	(ie. Starting row)
- * bM == (my_rank*M)/nProcs	(ie. Starting column)
+ * bN == (my_rank*N)/nProcs	(i.e.,Starting row)
+ * bM == (my_rank*M)/nProcs	(i.e.,Starting column)
  *
- * NnP == ((my_rank+1)*N/nProcs) - bN	(ie. Number of rows for this process).
- * MnP == ((my_rank+1)*M/nProcs) - bM	(ie. Number of columns for this process).
+ * NnP == ((my_rank+1)*N/nProcs) - bN	(i.e.,Number of rows for this process).
+ * MnP == ((my_rank+1)*M/nProcs) - bM	(i.e.,Number of columns for this process).
  *
  * MnPp == padding( MnP )
  * Kp == padding( Kp )
