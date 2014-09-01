@@ -53,13 +53,13 @@
 #endif
 
 #include "timing.cuh"
-#include "common.h"
 #include "real_type.h"
+#include "common.h"
 
-#include <math.h>	/* isfinite() */
+#include <stdlib.h>
 #include <inttypes.h>	/* PRIuFAST32, uintptr_t */
 #include <stdio.h>
-#include <stdlib.h>
+#include <math.h>	/* isfinite() */
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -71,15 +71,40 @@
 	cudaEvent_t timing_events[ NUM_TIMING_EVENTS ];
 #endif
 
-#if NMFGPU_PROFILING_KERNELS
-	// Timing on kernels
-	timing_data_t reduce_timing[4], div_timing[2], mul_div_timing[2], adjust_timing[2], idx_max_timing[2], sub_timing[2];
+#ifdef NMFGPU_PROFILING_KERNELS
+	// Timing on GPU kernels
+	timing_data_t reduce_timing[4];
+	timing_data_t div_timing[2];
+	timing_data_t mul_div_timing[2];
+	timing_data_t adjust_timing[2];
+	timing_data_t idx_max_timing[2];
+	timing_data_t sub_timing[2];
 #endif
 
 #if NMFGPU_PROFILING_TRANSF
 	// Timing on data transfers
-	timing_data_t upload_Vrow_timing, upload_Vcol_timing, upload_H_timing, upload_W_timing, download_H_timing, download_W_timing,
-			download_classf_timing;
+	timing_data_t upload_Vrow_timing;
+	timing_data_t upload_Vcol_timing;
+	timing_data_t upload_H_timing;
+	timing_data_t upload_W_timing;
+	timing_data_t download_H_timing;
+	timing_data_t download_W_timing;
+	timing_data_t download_classf_timing;
+#endif
+
+// ---------------------------------------------
+
+#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
+
+	/* "Private" global variables */
+
+	// Information and/or error messages shown by all processes.
+
+	#if NMFGPU_VERBOSE_2
+		static bool const verb_shown_by_all = true;	// Information messages in verbose mode.
+	#endif
+	static bool const shown_by_all = false;			// Information messages.
+	static bool const sys_error_shown_by_all = true;	// System error messages.
 #endif
 
 ////////////////////////////////////////////////
@@ -96,13 +121,28 @@ timing_data_t new_timing_data( uintmax_t nitems, uint_fast32_t counter, float ti
 {
 
 	timing_data_t td;
-	td.nitems = nitems;
+
 	td.counter = counter;
 	td.time = time;
+	td.nitems = nitems;
 
 	return td;
 
 } // new_timing_data
+
+////////////////////////////////////////////////
+
+/*
+ * Returns an empty timing_data_t structure.
+ */
+timing_data_t new_empty_timing_data( void )
+{
+
+	timing_data_t td = new_timing_data( 0, 0, 0.0f );
+
+	return td;
+
+} // new_empty_timing_data
 
 ////////////////////////////////////////////////
 
@@ -114,22 +154,22 @@ void init_kernel_timers( void )
 
 	#if NMFGPU_PROFILING_KERNELS
 
-		for( index_t i=0 ; i<4 ; i++ )
+		for( size_t i=0 ; i<4 ; i++ )
 			reduce_timing[i] = new_empty_timing_data();
 
-		for( index_t i=0 ; i<2 ; i++ )
+		for( size_t i=0 ; i<2 ; i++ )
 			div_timing[i] = new_empty_timing_data();
 
-		for( index_t i=0 ; i<2 ; i++ )
+		for( size_t i=0 ; i<2 ; i++ )
 			mul_div_timing[i] = new_empty_timing_data();
 
-		for( index_t i=0 ; i<2 ; i++ )
+		for( size_t i=0 ; i<2 ; i++ )
 			adjust_timing[i] = new_empty_timing_data();
 
-		for( index_t i=0 ; i<2 ; i++ )
+		for( size_t i=0 ; i<2 ; i++ )
 			idx_max_timing[i] = new_empty_timing_data();
 
-		for( index_t i=0 ; i<2 ; i++ )
+		for( size_t i=0 ; i<2 ; i++ )
 			sub_timing[i] = new_empty_timing_data();
 
 	#endif	/* if defined( NMFGPU_PROFILING_KERNELS ) */
@@ -176,10 +216,8 @@ int init_timing_events( void )
 
 	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
-		bool const shown_by_all = true; // Messages shown by all processes.
-
 		#if NMFGPU_VERBOSE_2
-			print_message( shown_by_all, "Initializing array of CUDA Events for timing (number of events: %" PRI_IDX ")...\n",
+			print_message( verb_shown_by_all, "Initializing array of CUDA Events for timing (number of events: %" PRI_IDX ")...\n",
 					NUM_TIMING_EVENTS );
 		#endif
 
@@ -190,7 +228,7 @@ int init_timing_events( void )
 		// Start timer
 		cuda_status = cudaEventCreateWithFlags( &timing_events[ START_EVENT ], cudaEventBlockingSync );
 		if ( cuda_status != cudaSuccess ) {
-			print_error( shown_by_all, "Error creating CUDA event for timing (timer start): %s\n",
+			print_error( sys_error_shown_by_all, "Error creating CUDA event for timing (timer start): %s\n",
 					cudaGetErrorString(cuda_status) );
 			return EXIT_FAILURE;
 		}
@@ -198,7 +236,7 @@ int init_timing_events( void )
 		// Stop timer
 		cuda_status = cudaEventCreateWithFlags( &timing_events[ STOP_EVENT ], cudaEventBlockingSync );
 		if ( cuda_status != cudaSuccess ) {
-			print_error( shown_by_all, "Error creating CUDA event for timing (timer stop): %s\n",
+			print_error( sys_error_shown_by_all, "Error creating CUDA event for timing (timer stop): %s\n",
 					cudaGetErrorString(cuda_status) );
 			cudaEventDestroy( timing_events[ START_EVENT ] );
 			return EXIT_FAILURE;
@@ -207,7 +245,7 @@ int init_timing_events( void )
 		// ----------------------------
 
 		#if NMFGPU_VERBOSE_2
-			print_message( shown_by_all, "Initializing array of CUDA Events for timing (number of events: %"
+			print_message( verb_shown_by_all, "Initializing array of CUDA Events for timing (number of events: %"
 					PRI_IDX ")... Done.\n", NUM_TIMING_EVENTS );
 		#endif
 
@@ -231,10 +269,8 @@ int destroy_timing_events( void )
 
 	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
-		bool const shown_by_all = true; // Messages shown by all processes.
-
 		#if NMFGPU_VERBOSE_2
-			print_message( shown_by_all, "Finalizing CUDA Events for timing (%" PRI_IDX " objects)...\n", NUM_TIMING_EVENTS );
+			print_message( verb_shown_by_all, "Finalizing CUDA Events for timing (%" PRI_IDX " objects)...\n", NUM_TIMING_EVENTS );
 		#endif
 
 		cudaError_t cuda_status = cudaSuccess;
@@ -244,7 +280,7 @@ int destroy_timing_events( void )
 		// Stop timer
 		cuda_status = cudaEventDestroy( timing_events[ STOP_EVENT ] );
 		if ( cuda_status != cudaSuccess ) {
-			print_error( shown_by_all, "Error destroying CUDA event for timing (timer stop): %s\n",
+			print_error( sys_error_shown_by_all, "Error destroying CUDA event for timing (timer stop): %s\n",
 					cudaGetErrorString(cuda_status) );
 			status = EXIT_FAILURE;
 		}
@@ -252,7 +288,7 @@ int destroy_timing_events( void )
 		// Start timer
 		cuda_status = cudaEventDestroy( timing_events[ START_EVENT ] );
 		if ( cuda_status != cudaSuccess ) {
-			print_error( shown_by_all, "Error destroying CUDA event for timing (timer start): %s\n",
+			print_error( sys_error_shown_by_all, "Error destroying CUDA event for timing (timer start): %s\n",
 					cudaGetErrorString(cuda_status) );
 			status = EXIT_FAILURE;
 		}
@@ -260,7 +296,7 @@ int destroy_timing_events( void )
 		// ----------------------------
 
 		#if NMFGPU_VERBOSE_2
-			print_message( shown_by_all, "Finalizing CUDA Events for timing (%" PRI_IDX " objects)... Done.\n",
+			print_message( verb_shown_by_all, "Finalizing CUDA Events for timing (%" PRI_IDX " objects)... Done.\n",
 					NUM_TIMING_EVENTS );
 		#endif
 
@@ -282,8 +318,6 @@ int start_cuda_timer_ev( cudaEvent_t timing_event )
 
 	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
-		bool const shown_by_all = true; // Messages shown by all processes.
-
 		cudaError_t cuda_status = cudaSuccess;
 
 		// ----------------------
@@ -294,14 +328,14 @@ int start_cuda_timer_ev( cudaEvent_t timing_event )
 		 */
 		cuda_status = cudaDeviceSynchronize();
 		if ( cuda_status != cudaSuccess ) {
-			print_error( shown_by_all, "CUDA Error detected: %s\n", cudaGetErrorString(cuda_status) );
+			print_error( sys_error_shown_by_all, "CUDA Error detected: %s\n", cudaGetErrorString(cuda_status) );
 			return EXIT_FAILURE;
 		}
 
 		// Registers the current "timestamp".
 		cuda_status = cudaEventRecord( timing_event, 0 );
 		if ( cuda_status != cudaSuccess ) {
-			print_error( shown_by_all, "Error recording a CUDA event: %s\n", cudaGetErrorString(cuda_status) );
+			print_error( sys_error_shown_by_all, "Error recording a CUDA event: %s\n", cudaGetErrorString(cuda_status) );
 			return EXIT_FAILURE;
 		}
 
@@ -349,8 +383,6 @@ float stop_cuda_timer_ev( cudaEvent_t start_timing_event )
 
 	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 
-		bool const shown_by_all = true; // Messages shown by all processes.
-
 		cudaError_t cuda_status = cudaSuccess;
 
 		cudaEvent_t stop_timing_event = timing_events[ STOP_EVENT ];
@@ -360,7 +392,7 @@ float stop_cuda_timer_ev( cudaEvent_t start_timing_event )
 		// Records the current "timestamp" for ALL previous operations.
 		cuda_status = cudaEventRecord( stop_timing_event, 0 );
 		if ( cuda_status != cudaSuccess ) {
-			print_error( shown_by_all, "CUDA Error detected: %s\n", cudaGetErrorString(cuda_status) );
+			print_error( sys_error_shown_by_all, "CUDA Error detected: %s\n", cudaGetErrorString(cuda_status) );
 			return -1.0f;
 		}
 
@@ -370,18 +402,18 @@ float stop_cuda_timer_ev( cudaEvent_t start_timing_event )
 		 */
 		cuda_status = cudaEventSynchronize( stop_timing_event );
 		if ( cuda_status != cudaSuccess ) {
-			print_error( shown_by_all, "CUDA Error detected: %s\n", cudaGetErrorString(cuda_status) );
+			print_error( sys_error_shown_by_all, "CUDA Error detected: %s\n", cudaGetErrorString(cuda_status) );
 			return -1.0f;
 		}
 
 		cuda_status = cudaEventElapsedTime( &elapsed_time, start_timing_event, stop_timing_event );
 		if ( cuda_status != cudaSuccess ) {
-			print_error( shown_by_all, "Error retrieving elapsed time: %s\n", cudaGetErrorString(cuda_status) );
+			print_error( sys_error_shown_by_all, "Error retrieving elapsed time: %s\n", cudaGetErrorString(cuda_status) );
 			return -1.0f;
 		}
 
 		if ( ! isfinite( elapsed_time ) ) {
-			print_error( shown_by_all, "Invalid elapsed time: %g\n", elapsed_time );
+			print_error( sys_error_shown_by_all, "Invalid elapsed time: %g\n", elapsed_time );
 			return -1.0f;
 		}
 
@@ -427,7 +459,7 @@ float stop_cuda_timer( void )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__restrict__ td, gpu_size_t nitems, index_t counter )
+int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__restrict__ td, size_t nitems, index_t counter )
 {
 
 	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
@@ -437,8 +469,8 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__res
 			return EXIT_FAILURE;
 
 		if ( td ) {
-			td->nitems  += (uintmax_t) nitems;
-			td->counter += (uint_fast32_t) counter;
+			td->nitems  += nitems;
+			td->counter += counter;
 			td->time += elapsed_time;
 		}
 
@@ -460,7 +492,7 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__res
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, gpu_size_t nitems, index_t counter )
+int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, size_t nitems, index_t counter )
 {
 
 	int status = EXIT_SUCCESS;
@@ -477,39 +509,34 @@ int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, gpu_size_t nitems, inde
 
 ////////////////////////////////////////////////
 
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-
 /*
  * Prints the following information for the given operation "<op>":
  *	- Total elapsed time, measured in milliseconds (but shown in seconds if show_secs is 'true').
  *	- Number of times the operation was performed and the average time, in milliseconds.
  *	- Bandwidth, in Gigabytes per second.
  *
- * size_of_data: Size in bytes of processed data.
+ * data_size: Size in bytes of the processed data type.
  */
-static void print_elapsed_time( char const *__restrict__ const op, timing_data_t *__restrict__ td, size_t size_of_data, bool show_secs,
-				bool shown_by_all )
+void print_elapsed_time( char const *__restrict__ const op, timing_data_t *__restrict__ td, size_t data_size, bool show_secs, bool all_processes )
 {
 
-	// if ( op != NULL ) && ( td != NULL ) && ( size_of_data > 0 )
-	if ( (uintptr_t) op * (uintptr_t) td * (uintptr_t) size_of_data ) {
+	// if ( op != NULL ) && ( td != NULL ) && ( data_size > 0 )
+	if ( (uintptr_t) op * (uintptr_t) td * (uintptr_t) data_size ) {
 
 		/* Bandwidth (GB/sec):
-		 *	( (td->nitems * size_of_data) bytes / (2**30 bytes/GB) )  /  ( td->time (ms) / (1000 ms/sec) )
+		 *	( (td->nitems * data_size) bytes / (2**30 bytes/GB) )  /  ( td->time (ms) / (1000 ms/sec) )
 		 *
-		 * Note that (size_of_data * ( 1000 / 2**30 )) is calculated at compile time.
+		 * Note that (data_size * ( 1000 / 2**30 )) is calculated at compile time.
 		 */
 
-		print_message( shown_by_all, "%s: %g %s (%" PRIuFAST32 " time(s), avg: %g ms), %g GiB/s\n", op,
+		append_printed_message( all_processes, "%s: %g %s (%" PRIuFAST32 " time(s), avg: %g ms), %g GiB/s\n", op,
 				( show_secs ? (td->time / 1000.0f) : td->time ), ( show_secs ? "sec(s)" : "ms" ), td->counter,
-				(td->time / td->counter), ( ( td->nitems * size_of_data * (1000.0f/((1<<30) + 0.0f)) ) / td->time ) );
+				(td->time / td->counter), ( ( td->nitems * data_size * (1000.0f/((1<<30) + 0.0f)) ) / td->time ) );
 	}
 
 } // print_elapsed_time
 
-#endif	/* NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS */
-
-// ---------------------------------------------
+////////////////////////////////////////////////
 
 /*
  * Shows time elapsed on some kernels.
@@ -519,11 +546,9 @@ void show_kernel_times( void )
 
 	#if NMFGPU_PROFILING_KERNELS
 
-		bool const shown_by_all = false; // Messages shown by process 0 only.
+		bool const show_secs = false;		// Shows elapsed time in milliseconds, not in seconds.
 
-		bool const show_secs = false;	// Shows elapsed time in milliseconds, not in seconds.
-
-		print_message( shown_by_all, "\tDevice Kernels:\n" );
+		append_printed_message( shown_by_all, "\tDevice Kernels:\n" );
 
 		// --------------------
 
@@ -554,7 +579,7 @@ void show_kernel_times( void )
 				num_kernels++;
 			}
 			if ( num_kernels > INDEX_C( 1 ) )
-				print_message( shown_by_all, "\t\t\tTotal matrix_to_row time: %g ms\n", total_time );
+				append_printed_message( shown_by_all, "\t\t\tTotal matrix_to_row time: %g ms\n", total_time );
 		}
 
 		// --------------------
@@ -567,7 +592,7 @@ void show_kernel_times( void )
 			print_elapsed_time("\t\tGPU div (extended grid)", &div_timing[1], sizeof(real), show_secs, shown_by_all );
 
 		if ( div_timing[0].counter * div_timing[1].counter )
-			print_message( shown_by_all, "\t\t\tTotal div time: %g ms.\n", div_timing[0].time + div_timing[1].time );
+			append_printed_message( shown_by_all, "\t\t\tTotal div time: %g ms.\n", div_timing[0].time + div_timing[1].time );
 
 		// ------------------
 
@@ -580,7 +605,8 @@ void show_kernel_times( void )
 						show_secs, shown_by_all );
 
 		if ( mul_div_timing[0].counter * mul_div_timing[1].counter )
-			print_message( shown_by_all, "\t\t\tTotal mul_div time: %g ms.\n", mul_div_timing[0].time + mul_div_timing[1].time );
+			append_printed_message( shown_by_all, "\t\t\tTotal mul_div time: %g ms.\n", mul_div_timing[0].time +
+						mul_div_timing[1].time );
 
 
 		// --------------------
@@ -594,7 +620,7 @@ void show_kernel_times( void )
 						show_secs, shown_by_all );
 
 		if ( adjust_timing[0].counter * adjust_timing[1].counter )
-			print_message( shown_by_all, "\t\t\tTotal adjust time: %g ms.\n", adjust_timing[0].time + adjust_timing[1].time );
+			append_printed_message( shown_by_all, "\t\t\tTotal adjust time: %g ms.\n", adjust_timing[0].time + adjust_timing[1].time );
 
 		// -------------------
 
@@ -607,7 +633,7 @@ void show_kernel_times( void )
 						show_secs, shown_by_all );
 
 		if ( idx_max_timing[0].counter * idx_max_timing[1].counter )
-			print_message( shown_by_all, "\t\t\tTotal matrix_idx_max time: %g ms.\n",
+			append_printed_message( shown_by_all, "\t\t\tTotal matrix_idx_max time: %g ms.\n",
 					idx_max_timing[0].time + idx_max_timing[1].time );
 
 		// --------------------
@@ -620,7 +646,7 @@ void show_kernel_times( void )
 			print_elapsed_time("\t\tGPU sub (extended grid)", &sub_timing[1], sizeof(real), show_secs, shown_by_all );
 
 		if ( sub_timing[0].counter * sub_timing[1].counter )
-			print_message( shown_by_all, "\t\t\tTotal sub time: %g ms.\n", sub_timing[0].time + sub_timing[1].time );
+			append_printed_message( shown_by_all, "\t\t\tTotal sub time: %g ms.\n", sub_timing[0].time + sub_timing[1].time );
 
 	#endif	/* if defined( NMFGPU_PROFILING_KERNELS ) */
 
@@ -636,11 +662,9 @@ void show_transfer_times( void )
 
 	#if NMFGPU_PROFILING_TRANSF
 
-		bool const shown_by_all = false; // Messages shown by process 0 only.
-
 		bool const show_secs = true;	// Shows elapsed time in seconds.
 
-		print_message( shown_by_all, "\tData Transfers:\n" );
+		append_printed_message( shown_by_all, "\tData Transfers:\n" );
 
 		// --------------------
 
@@ -667,7 +691,7 @@ void show_transfer_times( void )
 							download_W_timing.time + download_H_timing.time +
 							download_classf_timing.time;
 
-		print_message( shown_by_all, "\tTotal data-transfers time: %g ms\n\n", total_data_transf );
+		append_printed_message( shown_by_all, "\tTotal data-transfers time: %g ms\n\n", total_data_transf );
 
 	#endif /* defined( NMFGPU_PROFILING_TRANSF ) */
 

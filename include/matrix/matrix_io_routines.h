@@ -183,7 +183,7 @@ struct tag_t new_tag( char *RESTRICT tokens, char **RESTRICT ptokens );
 /*
  * Returns an empty struct tag_t.
  */
-#define new_empty_tag() ( new_tag( NULL, NULL ) )
+struct tag_t new_empty_tag( void );
 
 ////////////////////////////////////////////////
 
@@ -253,11 +253,13 @@ int write_tag( FILE *RESTRICT file, struct tag_t tag, char const *RESTRICT const
  * Prints the given tag element in a single-line message.
  *
  * num_tokens: Number of tokens in memory (i.e., length(tag.ptokens[])).
+ *
  * pnumtokens: Number of tokens to be printed BEFORE the last one.
  *	That is, it prints tag.ptokens[ 0..(pnumtokens-1) ], followed by
  *	tag.ptokens[ num_tokens-1 ], if pnumtokens < num_tokens.
+ *
  * prefix: If 'true', prints <tokens_name> and <num_tokens> before the first token.
- *	Else, tokens_name is not referenced.
+ *	Otherwise, tokens_name is not referenced.
  *
  * pnumtokens must NOT be greater than num_tokens
  * If tag.tokens is NULL, nothing is printed and 'EXIT_SUCCESS' is returned.
@@ -267,7 +269,7 @@ int write_tag( FILE *RESTRICT file, struct tag_t tag, char const *RESTRICT const
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int show_tag( struct tag_t tag, char const *RESTRICT const tokens_name, index_t num_tokens, index_t pnumtokens, bool prefix, bool shown_by_all );
+int show_tag( struct tag_t tag, char const *RESTRICT const tokens_name, index_t num_tokens, index_t pnumtokens, bool prefix, bool all_processes );
 
 ////////////////////////////////////////////////
 
@@ -293,7 +295,14 @@ struct matrix_tags_t new_matrix_tags( char *RESTRICT name, struct tag_t headers,
 /*
  * Returns an empty struct matrix_tags_t.
  */
-#define new_empty_matrix_tags() ( new_matrix_tags( NULL, new_empty_tag(), new_empty_tag() ) )
+struct matrix_tags_t new_empty_matrix_tags( void );
+
+////////////////////////////////////////////////
+
+/*
+ * Swaps row labels and column headers.
+ */
+struct matrix_tags_t swap_matrix_tags( struct matrix_tags_t mt );
 
 ////////////////////////////////////////////////
 

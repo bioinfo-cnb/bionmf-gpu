@@ -38,6 +38,9 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
+ *	Additional information:
+ *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
+ *
  *	Debug / Testing:
  *		NMFGPU_FIXED_INIT: Uses "random" values generated from the fixed seed: FIXED_SEED.
  *
@@ -101,8 +104,8 @@
  * When the input matrix V is distributed among multiple devices each host thread processes
  * the following sets of rows and columns:
  *
- *	Vrow[ 1..NnP ][ 1..M ] <-- V[ bN..(bN+NnP) ][ 1..M ]	(i.e., NnP rows, starting from bN)
- *	Vcol[ 1..N ][ 1..MnP ] <-- V[ 1..N ][ bM..(bM+MnP) ]	(i.e., MnP columns, starting from bM)
+ *	Vrow[ 1..NpP ][ 1..M ] <-- V[ bN..(bN+NpP) ][ 1..M ]	(i.e., NpP rows, starting from bN)
+ *	Vcol[ 1..N ][ 1..MpP ] <-- V[ 1..N ][ bM..(bM+MpP) ]	(i.e., MpP columns, starting from bM)
  *
  * Such sets allow to update the corresponding rows and columns of W and H, respectively.
  *
@@ -116,8 +119,8 @@
  * If the input matrix (or the portion assigned to this device) is too large for the GPU memory,
  * it must be blockwise processed as follow:
  *
- *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(i.e., BLN <= NnP rows)
- *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ offset_Vcol..(offset_Vcol + BLMp) ]	(i.e., BLM <= MnP columns)
+ *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(i.e., BLN <= NpP rows)
+ *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ offset_Vcol..(offset_Vcol + BLMp) ]	(i.e., BLM <= MpP columns)
  *
  * Note that padded dimensions are denoted with the suffix 'p' (e.g., Mp, BLMp, etc).
  *
@@ -211,7 +214,7 @@ extern index_t num_processes;	 // Number of processes.
 
 // Matrix dimension limits (NOTE: they may be modified if the program is executed in a GPU device).
 extern index_t memory_alignment;		// Data alignment on memory.
-extern size_t matrix_max_nitems;		// Maximum number of items in a matrix.
+extern size_t matrix_max_num_items;		// Maximum number of items in a matrix.
 extern index_t matrix_max_pitch;		// Maximum multiple of <memory_alignment>.
 extern index_t matrix_max_non_padded_dim;	// Maximum non-padded dimension.
 
@@ -221,75 +224,147 @@ extern index_t M;	// Number of columns of input matrix V.
 extern index_t K;	// Factorization rank.
 
 // Dimensions for multi-process version:
-extern index_t NnP;	// Number of rows of V assigned to this process (NnP <= N).
-extern index_t MnP;	// Number of columns of V assigned to this process (MnP <= M).
+extern index_t NpP;	// Number of rows of V assigned to this process (NpP <= N).
+extern index_t MpP;	// Number of columns of V assigned to this process (MpP <= M).
+extern index_t bN;	// Starting row (bN <= NpP).
+extern index_t bM;	// Starting column (bM <= MpP).
+
 
 // Padded dimensions:
 extern index_t Mp;	// 'M' rounded up to the next multiple of <memory_alignment>.
 extern index_t Kp;	// 'K' rounded up to the next multiple of <memory_alignment>.
-extern index_t MnPp;	// 'MnP' rounded up to the next multiple of <memory_alignment> (MnPp <= Mp).
-
-// HOST matrices
-extern real *RESTRICT V;
-extern real *RESTRICT W;
-extern real *RESTRICT H;
+extern index_t MpPp;	// 'MpP' rounded up to the next multiple of <memory_alignment> (MpPp <= Mp).
 
 // Classification vectors.
 extern index_t *RESTRICT classification;
 extern index_t *RESTRICT last_classification;
 
-extern real *Vcol;	// Block of NnP rows from input matrix V.
-extern real *Vrow;	// Block of MnP columns from input matrix V.
+// HOST matrices
+extern real *RESTRICT W;
+extern real *RESTRICT H;
+extern real *RESTRICT Vcol;	// Block of NpP rows from input matrix V.
+extern real *Vrow;		// Block of MpP columns from input matrix V.
+
+
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent arguments.
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
  *
- * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
- * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
- * process 0, with no prefix at all.
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * In addition, if (num_processes > 1), the message is prefixed with a newline
+ * character ('\n') and the process ID.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
  *
- * The string is always printed to the standard output stream ('stdout'),
+ * The string is always printed to the standard output stream ('stdout').
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_message( bool shown_by_all, char const *RESTRICT const fmt, ... );
+int print_message( bool all_processes, char const *RESTRICT const fmt, ... );
 
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent arguments.
+ * Prints the given message, composed by the format string "fmt" and the subsequent
+ * arguments, if any.
  *
- * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
- * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
- * process 0, with no prefix at all.
+ * This method is intended for successive portions of a previously printed message,
+ * so it will never be prefixed, regardless of the arguments and the existing number
+ * of processes.
  *
- * The string is always printed to the standard error stream ('stderr'). The standard output
- * stream ('stdout') is previously flushed for all processes.
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ *
+ * The string is always printed to the standard output stream ('stdout').
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_error( bool shown_by_all, char const *RESTRICT const fmt, ... );
+int append_printed_message( bool all_processes, char const *RESTRICT const fmt, ... );
 
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent arguments.
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
  *
- * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
- * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
- * process 0, with no prefix at all.
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * In addition, if (num_processes > 1), the message is prefixed with a newline
+ * character ('\n') and the process ID.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
  *
- * The string is always printed to the standard error stream ('stderr'). The standard output
- * stream ('stdout') is previously flushed for all processes. Finally, if errnum is non-zero,
- * this function behaves similar to perror(3). That is, it appends to the message a colon,
- * the string given by strerror(errnum) and a newline character.
+ * The string is always printed to the standard error stream ('stderr'). The
+ * standard output stream ('stdout') is previously flushed for all processes.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_errnum( bool shown_by_all, int errnum, char const *RESTRICT const fmt, ... );
+int print_error( bool all_processes, char const *RESTRICT const fmt, ... );
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
+ *
+ * This method is intended for successive portions of a previously printed message,
+ * so it will never be prefixed, regardless of the arguments and the existing number
+ * of processes.
+ *
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ *
+ * The string is always printed to the standard error stream ('stderr'). The
+ * standard output stream ('stdout') is previously flushed for all processes.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int append_printed_error( bool all_processes, char const *RESTRICT const fmt, ... );
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
+ *
+ * This method is intended for successive portions of a previously printed message,
+ * so it will never be prefixed, regardless of the arguments and the existing number
+ * of processes.
+ *
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ *
+ * The string is always printed to the standard error stream ('stderr'). The
+ * standard output stream ('stdout') is previously flushed for all processes.
+ * Finally, if errnum is non-zero, this function behaves similar to perror(3).
+ * That is, it appends to the message a colon, the string given by strerror(errnum)
+ * and a newline character.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int append_printed_errnum( bool all_processes, int errnum, char const *RESTRICT const fmt, ... );
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
+ *
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * In addition, if (num_processes > 1), the message is prefixed with a newline
+ * character ('\n') and the process ID.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ *
+ * The string is always printed to the standard error stream ('stderr'). The
+ * standard output stream ('stdout') is previously flushed for all processes.
+ * Finally, if errnum is non-zero, this function behaves similar to perror(3).
+ * That is, it appends to the message a colon, the string given by strerror(errnum)
+ * and a newline character.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int print_errnum( bool all_processes, int errnum, char const *RESTRICT const fmt, ... );
 
 ////////////////////////////////////////////////
 
@@ -342,34 +417,71 @@ int print_nmf_gpu_help( char const *RESTRICT const execname );
  * alignment and dimension limit.
  *
  * The resulting values are stored in the global variables "matrix_max_pitch",
- * "matrix_max_non_padded_dim" and "matrix_max_nitems". In addition, the first
+ * "matrix_max_non_padded_dim" and "matrix_max_num_items". In addition, the first
  * and third variables are rounded down to a multiple of the given data alignment.
  *
  * data_alignment:
  *		If set to '0', uses the default padding, <DEFAULT_MEMORY_ALIGNMENT>.
- *		Else, if set to '1', disables padding.
+ *		If set to '1', disables padding.
  *		Otherwise, it must be a positive value expressed in number of
  *		real-type items (not in bytes).
  *
  * max_dimension:
- *		If greater than or equal to <data_alignment>, uses the given
- *		value as an additional upper limit for matrix dimensions. That
- *		is, the result will be the minimum between the value calculated
- *		from "data_alignment" and <max_dimension>.
+ *		If greater than or equal to the resulting data alignment (i.e.,
+ *		either <data_alignment> or <DEFAULT_MEMORY_ALIGNMENT>), uses the
+ *		given value as an additional upper limit for matrix dimensions.
+ *		That is, the result will be the minimum between <max_dimension>,
+ *		and the value calculated from the data alignment and the maximum
+ *		number of items.
  *		On "matrix_max_pitch", the result is subsequently rounded down
- *		to a multiple of <data_alignment>.
+ *		to a multiple of the data alignment.
  *		It is ignored if set to a non-negative value less than
  *		<data_alignment>.
- *		Default value: 'IDX_MAX'.
+ *
+ * max_nitems:
+ *		If set to a positive value, forces the maximum number of items
+ *		for a data matrix. Please note that this value HAS PRECEDENCE
+ *		over the resulting maximum dimensions. However, it is IGNORED
+ *		if set to a value less than the resulting data alignment.
+ *		Finally, it must be expressed in number of items, not in bytes.
  *
  * WARNING:
  *	This function must be called *BEFORE* loading any input matrix. Otherwise,
  *	no padding will be set.
  *
- * Returns EXIT_SUCCESS, or EXIT_FAILURE on invalid input values (i.e.,
- * data_alignment < 0, or max_dimension < 0).
+ * Returns EXIT_SUCCESS, or EXIT_FAILURE on negative input values.
  */
-int set_matrix_limits( index_t data_alignment, index_t max_dimension );
+int set_matrix_limits( index_t data_alignment, index_t max_dimension, size_t max_nitems );
+
+////////////////////////////////////////////////
+
+/*
+ * Sets the maximum dimensions and number of items, for the DEFAULT
+ * data alignment (<DEFAULT_MEMORY_ALIGNMENT>).
+ *
+ * The resulting values are stored in the global variables "matrix_max_pitch",
+ * "matrix_max_non_padded_dim" and "matrix_max_num_items". In addition, the first
+ * and third variables are rounded down to a multiple of the given data alignment.
+ *
+ * Returns EXIT_SUCCESS.
+ */
+int set_default_matrix_limits( void );
+
+////////////////////////////////////////////////
+
+/*
+ * Computes the padded dimension of "dim". That is, the next multiple of <memory_alignment>.
+ *
+ * Computes the padded dimension of "dim".
+ *
+ * Returns <pitch>, such that:
+ *	dim <= pitch
+ *	pitch is a multiple of <memory_alignment>
+ *
+ * WARNING:
+ *	Global variable "memory_alignment" must have been properly initialized.
+ */
+index_t get_padding( index_t dim );
 
 ////////////////////////////////////////////////
 
@@ -387,46 +499,27 @@ int check_arguments( int argc, char const *RESTRICT *RESTRICT argv, bool *RESTRI
 ////////////////////////////////////////////////
 
 /*
- * Computes the padded dimension of "dim". That is, the next multiple of <memory_alignment>.
- *
- * Returns:
- *	+ <dim>, if it was already a multiple of <memory_alignment>.
- *	+ The next multiple, if "dim" was not a multiple of <memory_alignment>,
- *	  and the former is not greater than <matrix_max_pitch>.
- *	+ <matrix_max_pitch>, if "dim" is greater than or equal to.
+ * Computes the lowest power-of-two >= x.
  *
  * WARNING:
- *	Padding must have been properly initialized with initialize_padding() function.
+ *	x <= floor(SIZE_MAX / 2)
+ *
+ * Returns:
+ *	<x>, if it is already a power of two, or x == 0
+ *	The next power of two, if "x" is not a power of two.
  */
-index_t get_padding( index_t dim );
+size_t next_power_2( size_t x );
 
 ////////////////////////////////////////////////
 
 /*
- * Computes the lowest power of 2 >= x.
- *
- * WARNING:
- *	0 <= x <= (IDX_MAX+1)/2
+ * Computes the highest power-of-two <= x.
  *
  * Returns:
- *	x, if it is already a power of 2, or x == 0
- *	The next power of 2, if "x" is not a power of 2.
+ *	<x>, if it is already a power of two, or x == 0
+ *	The previous power of two, if "x" is not a power of two.
  */
-index_t next_power_2( index_t x );
-
-////////////////////////////////////////////////
-
-/*
- * Computes the highest power of 2 <= x.
- *
- * WARNING:
- *	x >= 0
- *
- * Returns:
- *	x, if it is already a power of 2, or x == 0
- *	The previous power of 2, if "x" is not a power of 2.
- */
-index_t prev_power_2( index_t x );
+size_t prev_power_2( size_t x );
 
 ////////////////////////////////////////////////
 

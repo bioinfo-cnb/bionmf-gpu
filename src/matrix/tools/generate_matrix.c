@@ -43,7 +43,7 @@
  *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
  *
  *	CPU timing:
- *		NMFGPU_PROFILING_GLOBAL: Computess total elapsed time.
+ *		NMFGPU_PROFILING_GLOBAL: Computes total elapsed time.
  *
  *	Debug / Testing:
  *		NMFGPU_FIXED_INIT: Uses "random" values generated from a fixed seed (defined in common.h).
@@ -130,6 +130,19 @@
 	#define DEFAULT_MINRAND ( R_MIN )
 #endif
 
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* Global variables. */
+
+// Information and/or error messages shown by all processes.
+#if NMFGPU_DEBUG
+	static bool const dbg_shown_by_all = false;	// Information or error messages on debug.
+#endif
+static bool const shown_by_all = false;			// Information messages in non-debug mode.
+static bool const sys_error_shown_by_all = false;	// System error messages.
+static bool const error_shown_by_all = false;		// Error messages on invalid arguments or I/O data.
+
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
@@ -143,7 +156,7 @@ static int print_generate_matrix_help( char const *restrict const execname )
 
 	// Checks for NULL parameters
 	if ( ! execname ) {
-		print_errnum( false, EFAULT, "\nprint_generate_matrix_help( execname )" );
+		print_errnum( error_shown_by_all, EFAULT, "\nprint_generate_matrix_help( execname )" );
 		return EXIT_FAILURE;
 	}
 
@@ -151,14 +164,14 @@ static int print_generate_matrix_help( char const *restrict const execname )
 
 	// ---------------------------
 
-	status = print_message( false, "\nTool to generate (in CPU) a matrix with random values\n\n"
+	status = print_message( shown_by_all, "\nTool to generate (in CPU) a matrix with random values\n\n"
 				"Usage:\n\t%s <filename> <rows> <columns> [ -e <native_format> ] [ <max_value> ]\n"
 				"\t%s -h\n\n", execname, execname );
 
 	if ( help_matrix() != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
 
-	if ( print_message( false, "\nNote: Some of the previous options are read for compatibility reasons, "
+	if ( append_printed_message( shown_by_all, "\nNote: Some of the previous options are read for compatibility reasons, "
 				"but they are ignored by the program.\n\n"
 				"<rows> <columns>\n\tOutput matrix dimensions (both mandatory if 'help' is not requested).\n"
 				"\tNote that <rows> x <columns> must be less than, or equal to, %" PRI_IDX ".\n\n"
@@ -182,15 +195,20 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 					index_t *restrict nrows, index_t *restrict ncols, real *restrict max_value )
 {
 
+	// Limits on matrix dimensions
+	size_t const max_num_items = matrix_max_num_items;
+	index_t const max_pitch = matrix_max_pitch;
+	index_t const max_non_padded_dim = matrix_max_non_padded_dim;
+
+
 	// Checks for NULL parameters
 	if ( ! ( ( argc > 0 ) * (uintptr_t) argv * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) max_value ) ) {
-		bool const l_shown_by_all = false;
 		int const errnum = EFAULT;
-		if ( argc <= 0 ) print_errnum( l_shown_by_all, errnum, "\nncheck_additional_arguments( argc=%i )", argc );
-		if ( ! argv )	print_errnum( l_shown_by_all, errnum, "\ncheck_additional_arguments( argv )" );
-		if ( ! nrows )	print_errnum( l_shown_by_all, errnum, "\ncheck_additional_arguments( nrows )" );
-		if ( ! ncols )	print_errnum( l_shown_by_all, errnum, "\ncheck_additional_arguments( ncols )" );
-		if ( ! max_value ) print_errnum( l_shown_by_all, errnum, "\ncheck_additional_arguments( max_value )" );
+		if ( argc <= 1 ) print_errnum( error_shown_by_all, errnum, "\nncheck_additional_arguments( argc=%i )", argc );
+		if ( ! argv )	print_errnum( error_shown_by_all, errnum, "\ncheck_additional_arguments( argv )" );
+		if ( ! nrows )	print_errnum( error_shown_by_all, errnum, "\ncheck_additional_arguments( nrows )" );
+		if ( ! ncols )	print_errnum( error_shown_by_all, errnum, "\ncheck_additional_arguments( ncols )" );
+		if ( ! max_value ) print_errnum( error_shown_by_all, errnum, "\ncheck_additional_arguments( max_value )" );
 		return EXIT_FAILURE;
 	}
 
@@ -202,9 +220,9 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 
 	// ---------------------------
 
-	// Fails if no more arguments
+	// Fails if there are not more arguments
 	if ( idx_other_args >= (index_t) (argc-1) ) {
-		print_error( false, "\nError: No matrix dimensions. Not enough arguments.\nSee help (option '-h').\n" );
+		print_error( error_shown_by_all, "\nError: No matrix dimensions. Not enough arguments.\nSee help (option '-h').\n" );
 		return EXIT_FAILURE;
 	}
 
@@ -215,9 +233,9 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 		errno = 0;
 		char *endptr = NULL;
 		intmax_t const val = strtoimax( argv[idx_other_args], &endptr, 10 );
-		if ( (*endptr != '\0') + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) MATRIX_MAX_DIMENSION) ) {
-			print_error( false, "\nError. Invalid number of rows: '%s'.\nIt must be a positive integer "
-					"less than or equal to %" PRI_IDX ".\n", argv[idx_other_args], MATRIX_MAX_DIMENSION );
+		if ( (*endptr != '\0') + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) max_non_padded_dim) ) {
+			print_errnum( error_shown_by_all, errno, "Error. Invalid number of rows: '%s'.\nIt must be a positive integer "
+					"less than or equal to %" PRI_IDX ".\n", argv[idx_other_args], max_non_padded_dim );
 			return EXIT_FAILURE;
 		}
 		l_nrows = (index_t) val;
@@ -229,9 +247,9 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 		errno = 0;
 		char *endptr = NULL;
 		intmax_t const val = strtoimax( argv[idx_other_args], &endptr, 10 );
-		if ( (*endptr != '\0') + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) MATRIX_MAX_DIMENSION) ) {
-			print_error( false, "\nError. Invalid number of columns: '%s'.\nIt must be a positive integer "
-					"less than or equal to %" PRI_IDX ".\n", argv[idx_other_args], MATRIX_MAX_DIMENSION );
+		if ( (*endptr != '\0') + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) max_pitch) ) {
+			print_errnum( error_shown_by_all, errno, "Error. Invalid number of columns: '%s'.\nIt must be a positive integer "
+					"less than or equal to %" PRI_IDX ".\n", argv[idx_other_args], max_pitch );
 			return EXIT_FAILURE;
 		}
 		l_ncols = (index_t) val;
@@ -241,10 +259,10 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 
 	// Checks number of items.
 	{
-		uintmax_t const nitems = ((uintmax_t) l_nrows * (uintmax_t) l_ncols);
-		if ( nitems > (uintmax_t) MATRIX_MAX_ITEMS ) {
-			print_error( false, "\nError: output matrix will be too large. The number of items must be "
-					"less than, or equal to, %" PRI_IDX ".\n", MATRIX_MAX_ITEMS );
+		uintmax_t const nitems = (uintmax_t) l_nrows * (uintmax_t) l_ncols;
+		if ( nitems > (uintmax_t) max_num_items ) {
+			print_error( error_shown_by_all, "\nError: output matrix will be too large. The number of items must be "
+					"less than, or equal to, %" PRI_IDX ".\n", max_num_items );
 			return EXIT_FAILURE;
 		}
 	}
@@ -257,11 +275,11 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 		char *endptr = NULL;
 		l_max_value = STRTOREAL( argv[idx_other_args], &endptr );
 		if ( (*endptr != '\0') + errno + (! isfinite(l_max_value)) ) {
-			print_errnum( false, errno, "\nError: invalid maximum value: '%s'", argv[idx_other_args] );
+			print_errnum( error_shown_by_all, errno, "\nError: invalid maximum value: '%s'", argv[idx_other_args] );
 			return EXIT_FAILURE;
 		}
 		if ( islessequal( l_max_value, DEFAULT_MINRAND ) + isgreaterequal( l_max_value, R_MAX ) ) {
-			print_errnum( false, errno, "\nError: invalid maximum value: %g\nValid values are in range (%g .. %g).\n",
+			print_errnum( error_shown_by_all, errno, "\nError: invalid maximum value: %g\nValid values are in range (%g .. %g).\n",
 					l_max_value, DEFAULT_MINRAND, R_MAX );
 			return EXIT_FAILURE;
 		}
@@ -288,6 +306,12 @@ int main( int argc, char const *restrict *restrict argv )
 		// Elapsed time
 		struct timeval t_tv;
 	#endif
+
+	process_id = 0;		// Global variables.
+	num_processes = 1;
+
+	// Default limits for matrix dimensions.
+	set_default_matrix_limits();
 
 	int status = EXIT_SUCCESS;
 
@@ -330,17 +354,20 @@ int main( int argc, char const *restrict *restrict argv )
 	if ( check_additional_arguments( argc, argv, idx_other_args, &nrows, &ncols, &max_value ) != EXIT_SUCCESS )
 		return EXIT_FAILURE;
 
+	index_t const pitch = get_padding( ncols );
+
 	// ----------------------------------------
 
 	// Generates the output matrix
-	size_t nitems = nrows * ncols;
+	size_t const nitems = (size_t) nrows * (size_t) ncols;
+	size_t const nitems_padding = (size_t) nrows * (size_t) pitch;
 
-	print_message( false, "\nGenerating a %" PRI_IDX "-by-%" PRI_IDX " data matrix (%zu"
+	print_message( shown_by_all, "\nGenerating a %" PRI_IDX "-by-%" PRI_IDX " data matrix (%zu"
 			" items), with random values in range [0 .. %g]...\n", nrows, ncols, nitems, max_value );
 
 	// Warns if it is a single-row/column matrix.
 	if ( (nrows == 1) + (ncols == 1) )
-		print_error( false, "\nNote, however, that row/column vectors are not a valid input for the NMF algorithm.\n" );
+		append_printed_error( shown_by_all, "\nNote, however, that (row or column) vectors are not a valid input for the NMF algorithm.\n" );
 
 	// ----------------------------------------
 
@@ -351,9 +378,9 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// ----------------------------------------
 
-	real *restrict const matrix = (real *restrict) malloc( nitems * sizeof(real) );
+	real *restrict const matrix = (real *restrict) malloc( nitems_padding * sizeof(real) );
 	if ( ! matrix ) {
-		print_errnum( true, errno, "malloc(matrix, items=%zu)", nitems );
+		print_errnum( sys_error_shown_by_all, errno, "malloc(matrix, items=%zu, %zu with padding)", nitems, nitems_padding );
 		return EXIT_FAILURE;
 	}
 
@@ -366,7 +393,7 @@ int main( int argc, char const *restrict *restrict argv )
 	real const denominator = (real) RAND_MAX;
 
 	real *pmatrix = matrix;
-	for ( index_t i=0 ; i < nrows ; i++, pmatrix += ncols ) {
+	for ( index_t i=0 ; i < nrows ; i++, pmatrix += pitch ) {
 		real *pmatrix_r = pmatrix;
 		for ( index_t j=0 ; j < ncols ; j++, pmatrix_r++ ) {
 			real const numerator = (real) random();
@@ -380,7 +407,11 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// Saves the output matrix.
 
-	status = matrix_save( filename, save_bin, matrix, nrows, ncols, false, NULL, ncols, true ); // no matrix transposing, be verbose
+	bool const transpose = false;
+	bool const verbose = true;
+	struct matrix_tags_t const mt = new_empty_matrix_tags();
+
+	status = matrix_save( filename, save_bin, matrix, nrows, ncols, pitch, transpose, &mt, verbose );
 
 	free( matrix );
 
@@ -395,7 +426,7 @@ int main( int argc, char const *restrict *restrict argv )
 			//struct timespec ftv, etv;
 
 			//if ( clock_gettime( CLOCK_REALTIME, &ftv) ) {
-				//print_errnum( true, errno, "clock_gettime(ftv)" );
+				//print_errnum( error_shown_by_all, errno, "clock_gettime(ftv)" );
 				//return EXIT_FAILURE;
 			//}
 
@@ -407,7 +438,7 @@ int main( int argc, char const *restrict *restrict argv )
 			timersub( &t_ftv, &t_tv, &t_etv );	// etv = ftv - tv
 			float const total_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06f );
 
-			print_message( false, "\nDone in %g seconds.\n", total_time );
+			print_message( shown_by_all, "\nDone in %g seconds.\n", total_time );
 		}
 	#endif
 

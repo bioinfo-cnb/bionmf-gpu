@@ -69,7 +69,9 @@
 // ---------------------------------------------
 // ---------------------------------------------
 
-/* Generic index_t-related constants */
+/* Constants */
+
+// Generic index_t-related constants
 
 // Maximum value.
 #ifndef IDX_MAX
@@ -98,13 +100,24 @@
 	#endif
 #endif
 
-// Conversion format from string for the scanf(3) family of functions.
+/* Conversion format from string for the scanf(3) family of functions.
+ * WARNING: Please, do NOT set to longer than 6 characters.
+ */
 #ifndef SCN_IDX
 	#if NMFGPU_UINDEX
 		#define SCN_IDX "u"
 	#else
 		#define SCN_IDX "d"
 	#endif
+#endif
+
+// ---------------------------------------------
+
+// gpu_size_t-related constants
+
+// Maximum value
+#ifndef GPUSIZE_MAX
+	#define GPUSIZE_MAX ( IDX_MAX )
 #endif
 
 // ---------------------------------------------

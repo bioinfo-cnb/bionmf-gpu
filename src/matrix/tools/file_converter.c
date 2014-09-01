@@ -109,6 +109,19 @@
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
+/* Global variables. */
+
+// Information and/or error messages shown by all processes.
+#if NMFGPU_DEBUG
+	static bool const dbg_shown_by_all = false;	// Information or error messages on debug.
+#endif
+static bool const shown_by_all = false;			// Information messages in non-debug mode.
+static bool const sys_error_shown_by_all = false;	// System error messages.
+static bool const error_shown_by_all = false;		// Error messages on invalid arguments or I/O data.
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
+
 /*
  * Prints all arguments to the specified file.
  *
@@ -119,7 +132,7 @@ static int print_file_converter_help( char const *restrict const execname )
 
 	// Checks for NULL parameters
 	if ( ! execname ) {
-		print_errnum( false, EFAULT, "\nprint_file_converter_help( execname )" );
+		print_errnum( error_shown_by_all, EFAULT, "\nprint_file_converter_help( execname )" );
 		return EXIT_FAILURE;
 	}
 
@@ -127,14 +140,14 @@ static int print_file_converter_help( char const *restrict const execname )
 
 	// ---------------------------
 
-	status = print_message( false, "\n\t<< ASCII-Binary file converter >>\n\n"
+	status = print_message( shown_by_all, "\n\t<< ASCII-Binary file converter >>\n\n"
 				"Usage:\n\t%s <filename> [ -b <native_format> ] [ -cr ] [ -e <native_format> ]\n\t%s -h\n\n",
 				execname, execname );
 
 	if ( help_matrix() != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
 
-	if ( print_message( false, "\n-h,-H\tPrints this help message.\n\n" ) != EXIT_SUCCESS )
+	if ( append_printed_message( shown_by_all, "\n-h,-H\tPrints this help message.\n\n" ) != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
 
 	return status;
@@ -155,10 +168,8 @@ int main( int argc, char const *restrict *restrict argv )
 	process_id = 0;		// Global variables.
 	num_processes = 1;
 
-	/* Default limits for matrix dimensions.
-	 * They may be adjusted later, at device initialization.
-	 */
-	set_matrix_limits( 0 );
+	// Default limits for matrix dimensions.
+	set_default_matrix_limits();
 
 	int status = EXIT_SUCCESS;
 
@@ -199,6 +210,8 @@ int main( int argc, char const *restrict *restrict argv )
 	index_t nrows = 0, ncols = 0, pitch = 0;
 	struct matrix_tags_t mt = new_empty_matrix_tags();
 
+	bool const transpose = false;
+
 	// --------------------------------------------------------------------- //
 
 	#if NMFGPU_PROFILING_GLOBAL
@@ -212,89 +225,82 @@ int main( int argc, char const *restrict *restrict argv )
 
 	status = matrix_load( filename, numeric_hdrs, numeric_lbls, is_bin, &matrix, &nrows, &ncols, &pitch, &mt );
 	if ( status != EXIT_SUCCESS ) {
-		print_error( false, "Error reading '%s'\n", filename );
+		print_error( error_shown_by_all, "Error reading '%s'\n", filename );
 		return EXIT_FAILURE;
 	}
 
 	// --------------------------------------------------------------------- //
 
 	#if NMFGPU_DEBUG
-		// Shows matrix content: No matrix transposing; process 0 only.
-		status = matrix_show( matrix, nrows, ncols, pitch, false, false, &mt );
+	{
+		// Shows matrix content.
+		bool const real_data = true;
+
+		status = matrix_show( matrix, nrows, ncols, pitch, real_data, transpose, dbg_shown_by_all, &mt );
 		if ( status != EXIT_SUCCESS ) {
-			print_error( false, "Error showing '%s'\n", filename );
+			print_error( error_shown_by_all, "Error showing '%s'\n", filename );
 			matrix_clean( matrix, mt );
 			return EXIT_FAILURE;
 		}
+	}
 	#endif
 
 	// --------------------------------------------------------------------- //
 
-
-	// Output filename.
+	/* Output filename.
+	 *
+	 * save_bin: Saves output matrix to a binary file.
+	 *	== 0: Disabled. Saves the file as ASCII text.
+	 *	== 1: Uses "non-native" format (i.e., double-precision data, and "unsigned int" for dimensions).
+	 *	 > 1: Uses "native" or raw format (i.e., the compiled types for matrix data and dimensions).
+	 */
 
 	char *restrict const filename_str = malloc( (strlen(filename) + 16) * sizeof(char) );
 	if ( ! filename_str ) {
-		print_errnum( true, errno, "Error setting output filename: malloc(filename_str)" );
+		print_errnum( sys_error_shown_by_all,errno, "Error setting output filename: malloc(filename_str)" );
 		matrix_clean( matrix, mt );
 		return EXIT_FAILURE;
 	}
+
 	errno = 0;	// Resets errno.
+	int const conv = sprintf( filename_str, "%s.%s", filename, ( (save_bin > 1) ? ("native.dat") : ( save_bin ? "dat" : "txt" ) ) );
 
-	// Saves output as "native" binary.
-	if ( save_bin > 1 ) {
-		if ( sprintf(filename_str, "%s.native.dat", filename) <= 0 )
-			status = EXIT_FAILURE;
-	}
-
-	// Saves output as (non-"native") binary.
-	else if ( save_bin ) {
-		if ( sprintf(filename_str, "%s.dat", filename) <= 0 )
-			status = EXIT_FAILURE;
-	}
-
-	// Saves output as ASCII text.
-	else if ( sprintf(filename_str, "%s.txt", filename) <= 0 )
-		status = EXIT_FAILURE;
-
-
-	if ( status != EXIT_SUCCESS ) {
-		print_errnum( true, errno, "Error setting output filename (sprintf)", filename );
+	if ( conv <= 0 ) {
+		print_errnum( sys_error_shown_by_all,errno, "Error setting output filename (sprintf)", filename );
 		free( filename_str ); matrix_clean( matrix, mt );
 		return EXIT_FAILURE;
 	}
 
-	print_message( false, "\nOutput file: %s\n", filename_str );
+	print_message( shown_by_all, "\nOutput file: %s\n", filename_str );
 
 	// --------------------------------------------------------------------- //
 
 	// Saves the file.
 
-	status = matrix_save( filename_str, save_bin, matrix, nrows, ncols, false, &mt, pitch, true ); // no matrix transposing ; be verbose
+	bool const verbose = true;
+
+	status = matrix_save( filename_str, save_bin, (real const *restrict) matrix, nrows, ncols, pitch, transpose, &mt, verbose );
 
 	free( filename_str );
 
 	matrix_clean( matrix, mt );
 
-	if ( status != EXIT_SUCCESS )
-		return EXIT_FAILURE;
-
 	// --------------------------------------------------------------------- //
 
 	#if NMFGPU_PROFILING_GLOBAL
 		// Elapsed time
-		{
+		if ( status == EXIT_SUCCESS ) {
 			struct timeval t_ftv, t_etv;
 			gettimeofday( &t_ftv, NULL );
 			timersub( &t_ftv, &t_tv, &t_etv );	// etv = ftv - tv
 			float const total_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06f );
-			print_message( false, "\nDone in %g seconds.\n", total_time );
+			print_message( shown_by_all, "\nDone in %g seconds.\n", total_time );
 		}
 	#endif
 
 	// --------------------------------------------------------------------- //
 
-	return EXIT_SUCCESS;
+	return status;
 
 } // main
 

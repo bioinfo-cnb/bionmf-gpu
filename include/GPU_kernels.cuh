@@ -62,6 +62,16 @@
 
 /* Constants */
 
+/* Data type used for array length on the GPU (i.e., the equivalent to "size_t",
+ * but in number of items, not in bytes). However, it is recommended to currently
+ * keep it as an alias of 'index_t' (actually, it should be 'unsigned int', but
+ * the former avoids possible signed-unsigned type-casting operations).
+ *
+ * NOTE: Keep in sync with the GPUSIZE_MAX constant defined at "GPU_kernels.cuh".
+ */
+
+// ---------------------------------------------
+
 // Number of items simultaneously read from global memory by each thread in reduce_to_row()
 #if REDUCE_TO_ROW__ITEMS_PER_THREAD <= 0
 
@@ -82,6 +92,8 @@
 	 */
 	#define REDUCE_TO_ROW__ITEMS_PER_THREAD (4)
 #endif
+
+// ---------------------------------------------
 
 // Number of items simultaneously read from global memory by each thread in div_sub()
 #if DIV_SUB__ITEMS_PER_THREAD <= 0
@@ -107,6 +119,7 @@
 	#define DIV_SUB__ITEMS_PER_THREAD (5)
 #endif
 
+// ---------------------------------------------
 
 // Number of items simultaneously read from global memory by each thread in mul_div()
 #if MUL_DIV__ITEMS_PER_THREAD <= 0
@@ -132,6 +145,7 @@
 	#define MUL_DIV__ITEMS_PER_THREAD (5)
 #endif
 
+// ---------------------------------------------
 
 // Number of items simultaneously read from global memory by each thread in adjust()
 #if ADJUST__ITEMS_PER_THREAD <= 0
@@ -154,6 +168,8 @@
 	 */
 	#define ADJUST__ITEMS_PER_THREAD (4)
 #endif
+
+// ---------------------------------------------
 
 // Number of items simultaneously read from global memory by each thread in idx_max()
 #if IDX_MAX__ITEMS_PER_THREAD < 2

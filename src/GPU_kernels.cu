@@ -88,26 +88,24 @@
 #endif
 
 // ---------------------------------------------
-
-/* Data type used for array length on the GPU (i.e., the equivalent to "size_t",
- * but in number of items, not in bytes). However it is recommended to currently
- * keep it as an alias of 'index_t' (actually, it should be 'unsigned int', but
- * the former avoids possible signed-unsigned type-casting operations).
- */
-typedef index_t gpu_size_t;
-// ALERT: TODO?	#define GPU_MAX_ITEMS
-
-// ---------------------------------------------
 // ---------------------------------------------
 
 /* DEVICE-ONLY GLOBAL Variables */
 
-#if (! defined(__CUDA_ARCH__)) || (__CUDA_ARCH__ >= 120)	/* Compute Capability >= 1.2 */
+#if (! __CUDA_ARCH__) || (__CUDA_ARCH__ >= 120)	/* Compute Capability >= 1.2 */
 
-	/* Global variable used in kernel_reduce_to_row().
-	 *	Please see the threadFenceReduction example in CUDA Samples for details.
-	 */
-	__device__ unsigned int retirement_counter = 0U;
+	// HACK: Trick to avoid useless warnings...
+	#if __CUDA_ARCH__ >= 120
+		static
+	#else
+		extern
+	#endif
+
+		/* Global variable used in kernel_reduce_to_row().
+		 *	Please see the threadFenceReduction example in CUDA Samples for details.
+		 */
+		__device__ unsigned int retirement_counter = 0U;
+
 #endif
 
 // ---------------------------------------------
@@ -489,7 +487,7 @@ static __device__ real real_shfl_xor( real variable, index_t laneMask )
  * Returns the sum of the corresponding column. That is, sum(d_A[...][tx]).
  */
 template < bool ext_grid, bool single_Blk, index_t items_per_thread, bool fast_prod >
-static __device__ real reduce_gmem_to_row( real const *__restrict__ d_A, gpu_size_t matrix_size, index_t bs, index_t offset )
+static __device__ real reduce_gmem_to_row( real const *__restrict__ d_A, size_t matrix_size, index_t bs, index_t offset )
 {
 
 	// Resulting value.
@@ -538,7 +536,7 @@ static __device__ real reduce_gmem_to_row( real const *__restrict__ d_A, gpu_siz
 		 */
 
 		// Index to elements.
-		gpu_size_t elemIdx[ num_items ];
+		size_t elemIdx[ num_items ];
 
 		// "Active" block size.
 		index_t const act_bs = idxmul<true>( num_items, bs );	// num_items * (blockDim.y * blockDim.x)
@@ -561,7 +559,7 @@ static __device__ real reduce_gmem_to_row( real const *__restrict__ d_A, gpu_siz
 
 		// First element.
 		elemIdx[ 0 ] = idxmul<true>( by, gdx ) + bx;
-		elemIdx[ 0 ] = idxmul<fast_product>( elemIdx[ 0 ], act_bs ) + offset;
+		elemIdx[ 0 ] = (size_t) idxmul<fast_product>( elemIdx[ 0 ], act_bs ) + offset;
 
 		// Rest of elements.
 		#pragma unroll
@@ -881,7 +879,7 @@ static __device__ real reduce_shmem_to_row( index_t bs, index_t offset, real cur
  *	block_height != 1: block_width * block_height * sizeof(real) bytes.
  *	Else:
  *		multi-blocks mode:   sizeof(bool) bytes.
- *		Else (single block): 0 bytes.
+ *		Else (i.e., single block): 0 bytes.
  *
  * WARNING:
  *
@@ -922,7 +920,7 @@ static __device__ real reduce_shmem_to_row( index_t bs, index_t offset, real cur
  *				maxGridSizeX == maxGridSizeY < 2**16
  */
 template < bool ext_grid, bool single_Blk, index_t block_width, index_t block_height, index_t items_per_thread, bool fast_prod >
-static __global__ void kernel_reduce_to_row( real const *__restrict__ d_A, gpu_size_t matrix_size, real *__restrict__ d_Tmp,
+static __global__ void kernel_reduce_to_row( real const *__restrict__ d_A, size_t matrix_size, real *__restrict__ d_Tmp,
 						real *__restrict__ d_C)
 {
 
@@ -1003,7 +1001,7 @@ static __global__ void kernel_reduce_to_row( real const *__restrict__ d_A, gpu_s
 			 */
 			{
 				// Index to store the resulting value:
-				gpu_size_t idx = idxmul<true>( by, gdx ) + bx;
+				size_t idx = idxmul<true>( by, gdx ) + bx;
 				idx = idxmul< fast_product >( idx, bdx ) + tx;
 
 				if ( (bdy == 1) || (offset < bdx) )	// if ( ty == 0 )
@@ -1045,7 +1043,7 @@ static __global__ void kernel_reduce_to_row( real const *__restrict__ d_A, gpu_s
 				index_t const num_blocks = idxmul<true>( gdy, gdx );
 
 				// Size of current partial sum in d_Tmp. It is > bdx
-				gpu_size_t const d_Tmp_size = idxmul< fast_product >( num_blocks, bdx );
+				size_t const d_Tmp_size = idxmul< fast_product >( num_blocks, bdx );
 
 				// ------------------------------------------------
 
@@ -1145,7 +1143,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 	index_t const grid_extension = dimGrid.y;
 
 	// Matrix size
-	size_t const matrix_size = height * pitch;
+	size_t const matrix_size = (size_t) height * (size_t) pitch;
 
 	// Number of loads from global memory performed by each thread at a time.
 	index_t const num_items = REDUCE_TO_ROW__ITEMS_PER_THREAD;
@@ -1160,12 +1158,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 	 *
 	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
 	 */
-	bool fast_product = true;
-	if ( computeCapability == 1 ) {
-		size_t const num_blocks = (size_t) grid_extension * (size_t) grid_length;
-		if ( num_blocks >= (1 << 24) )
-			fast_product = false;
-	}
+	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 
 	// --------------------------------
 
@@ -1204,7 +1197,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 				default: {
 
 					dim3 const dimBlock( pitch, block_height );
-					size_t shmem_size = pitch * block_height * sizeof(real);
+					size_t const shmem_size = pitch * block_height * sizeof(real);
 					index_t const blk_height = 0;
 
 					bool const fast_prod = true;
@@ -1222,7 +1215,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 				case 8: {
 					index_t const blk_height = 8;
 					dim3 const dimBlock( pitch, blk_height );
-					size_t shmem_size = pitch * blk_height * sizeof(real);
+					size_t const shmem_size = pitch * blk_height * sizeof(real);
 
 					if ( grid_extension > 1 ) {
 
@@ -1248,7 +1241,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 				case 4: {
 					index_t const blk_height = 4;
 					dim3 const dimBlock( pitch, blk_height );
-					size_t shmem_size = pitch * blk_height * sizeof(real);
+					size_t const shmem_size = pitch * blk_height * sizeof(real);
 
 					if ( grid_extension > 1 ) {
 
@@ -1273,7 +1266,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 				case 2: {
 					index_t const blk_height = 2;
 					dim3 const dimBlock( pitch, blk_height );
-					size_t shmem_size = pitch * blk_height * sizeof(real);
+					size_t const shmem_size = pitch * blk_height * sizeof(real);
 
 					if ( grid_extension > 1 ) {
 
@@ -1297,14 +1290,12 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 
 				/* NOTE:
 				 *	block_height == 1 is referred as "'single-row' mode".
-				 *	In multi-blocks mode (i.e., grid_length > 1), shared memory is allocated for
-				 *	just a single boolean value.
-				 *	Otherwise (i.e., in "single-block mode"), no shared memory is used,
+				 *	Shared memory is allocated for just a single boolean value.
 				 */
 				case 1: {
 					index_t const blk_height = 1;
 					dim3 const dimBlock( pitch, blk_height );
-					size_t shmem_size = sizeof(bool);	// Size of shared-memory block, in bytes.
+					size_t const shmem_size = sizeof(bool);
 
 					if ( grid_extension > 1 ) {
 
@@ -1333,7 +1324,10 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 		else {
 			dim3 const dimBlock( pitch, block_height );
 			dim3 const dimGrid_SB( 1, 1 );
-			size_t shmem_size = pitch * block_height * sizeof(real);
+
+			// No shared memory is required if block_height == 1
+			size_t const shmem_size = ( (block_height > 1) ? (pitch * block_height * sizeof(real)) : 0 );
+
 			real *__restrict__ const pTmp = NULL;	// No temporary buffer is required.
 
 			/* NOTE:
@@ -1451,7 +1445,10 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 		else {
 			dim3 const dimBlock( blk_width, block_height );
 			dim3 const dimGrid_SB( 1, 1 );
-			size_t const shmem_size = blk_width * block_height * sizeof(real);
+
+			// No shared memory is required if block_height == 1
+			size_t const shmem_size = ( (block_height > 1) ? (pitch * block_height * sizeof(real)) : 0 );
+
 			real *__restrict__ const pTmp = NULL;	// No temporary buffer is required.
 
 			/* NOTE:
@@ -1545,7 +1542,10 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 		else {
 			dim3 const dimBlock( blk_width, block_height );
 			dim3 const dimGrid_SB( 1, 1 );
-			size_t const shmem_size = blk_width * block_height * sizeof(real);
+
+			// No shared memory is required if block_height == 1
+			size_t const shmem_size = ( (block_height > 1) ? (pitch * block_height * sizeof(real)) : 0 );
+
 			real *__restrict__ const pTmp = NULL;	// No temporary buffer is required.
 
 			/* NOTE:
@@ -1608,18 +1608,20 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
  *				All products are performed with "*", which is already the fastest mode.
  *
  *		On Compute Capability >= 3.0
- *			(sizeof(gpu_size_t) == sizeof(int)) && (ext_grid == true):
- *				On such architectures, maxGridSizeX >= INT_MAX. So, if sizeof(gpu_size_t) == sizeof(int),
- *				then (GPU_MAX_ITEMS / maxGridSizeX) <= 2, which is certainly less than memory_alignment
- *				(i.e., the minimum block size). Therefore, (maxGridSizeX * act_bs) > GPU_MAX_ITEMS
- *				for any (active) block size.
+ *			(sizeof(size_t) == sizeof(index_t)) && (ext_grid == true):
+ *				On such architectures, maxGridSizeX ~ IDX_MAX. That is,
+ *				(IDX_MAX / maxGridSizeX) <= 2.
+ *				So, if sizeof(size_t) == sizeof(index_t), then
+ *				(matrix_size / maxGridSizeX) <= 2, which is certainly less than
+ *				<memory_alignment> (i.e., the minimum block size). Therefore,
+ *				(maxGridSizeX * act_bs) > matrix_size for any (active) block size.
  *
  * 		On Compute Capability 1.x:
  *			(fast_prod == ext_grid == false):
  *				maxGridSizeX == maxGridSizeY < 2**16
  */
 template < bool ext_grid, index_t items_per_thread, bool div_operator, bool fast_prod >
-static __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, gpu_size_t matrix_size )
+static __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, size_t matrix_size )
 {
 
 	#if __CUDA_ARCH__	/* Reduces work on cudafe(++) when looking for HOST code.*/
@@ -1629,7 +1631,7 @@ static __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__res
 		#if __CUDA_ARCH__ >= 200
 			fast_prod
 			#if __CUDA_ARCH__ >= 300
-				&& ( (sizeof(gpu_size_t) != sizeof(int)) || (! ext_grid) )
+				&& ( (sizeof(size_t) > sizeof(index_t)) || (! ext_grid) )
 			#endif
 		#else
 			( fast_prod || ext_grid )
@@ -1668,7 +1670,7 @@ static __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__res
 		 */
 
 		// Index to elements.
-		gpu_size_t elemIdx[ num_items ];
+		size_t elemIdx[ num_items ];
 
 		// Block size
 		index_t const bs = bdx;
@@ -1692,7 +1694,7 @@ static __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__res
 
 		// First element.
 		elemIdx[ 0 ] = idxmul<true>( by, gdx ) + bx;
-		elemIdx[ 0 ] = idxmul<fast_product>( elemIdx[ 0 ], act_bs ) + offset;
+		elemIdx[ 0 ] = (size_t) idxmul<fast_product>( elemIdx[ 0 ], act_bs ) + offset;
 
 		// Rest of elements.
 		#pragma unroll
@@ -1818,12 +1820,7 @@ __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, siz
 	 *
 	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
 	 */
-	bool fast_product = true;
-	if ( computeCapability == 1 ) {
-		size_t const num_blocks = (size_t) grid_extension * (size_t) grid_length;
-		if ( num_blocks >= (1 << 24) )
-			fast_product = false;
-	}
+	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 
 	dim3 const dimBlock( block_size, 1 );	// 1-D blocks
 
@@ -1836,7 +1833,7 @@ __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, siz
 	 * NOTE: The following conditions will be checked on kernel compilation:
 	 *
 	 *	- No grid extension is required on Compute Capability >= 3.0, if
-	 *		sizeof(gpu_size_t) == sizeof(int)
+	 *		sizeof(size_t) == sizeof(int)
 	 *
 	 *	- Integer products in NON-extended grids are always performed in "fast" mode.
 	 */
@@ -1917,7 +1914,7 @@ __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, siz
  *
  * Required size of shared memory:
  *	Multi-rows blocks:	  blockDim.x * sizeof(real) bytes.
- *	Else (single-row blocks): 0 bytes.
+ *	Else (i.e., single-row blocks): 0 bytes.
  *
  * WARNING:
  *	- On Compute Capability 1.x:
@@ -1941,7 +1938,7 @@ __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, siz
  */
 template <bool ext_grid, bool single_row, index_t items_per_thread, bool fast_prod >
 static __global__ void kernel_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, real const *__restrict__ d_accum_b,
-					gpu_size_t matrix_size )
+					size_t matrix_size )
 {
 
 	#if __CUDA_ARCH__	/* Reduces work on cudafe(++) when looking for HOST code.*/
@@ -2005,7 +2002,7 @@ static __global__ void kernel_mul_div( real *__restrict__ d_A, real const *__res
 		 */
 
 		// Index to elements.
-		gpu_size_t elemIdx[ num_items ];
+		size_t elemIdx[ num_items ];
 
 		// Block size
 		index_t const bs = idxmul<true>( bdy, bdx );
@@ -2034,7 +2031,7 @@ static __global__ void kernel_mul_div( real *__restrict__ d_A, real const *__res
 
 		// First element.
 		elemIdx[ 0 ] = idxmul<true>( by, gdx ) + bx;
-		elemIdx[ 0 ] = idxmul<fast_product>( elemIdx[ 0 ], act_bs ) + offset;
+		elemIdx[ 0 ] = (size_t) idxmul<fast_product>( elemIdx[ 0 ], act_bs ) + offset;
 
 		// Rest of elements.
 		#pragma unroll
@@ -2135,7 +2132,7 @@ __host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, r
 	index_t const grid_extension = dimGrid.y;
 
 	// Matrix size
-	size_t const matrix_size = height * pitch;
+	size_t const matrix_size = (size_t) height * (size_t) pitch;
 
 	// Number of loads from global memory performed by each thread at a time.
 	index_t const num_items = MUL_DIV__ITEMS_PER_THREAD;
@@ -2150,12 +2147,7 @@ __host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, r
 	 *
 	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
 	 */
-	bool fast_product = true;
-	if ( computeCapability == 1 ) {
-		size_t const num_blocks = (size_t) grid_extension * (size_t) grid_length;
-		if ( num_blocks >= (1 << 24) )
-			fast_product = false;
-	}
+	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 
 	// Block dimensions
 	dim3 const dimBlock( pitch, block_height );
@@ -2281,7 +2273,7 @@ __host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, r
  *				maxGridSizeX == maxGridSizeY < 2**16
  */
 template < bool ext_grid, index_t items_per_thread, bool fast_prod >
-static __global__ void kernel_adjust( real *__restrict__ d_A, gpu_size_t matrix_size )
+static __global__ void kernel_adjust( real *__restrict__ d_A, size_t matrix_size )
 {
 
 	#if __CUDA_ARCH__	/* Reduces work on cudafe(++) when looking for HOST code.*/
@@ -2332,7 +2324,7 @@ static __global__ void kernel_adjust( real *__restrict__ d_A, gpu_size_t matrix_
 		 */
 
 		// Index to elements.
-		gpu_size_t elemIdx[ num_items ];
+		size_t elemIdx[ num_items ];
 
 		// Block size
 		index_t const bs = idxmul<true>( bdy, bdx );
@@ -2361,7 +2353,7 @@ static __global__ void kernel_adjust( real *__restrict__ d_A, gpu_size_t matrix_
 
 		// First element.
 		elemIdx[ 0 ] = idxmul<true>( by, gdx ) + bx;
-		elemIdx[ 0 ] = idxmul<fast_product>( elemIdx[ 0 ], act_bs ) + offset;
+		elemIdx[ 0 ] = (size_t) idxmul<fast_product>( elemIdx[ 0 ], act_bs ) + offset;
 
 		// Rest of elements.
 		#pragma unroll
@@ -2453,7 +2445,7 @@ __host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, ind
 	index_t const grid_extension = dimGrid.y;
 
 	// Matrix size
-	size_t const matrix_size = height * pitch;
+	size_t const matrix_size = (size_t) height * (size_t) pitch;
 
 	// Number of loads from global memory performed by each thread at a time.
 	index_t const num_items = ADJUST__ITEMS_PER_THREAD;
@@ -2468,12 +2460,7 @@ __host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, ind
 	 *
 	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
 	 */
-	bool fast_product = true;
-	if ( computeCapability == 1 ) {
-		size_t const num_blocks = (size_t) grid_extension * (size_t) grid_length;
-		if ( num_blocks >= (1 << 24) )
-			fast_product = false;
-	}
+	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 
 	// Block dimensions
 	dim3 const dimBlock( pitch, block_height );
@@ -2574,7 +2561,7 @@ __host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, ind
  *				maxGridSizeX == maxGridSizeY < 2**16
  */
 template < bool ext_grid, index_t block_width, index_t items_per_thread, bool fast_prod >
-static __device__ void idx_max_gmem( real const *__restrict__ d_A, index_t width, index_t pitch, gpu_size_t matrix_size,
+static __device__ void idx_max_gmem( real const *__restrict__ d_A, index_t width, index_t pitch, size_t matrix_size,
 					real *__restrict__ max_val, index_t *__restrict__ max_val_idx )
 {
 
@@ -2652,8 +2639,8 @@ static __device__ void idx_max_gmem( real const *__restrict__ d_A, index_t width
 		 * Index of element:	    row_offset + tx
 		 */
 
-		gpu_size_t row_offset = idxmul<true>( by, gdx ) + bx;
-		row_offset = idxmul<fast_product>( row_offset, act_bs ) + act_offset_from_block;
+		size_t row_offset = idxmul<true>( by, gdx ) + bx;
+		row_offset = (size_t) idxmul<fast_product>( row_offset, act_bs ) + act_offset_from_block;
 
 		// Column index of elements.
 		index_t colIdx[ num_items ];
@@ -3243,7 +3230,7 @@ static __device__ void idx_max_shmem( real *__restrict__ max_val, index_t *__res
  *				maxGridSizeX == maxGridSizeY < 2**16
  */
 template < bool ext_grid, index_t block_width, index_t items_per_thread, bool fast_prod >
-static __global__ void kernel_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch, gpu_size_t matrix_size,
+static __global__ void kernel_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch, size_t matrix_size,
 					index_t *__restrict__ d_Idx )
 {
 
@@ -3362,7 +3349,7 @@ __host__ void idx_max( real const *__restrict__ d_A, index_t height, index_t wid
 	index_t const grid_extension = dimGrid.y;
 
 	// Matrix size
-	size_t const matrix_size = height * pitch;
+	size_t const matrix_size = (size_t) height * (size_t) pitch;
 
 	// Number of loads from global memory performed by each thread at a time.
 	index_t const num_items = IDX_MAX__ITEMS_PER_THREAD;
@@ -3377,12 +3364,7 @@ __host__ void idx_max( real const *__restrict__ d_A, index_t height, index_t wid
 	 *
 	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
 	 */
-	bool fast_product = true;
-	if ( computeCapability == 1 ) {
-		size_t const num_blocks = (size_t) grid_extension * (size_t) grid_length;
-		if ( num_blocks >= (1 << 24) )
-			fast_product = false;
-	}
+	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 
 	// --------------------------------
 

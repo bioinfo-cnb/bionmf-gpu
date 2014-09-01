@@ -105,8 +105,8 @@
  * When the input matrix V is distributed among multiple devices each host thread processes
  * the following sets of rows and columns:
  *
- *	Vrow[ 1..NnP ][ 1..M ] <-- V[ bN..(bN+NnP) ][ 1..M ]	(i.e., NnP rows, starting from bN)
- *	Vcol[ 1..N ][ 1..MnP ] <-- V[ 1..N ][ bM..(bM+MnP) ]	(i.e., MnP columns, starting from bM)
+ *	Vrow[ 1..NpP ][ 1..M ] <-- V[ bN..(bN+NpP) ][ 1..M ]	(i.e., NpP rows, starting from bN)
+ *	Vcol[ 1..N ][ 1..MpP ] <-- V[ 1..N ][ bM..(bM+MpP) ]	(i.e., MpP columns, starting from bM)
  *
  * Such sets allow to update the corresponding rows and columns of W and H, respectively.
  *
@@ -120,8 +120,8 @@
  * If the input matrix (or the portion assigned to this device) is too large for the GPU memory,
  * it must be blockwise processed as follow:
  *
- *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(i.e., BLN <= NnP rows)
- *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ offset_Vcol..(offset_Vcol + BLMp) ]	(i.e., BLM <= MnP columns)
+ *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(i.e., BLN <= NpP rows)
+ *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ offset_Vcol..(offset_Vcol + BLMp) ]	(i.e., BLM <= MpP columns)
  *
  * Note that padded dimensions are denoted with the suffix 'p' (e.g., Mp, BLMp, etc).
  *
@@ -221,6 +221,8 @@ extern index_t maxBlockHeight_pitch;		// <= (threadsPerBlock_pitch / pitch)
 
 extern bool mappedHostMemory;			// Host memory is mapped into the address space of the device.
 
+extern size_t gpu_max_num_items;		// Maximum number of items of input arrays in GPU kernels (<= matrix_max_num_items)
+
 extern block_t block_N, block_M;		// Information for blockwise processing on dimension N and M.
 
 // CUDA Events for synchronization:
@@ -314,14 +316,14 @@ int check_cuda_status( void );
  * Initializes CUDA and cuBLAS on the specified device.
  *
  * Updates "memory_alignment", the limits of matrix dimensions, and setups the
- * padding for the factorization rank (K).
+ * padding for the given factorization rank (K).
  *
  * WARNING:
  *	- This function must be called *BEFORE* any other CUDA-related routine.
  *
  * Returns the amount of free global memory, or 0 on failure.
  */
-size_t initialize_GPU( index_t dev_id, index_t num_devs, index_t factorization_rank );
+size_t initialize_GPU( index_t dev_id, index_t factorization_rank );
 
 ////////////////////////////////////////////////
 

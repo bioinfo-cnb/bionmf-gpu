@@ -120,16 +120,16 @@ extern "C" {
 ////////////////////////////////////////////////
 
 /*
- * Returns the maximum matrix dimension supported by this GPU device,
+ * Returns the maximum height supported by this GPU device,
  * for the given pitch, and regardless of the available memory.
  */
-index_t gpu_max_non_padded_dimension( index_t pitch );
+index_t gpu_max_height( index_t pitch );
 
 ////////////////////////////////////////////////
 
 /*
  * Returns the maximum number of items in a matrix supported by this GPU device,
- * (regardless of the available memory).
+ * regardless of the available memory.
  */
 size_t gpu_max_nitems( void );
 
@@ -146,35 +146,18 @@ void init_kernel_params( index_t pitch );
  * Partially prints device matrix content.
  * SYNCHRONOUSLY downloads a matrix from the GPU and shows its content (data, name, headers and/or labels).
  *
- * If 'transpose' is 'true', transposes matrix as follows:
- * - Matrix dimension in memory: <ncols> rows, <nrows> columns.
- * - Matrix dimension on screen: <nrows> rows, <ncols> columns.
- * - Shows <ncols> mt->headers (as column headers) and <nrows> mt->labels (as row labels).
+ * If "transpose" is 'true':
+ * - Reads from "dMatrix": <nrows> rows and <ncols> columns (padded to <pitch>).
+ * - Shows:
+ *	<ncols> rows and <nrows> columns.
+ *	<ncols> row labels from mt->headers, and <nrows> column headers from mt->labels.
  *
- * ncols <= pitch, unless matrix transposing is set (in that case, nrows <= padding).
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE
- */
-int show_device_matrix( real const *RESTRICT dMatrix, index_t nrows, index_t ncols, index_t pitch, bool transpose, bool shown_by_all,
-			struct matrix_tags_t const *RESTRICT mt );
-
-////////////////////////////////////////////////
-
-/*
- * Partially prints device matrix content (INTEGER version).
- * SYNCHRONOUSLY downloads a matrix from the GPU and shows its content (data, name, headers and/or labels).
- *
- * If 'transpose' is 'true', transposes matrix as follows:
- * - Matrix dimension in memory: <ncols> rows, <nrows> columns.
- * - Matrix dimension on screen: <nrows> rows, <ncols> columns.
- * - Shows <ncols> mt->headers (as column headers) and <nrows> mt->labels (as row labels).
- *
- * ncols <= pitch, unless matrix transposing is set (in that case, nrows <= padding).
+ * ncols <= pitch.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int show_device_matrix_int( index_t const *RESTRICT dMatrix, index_t nrows, index_t ncols, index_t pitch, bool transpose, bool shown_by_all,
-				struct matrix_tags_t const *RESTRICT mt );
+int show_device_matrix( void const *RESTRICT dMatrix, index_t nrows, index_t ncols, index_t pitch, bool real_data, bool transpose,
+			bool all_processes, struct matrix_tags_t const *RESTRICT mt );
 
 ////////////////////////////////////////////////
 
@@ -365,34 +348,15 @@ void upload_matrix_partial( real const *RESTRICT pA, index_t height, index_t pit
  *
  * NOTE: If host memory was mapped, the transfer operation is SKIPPED.
  */
-void download_matrix( real *RESTRICT A, index_t height, index_t pitch, real const *RESTRICT d_A,
+void download_matrix( void *RESTRICT A, index_t height, index_t pitch, size_t data_size, void const *RESTRICT d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
+				index_t width, bool real_data, bool transpose, char const *RESTRICT const matrix_name_A,
 				char const *RESTRICT const matrix_name_dA,
 			#endif
 			#if NMFGPU_PROFILING_TRANSF
 				timing_data_t *RESTRICT const download_timing,
 			#endif
 			cudaStream_t stream_A );
-
-////////////////////////////////////////////////
-
-/*
- * Transfers an INTEGER matrix from the DEVICE (GPU) to HOST (CPU), as a row vector.
- *
- * A[1..height][1..pitch] <--- d_A[1..height][1..pitch],
- *
- * NOTE: If host memory was mapped, the transfer operation is SKIPPED.
- */
-void download_matrix_int( index_t *RESTRICT A, index_t height, index_t pitch, index_t const *RESTRICT d_A,
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					index_t width, bool transpose, char const *RESTRICT const matrix_name_A,
-					char const *RESTRICT const matrix_name_dA,
-				#endif
-				#if NMFGPU_PROFILING_TRANSF
-					timing_data_t *RESTRICT const download_timing,
-				#endif
-				cudaStream_t stream_A );
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

@@ -50,16 +50,11 @@
 #if ! NMFGPU_TIMING_CUH
 #define NMFGPU_TIMING_CUH (1)
 
-// Required by <stdint.h>
-#ifndef __STDC_CONSTANT_MACROS
-	#define __STDC_CONSTANT_MACROS (1)
-#endif
-
 #include "index_type.h"
 
 #include <cuda_runtime_api.h>
 
-#include <stdint.h>	/* uint_fast32_t, uintmax_t, UINT32_C(), UINTMAX_C() */
+#include <stdint.h>	/* uint_fast32_t, uintmax_t */
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -95,9 +90,9 @@ extern "C" {
 
 // Information for timing.
 typedef struct timing_data {
-	uintmax_t nitems;	// Accumulated number of items processed in all counted "events".
 	uint_fast32_t counter;	// Number of "events" counted.
 	float time;		// Accumulated elapsed time.
+	uintmax_t nitems;	// Accumulated number of items processed in all counted "events".
 } timing_data_t;
 
 // --------------------------------------
@@ -111,6 +106,7 @@ typedef struct timing_data {
 #endif
 
 #ifdef NMFGPU_PROFILING_KERNELS
+	// Timing on GPU kernels
 	extern timing_data_t reduce_timing[4];
 	extern timing_data_t div_timing[2];
 	extern timing_data_t mul_div_timing[2];
@@ -147,7 +143,7 @@ timing_data_t new_timing_data( uintmax_t nitems, uint_fast32_t counter, float ti
 /*
  * Returns an empty timing_data_t structure.
  */
-#define new_empty_timing_data() ( new_timing_data( (UINTMAX_C(0)), (UINT32_C(0)), 0.0f ) )
+timing_data_t new_empty_timing_data( void );
 
 ////////////////////////////////////////////////
 
@@ -233,7 +229,7 @@ float stop_cuda_timer( void );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *RESTRICT td, gpu_size_t nitems, index_t counter);
+int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *RESTRICT td, size_t nitems, index_t counter );
 
 ////////////////////////////////////////////////
 
@@ -247,7 +243,19 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *RESTR
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt( timing_data_t *RESTRICT td, gpu_size_t nitems, index_t counter);
+int stop_cuda_timer_cnt( timing_data_t *RESTRICT td, size_t nitems, index_t counter );
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the following information for the given operation "<op>":
+ *	- Total elapsed time, measured in milliseconds (but shown in seconds if show_secs is 'true').
+ *	- Number of times the operation was performed and the average time, in milliseconds.
+ *	- Bandwidth, in Gigabytes per second.
+ *
+ * data_size: Size in bytes of the processed data type.
+ */
+void print_elapsed_time( char const *RESTRICT const op, timing_data_t *RESTRICT td, size_t data_size, bool show_secs, bool all_processes );
 
 ////////////////////////////////////////////////
 

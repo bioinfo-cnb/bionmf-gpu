@@ -38,6 +38,9 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
+ *	Additional information:
+ *		NMFGPU_VERBOSE_2: Shows the parameters in some routine calls.
+ *
  *	Debug / Testing:
  *		NMFGPU_FIXED_INIT: Uses "random" values generated from a fixed seed (defined in common.h).
  *
@@ -101,8 +104,8 @@
  * When the input matrix V is distributed among multiple devices each host thread processes
  * the following sets of rows and columns:
  *
- *	Vrow[ 1..NnP ][ 1..M ] <-- V[ bN..(bN+NnP) ][ 1..M ]	(i.e., NnP rows, starting from bN)
- *	Vcol[ 1..N ][ 1..MnP ] <-- V[ 1..N ][ bM..(bM+MnP) ]	(i.e., MnP columns, starting from bM)
+ *	Vrow[ 1..NpP ][ 1..M ] <-- V[ bN..(bN+NpP) ][ 1..M ]	(i.e., NpP rows, starting from bN)
+ *	Vcol[ 1..N ][ 1..MpP ] <-- V[ 1..N ][ bM..(bM+MpP) ]	(i.e., MpP columns, starting from bM)
  *
  * Such sets allow to update the corresponding rows and columns of W and H, respectively.
  *
@@ -116,8 +119,8 @@
  * If the input matrix (or the portion assigned to this device) is too large for the GPU memory,
  * it must be blockwise processed as follow:
  *
- *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(i.e., BLN <= NnP rows)
- *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ offset_Vcol..(offset_Vcol + BLMp) ]	(i.e., BLM <= MnP columns)
+ *	d_Vrow[1..BLN][1..Mp] <-- Vrow[ offset..(offset + BLN) ][1..Mp]			(i.e., BLN <= NpP rows)
+ *	d_Vcol[1..N][1..BLMp] <-- Vcol[1..N][ offset_Vcol..(offset_Vcol + BLMp) ]	(i.e., BLM <= MpP columns)
  *
  * Note that padded dimensions are denoted with the suffix 'p' (e.g., Mp, BLMp, etc).
  *
@@ -178,7 +181,7 @@
 
 // Default alignment for data on memory.
 #ifndef DEFAULT_MEMORY_ALIGNMENT		/* 64 bytes, expressed in real-type items. */
-	#define DEFAULT_MEMORY_ALIGNMENT ( INDEX_C(64) / sizeof(real) )
+	#define DEFAULT_MEMORY_ALIGNMENT ( (index_t) ( 64 / sizeof(real) ) )
 #endif
 
 // Default values of some input parameters.
@@ -213,7 +216,7 @@ index_t num_processes = 1;	// Number of processes.
 
 // Matrix dimension limits (NOTE: they may be modified if the program is executed in a GPU device).
 index_t memory_alignment = 1;									// Data alignment on memory.
-size_t matrix_max_nitems = SIZE_MAX / ( 2 * sizeof(real) );					// Maximum number of items in a matrix.
+size_t matrix_max_num_items = SIZE_MAX / ( 2 * sizeof(real) );					// Maximum number of items in a matrix.
 index_t matrix_max_pitch = MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );		// Maximum multiple of <memory_alignment>.
 index_t matrix_max_non_padded_dim = MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );	// Maximum non-padded dimension.
 
@@ -223,45 +226,62 @@ index_t M = 0;		// Number of columns of input matrix V.
 index_t K = 0;		// Factorization rank.
 
 // Dimensions for multi-process version:
-index_t NnP = 0;	// Number of rows of V assigned to this process (NnP <= N).
-index_t MnP = 0;	// Number of columns of V assigned to this process (MnP <= M).
+index_t NpP = 0;	// Number of rows of V assigned to this process (NpP <= N).
+index_t MpP = 0;	// Number of columns of V assigned to this process (MpP <= M).
+index_t bN = 0;		// Starting row ((bN + NpP) <= N).
+index_t bM = 0;		// Starting column ((bM + MpP) <= M).
 
 // Padded dimensions:
 index_t Mp = 0;		// 'M' rounded up to the next multiple of <memory_alignment>.
 index_t Kp = 0;		// 'K' rounded up to the next multiple of <memory_alignment>.
-index_t MnPp = 0;	// 'MnP' rounded up to the next multiple of <memory_alignment> (MnPp <= Mp).
-
-// Data Matrices
-real *restrict V = NULL;
-real *restrict W = NULL;
-real *restrict H = NULL;
+index_t MpPp = 0;	// 'MpP' rounded up to the next multiple of <memory_alignment> (MpPp <= Mp).
 
 // Classification vectors.
 index_t *restrict classification = NULL;
 index_t *restrict last_classification = NULL;
 
 // Data matrices (host side)
-real *Vcol = NULL;	// Block of NnP rows from input matrix V.
-real *Vrow = NULL;	// Block of MnP columns from input matrix V.
+real *restrict W = NULL;
+real *restrict H = NULL;
+real *restrict Vcol = NULL;	// Block of NpP rows from input matrix V.
+real *Vrow = NULL;		// Block of MpP columns from input matrix V.
+
+// ---------------------------------------------
+
+/* "Private" global variables. */
+
+// Information and/or error messages shown by all processes.
+#if NMFGPU_VERBOSE_2
+	static bool const verb_shown_by_all = false;	// Information messages in verbose mode.
+#endif
+static bool const shown_by_all = false;			// Information messages in non-debug mode.
+static bool const sys_error_shown_by_all = true;	// System error messages.
+static bool const error_shown_by_all = false;		// Error messages on invalid arguments or I/O data.
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the arguments list "args".
+ * Prints the given message composed by the format string "fmt" and the
+ * arguments list "args", if any.
  *
- * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
- * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
- * process 0, with no prefix at all.
+ * Multi-process mode (all_processes == true  &&  num_processes > 1):
+ *	- The message is printed by all existing processes.
+ *	- If "show_prefix" is 'true', the message is prefixed with a newline
+ *	  character ('\n') and the process ID.
+ *
+ * Single-process mode (all_processes == false  ||  num_processes == 1):
+ *	- The message is printed  by process '0' only.
+ *	- "show_prefix" is IGNORED and no prefix is printed.
  *
  * Output mode (err_mode == false):
  *	- The string is printed to the standard output stream ('stdout').
- *	- "errnum" is ignored.
+ *	- "errnum" is IGNORED.
  *
  * Error mode (err_mode == true):
  *	- The standard output stream ('stdout') is flushed for all processes.
  *	- The message is printed to the standard error stream ('stderr').
- *	- If errnum is non-zero, this function behaves similar to perror(3).
+ *	- If "errnum" is non-zero, this function behaves similar to perror(3).
  *	  That is, it appends to the message a colon, the string given by
  *	  strerror(errnum) and a newline character.
  *
@@ -270,7 +290,7 @@ real *Vrow = NULL;	// Block of MnP columns from input matrix V.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static int print_string( bool shown_by_all, bool err_mode, int errnum, char const *restrict const fmt, va_list args )
+static int print_string( bool all_processes, bool show_prefix, bool err_mode, int errnum, char const *restrict const fmt, va_list args )
 {
 
 	if ( ! fmt ) {
@@ -306,13 +326,10 @@ static int print_string( bool shown_by_all, bool err_mode, int errnum, char cons
 
 	// --------------------------
 
-	if ( shown_by_all + ( ! process_id ) ) {
+	if ( all_processes + ( ! process_id ) ) {
 
-		if ( shown_by_all ) {
-			error += ( fprintf( file, "\n" ) <= 0 );
-			if ( num_processes > 1 )
-				error += ( fprintf( file, "[P%" PRI_IDX "] ", process_id ) <= 0 );
-		}
+		if ( (all_processes * num_processes * show_prefix ) > 1 )
+			error += ( fprintf( file, "\n[P%" PRI_IDX "] ", process_id ) <= 0 );
 
 		error += ( vfprintf( file, fmt, args ) <= 0 );
 
@@ -340,24 +357,32 @@ static int print_string( bool shown_by_all, bool err_mode, int errnum, char cons
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent arguments.
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
  *
- * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
- * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
- * process 0, with no prefix at all.
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * In addition, if (num_processes > 1), the message is prefixed with a newline
+ * character ('\n') and the process ID.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
  *
  * The string is always printed to the standard output stream ('stdout').
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_message( bool shown_by_all, char const *restrict const fmt, ... )
+int print_message( bool all_processes, char const *restrict const fmt, ... )
 {
+
+	bool const show_prefix = (all_processes * num_processes > 1);
+	bool const error_mode = false;
+	int const error_num = 0;
 
 	va_list args;
 
+	// --------------------------
+
 	va_start( args, fmt );
 
-	int const status = print_string( shown_by_all, false, 0, fmt, args );
+	int const status = print_string( all_processes, show_prefix, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -368,25 +393,72 @@ int print_message( bool shown_by_all, char const *restrict const fmt, ... )
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent arguments.
+ * Prints the given message, composed by the format string "fmt" and the subsequent
+ * arguments, if any.
  *
- * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
- * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
- * process 0, with no prefix at all.
+ * This method is intended for successive portions of a previously printed message,
+ * so it will never be prefixed, regardless of the arguments and the existing number
+ * of processes.
  *
- * The string is always printed to the standard error stream ('stderr'). The standard output
- * stream ('stdout') is previously flushed for all processes.
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ *
+ * The string is always printed to the standard output stream ('stdout').
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_error( bool shown_by_all, char const *restrict const fmt, ... )
+int append_printed_message( bool all_processes, char const *restrict const fmt, ... )
 {
+
+	bool const show_prefix = false;
+	bool const error_mode = false;
+	int const error_num = 0;
 
 	va_list args;
 
+	// --------------------------
+
 	va_start( args, fmt );
 
-	int const status = print_string( shown_by_all, true, 0, fmt, args );
+	int const status = print_string( all_processes, show_prefix, error_mode, error_num, fmt, args );
+
+	va_end( args );
+
+	return status;
+
+
+} // append_printed_message
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
+ *
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * In addition, if (num_processes > 1), the message is prefixed with a newline
+ * character ('\n') and the process ID.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ *
+ * The string is always printed to the standard error stream ('stderr'). The
+ * standard output stream ('stdout') is previously flushed for all processes.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int print_error( bool all_processes, char const *restrict const fmt, ... )
+{
+
+	bool const show_prefix = (all_processes * num_processes > 1);
+	bool const error_mode = true;
+	int const error_num = 0;
+
+	va_list args;
+
+	// --------------------------
+
+	va_start( args, fmt );
+
+	int const status = print_string( all_processes, show_prefix, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -397,27 +469,74 @@ int print_error( bool shown_by_all, char const *restrict const fmt, ... )
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent arguments.
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
  *
- * If "shown_by_all" is 'true', the message is printed by all existing processes, prefixed with
- * a newline character ('\n') and the process ID. Otherwise, the message only is printed by
- * process 0, with no prefix at all.
+ * This method is intended for successive portions of a previously printed message,
+ * so it will never be prefixed, regardless of the arguments and the existing number
+ * of processes.
  *
- * The string is always printed to the standard error stream ('stderr'). The standard output
- * stream ('stdout') is previously flushed for all processes. Finally, if errnum is non-zero,
- * this function behaves similar to perror(3). That is, it appends to the message a colon,
- * the string given by strerror(errnum) and a newline character.
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ *
+ * The string is always printed to the standard error stream ('stderr'). The
+ * standard output stream ('stdout') is previously flushed for all processes.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_errnum( bool shown_by_all, int errnum, char const *restrict const fmt, ... )
+int append_printed_error( bool all_processes, char const *restrict const fmt, ... )
 {
+
+	bool const show_prefix = false;
+	bool const error_mode = true;
+	int const error_num = 0;
 
 	va_list args;
 
+	// --------------------------
+
 	va_start( args, fmt );
 
-	int const status = print_string( shown_by_all, true, errnum, fmt, args );
+	int const status = print_string( all_processes, show_prefix, error_mode, error_num, fmt, args );
+
+	va_end( args );
+
+	return status;
+
+} // append_printed_error
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
+ *
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * In addition, if (num_processes > 1), the message is prefixed with a newline
+ * character ('\n') and the process ID.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ *
+ * The string is always printed to the standard error stream ('stderr'). The
+ * standard output stream ('stdout') is previously flushed for all processes.
+ * Finally, if errnum is non-zero, this function behaves similar to perror(3).
+ * That is, it appends to the message a colon, the string given by strerror(errnum)
+ * and a newline character.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int print_errnum( bool all_processes, int errnum, char const *restrict const fmt, ... )
+{
+
+	bool const show_prefix = (all_processes * num_processes > 1);
+	bool const error_mode = true;
+
+	va_list args;
+
+	// --------------------------
+
+	va_start( args, fmt );
+
+	int const status = print_string( all_processes, show_prefix, error_mode, errnum, fmt, args );
 
 	va_end( args );
 
@@ -428,42 +547,44 @@ int print_errnum( bool shown_by_all, int errnum, char const *restrict const fmt,
 ////////////////////////////////////////////////
 
 /*
- * Prints the given string expanding white-space, control, and some punctuation
- * characters to escaped sequences. The string must be non-NULL and NULL-terminated.
+ * Prints the given message composed by the format string "fmt" and the subsequent
+ * arguments, if any.
  *
- * shown_by_all: If 'true', the message is printed by all existing processes,
- *		 prefixed with a newline character ('\n') and the process ID.
- *		 Otherwise, the message only is printed by process 0, with no
- *		 prefix at all.
+ * This method is intended for successive portions of a previously printed message,
+ * so it will never be prefixed, regardless of the arguments and the existing number
+ * of processes.
  *
- * err_mode:	If 'true', prints the string as done in print_error().
- *		Otherwise, the string is printed as done in print_message().
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ * Otherwise, the message is printed by process 0 only, with no prefix at all.
  *
- * Returns EXIT_SUCCESS or EXIT_FAILURE
+ * The string is always printed to the standard error stream ('stderr'). The
+ * standard output stream ('stdout') is previously flushed for all processes.
+ * Finally, if errnum is non-zero, this function behaves similar to perror(3).
+ * That is, it appends to the message a colon, the string given by strerror(errnum)
+ * and a newline character.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_escaped( bool shown_by_all, bool err_mode, char const *restrict str )
+int append_printed_errnum( bool all_processes, int errnum, char const *restrict const fmt, ... )
 {
 
-	if ( ! str ) {
-		print_errnum( false, EFAULT, "\nprint_escaped( str )" );
-		return EXIT_FAILURE;
-	}
+	bool const show_prefix = false;
+	bool const error_mode = true;
 
-	int status = EXIT_SUCCESS;
+	va_list args;
 
-	// -----------------------------
+	// --------------------------
 
-	if ( ! str[0] )
-		status = print_string( shown_by_all, err_mode, "(empty)" );
+	va_start( args, fmt );
 
+	int const status = print_string( all_processes, show_prefix, error_mode, errnum, fmt, args );
 
-	// -----------------------------
+	va_end( args );
 
-	return EXIT_SUCCESS;
+	return status;
 
-} // print_escaped
+} // append_printed_errnum
 
-////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
 /*
@@ -479,14 +600,14 @@ int flush_output( bool permanently )
 	int status = EXIT_SUCCESS;
 
 	if ( fflush( stdout ) ) {
-		print_errnum( true, errno, "Warning: Could not flush the standard output stream, so previous messages not "
+		print_errnum( sys_error_shown_by_all, errno, "Warning: Could not flush the standard output stream, so previous messages not "
 				"printed yet can be lost" );
 		errno = 0; // Resets errno.
 		status = EXIT_FAILURE;
 	}
 
 	if ( permanently && setvbuf( stdout, NULL, _IONBF, 0 ) ) {
-		print_errnum( true, errno, "Warning: could not permanently flush the standard output stream, so "
+		print_errnum( sys_error_shown_by_all, errno, "Warning: could not permanently flush the standard output stream, so "
 				"not all messages might be shown on program error" );
 		status = EXIT_FAILURE;
 	}
@@ -508,8 +629,7 @@ int flush_output( bool permanently )
 int help_matrix( void )
 {
 
-	// Messages shown by process 0 only.
-	int const status = print_message( false,
+	int const status = append_printed_message( shown_by_all,
 
 		"\n<filename>\n\tInput data matrix (mandatory if 'help' is not requested).\n\n"
 
@@ -548,8 +668,7 @@ int help_matrix( void )
 int help_nmf( void )
 {
 
-	// Messages shown by process 0 only
-	int const status = print_message( false,
+	int const status = append_printed_message( shown_by_all,
 
 		"\n-K,-k <factorization_rank>\n\tFactorization Rank (default: K=%" PRI_IDX ").\n\n"
 
@@ -580,11 +699,9 @@ int help_nmf( void )
 int print_nmf_gpu_help( char const *restrict const execname )
 {
 
-	bool const shown_by_all = false; // Messages shown by process 0 only
-
 	// Checks for NULL parameters
 	if ( ! execname ) {
-		print_errnum( shown_by_all, EFAULT, "\nprint_nmf_gpu_help( execname )" );
+		print_errnum( error_shown_by_all, EFAULT, "\nprint_nmf_gpu_help( execname )" );
 		return EXIT_FAILURE;
 	}
 
@@ -601,13 +718,13 @@ int print_nmf_gpu_help( char const *restrict const execname )
 	if ( help_matrix() != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
 
-	if ( print_message( shown_by_all, "\n---------------\n\nNMF options:\n" ) != EXIT_SUCCESS )
+	if ( append_printed_message( shown_by_all, "\n---------------\n\nNMF options:\n" ) != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
 
 	if ( help_nmf() != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
 
-	if ( print_message( shown_by_all, "\n---------------\n\nOther options:\n\n"
+	if ( append_printed_message( shown_by_all, "\n---------------\n\nOther options:\n\n"
 				"-Z,-z <GPU_device>\n\tGPU device ID to attach on (default: %i).\n"
 				"\tOn multi-GPU version, devices will be selected from this value.\n\n"
 				"-h,-H\tPrints this help message.\n\n", DEFAULT_GPU_DEVICE ) != EXIT_SUCCESS )
@@ -625,46 +742,54 @@ int print_nmf_gpu_help( char const *restrict const execname )
  * alignment and dimension limit.
  *
  * The resulting values are stored in the global variables "matrix_max_pitch",
- * "matrix_max_non_padded_dim" and "matrix_max_nitems". In addition, the first
+ * "matrix_max_non_padded_dim" and "matrix_max_num_items". In addition, the first
  * and third variables are rounded down to a multiple of the given data alignment.
  *
  * data_alignment:
  *		If set to '0', uses the default padding, <DEFAULT_MEMORY_ALIGNMENT>.
- *		Else, if set to '1', disables padding.
+ *		If set to '1', disables padding.
  *		Otherwise, it must be a positive value expressed in number of
- *		real-type items (not in bytes).
+ *		items (not in bytes).
  *
  * max_dimension:
- *		If greater than or equal to <data_alignment>, uses the given
- *		value as an additional upper limit for matrix dimensions. That
- *		is, the result will be the minimum between the value calculated
- *		from "data_alignment" and <max_dimension>.
+ *		If greater than or equal to the resulting data alignment (i.e.,
+ *		either <data_alignment> or <DEFAULT_MEMORY_ALIGNMENT>), uses the
+ *		given value as an additional upper limit for matrix dimensions.
+ *		That is, the result will be the minimum between <max_dimension>,
+ *		and the value calculated from the data alignment and the maximum
+ *		number of items.
  *		On "matrix_max_pitch", the result is subsequently rounded down
- *		to a multiple of <data_alignment>.
+ *		to a multiple of the data alignment.
  *		It is ignored if set to a non-negative value less than
  *		<data_alignment>.
- *		Default value: 'IDX_MAX'.
+ *
+ * max_nitems:
+ *		If set to a positive value, forces the maximum number of items
+ *		for a data matrix. Please note that this value HAS PRECEDENCE
+ *		over the resulting maximum dimensions. However, it is IGNORED
+ *		if set to a value less than the resulting data alignment.
+ *		Finally, it must be expressed in number of items, not in bytes.
  *
  * WARNING:
  *	This function must be called *BEFORE* loading any input matrix. Otherwise,
  *	no padding will be set.
  *
- * Returns EXIT_SUCCESS, or EXIT_FAILURE on invalid input values (i.e.,
- * data_alignment < 0, or max_dimension < 0).
+ * Returns EXIT_SUCCESS, or EXIT_FAILURE on negative input values.
  */
-int set_matrix_limits( index_t data_alignment, index_t max_dimension )
+int set_matrix_limits( index_t data_alignment, index_t max_dimension, size_t max_nitems )
 {
 
 	#if NMFGPU_VERBOSE_2
-		print_message( false, "set_matrix_limits( data_alignment=%" PRI_IDX ", max_dimension=%" PRI_IDX ").\n",
-				data_alignment, additional_limit );
+		print_message( verb_shown_by_all, "set_matrix_limits( data_alignment=%" PRI_IDX ", max_dimension=%" PRI_IDX
+				", max_nitems=%zu).\n", data_alignment, max_dimension, max_nitems );
 	#endif
 
 	if ( (data_alignment < 0) + (max_dimension < 0) ) {
-		bool const shown_by_all = false;
 		int const errnum = EINVAL;
-		if (data_alignment < 0) print_errnum(shown_by_all,errnum,"\nset_matrix_limits(data_alignment=%" PRI_IDX ")",data_alignment);
-		if (max_dimension < 0)  print_errnum(shown_by_all,errnum,"\nset_matrix_limits(max_dimension=%" PRI_IDX ")",max_dimension);
+		if (data_alignment < 0)
+			print_errnum( error_shown_by_all, errnum, "\nset_matrix_limits(data_alignment=%" PRI_IDX ")", data_alignment );
+		if (max_dimension < 0)
+			print_errnum( error_shown_by_all, errnum, "\nset_matrix_limits(max_dimension=%" PRI_IDX ")", max_dimension);
 		return EXIT_FAILURE;
 	}
 
@@ -672,39 +797,87 @@ int set_matrix_limits( index_t data_alignment, index_t max_dimension )
 
 	index_t const l_memory_alignment = ( data_alignment ? data_alignment : DEFAULT_MEMORY_ALIGNMENT );
 
-	index_t const l_max_dim = ( (max_dimension >= data_alignment) ? max_dimension : IDX_MAX );
+	index_t const l_max_dim = ( (max_dimension >= l_memory_alignment) ? max_dimension : IDX_MAX );
 
 	// ------------------
 
 	// Maximum number of items.
-	size_t l_max_nitems = SIZE_MAX / ( 2 * sizeof(real) );
-	l_max_nitems -= ( l_max_nitems % l_memory_alignment );		// Makes sure it is a multiple of memory_alignment.
+	size_t const default_max_nitems = SIZE_MAX / ( 2 * sizeof(real) );
+	size_t l_max_num_items = ( (max_nitems >= (size_t)l_memory_alignment) ? (MIN(max_nitems,default_max_nitems)) : default_max_nitems );
+	l_max_num_items -= ( l_max_num_items % l_memory_alignment );	// Previous multiple of <memory_alignment>.
 
-	// Maximum padded dimension.
-	index_t l_max_pitch = MIN( (l_max_nitems / 2), (size_t) l_max_dim );
-	l_max_pitch -= (l_max_pitch % l_memory_alignment);		// Makes sure it is a multiple of memory_alignment.
+	// Maximum padded dimension (typically, number of columns).
+	index_t l_max_pitch = MIN( (l_max_num_items / 2), (size_t) l_max_dim );
+	l_max_pitch -= (l_max_pitch % l_memory_alignment);		// Previous multiple of <memory_alignment>.
 
-	// The other dimension.
-	index_t const l_max_alignment = MAX( l_memory_alignment, 2 );	// Padding or 2 columns
-	index_t const l_max_non_padded_dim = MIN( (l_max_nitems/l_max_alignment), (size_t) l_max_dim );
+	// The other dimension (typically, number of rows).
+	index_t const l_max_alignment = MAX( l_memory_alignment, 2 );	// Padding, or 2 columns
+	index_t const l_max_non_padded_dim = MIN( (l_max_num_items/l_max_alignment), (size_t) l_max_dim );
 
 	// ------------------
 
-	#if NMFGPU_VERBOSE_2
-		print_message( false, "set_matrix_limits( data_alignment=%" PRI_IDX ", max_dimension=%" PRI_IDX "):\n\tResulting values: "
-				"matrix_max_nitems=%zu, matrix_max_pitch=%" PRI_IDX ", matrix_max_non_padded_dim=%" PRI_IDX ".\n",
-				data_alignment, max_dimension, matrix_max_nitems, matrix_max_pitch, matrix_max_non_padded_dim );
-	#endif
-
 	// Sets output values.
 	memory_alignment = l_memory_alignment;
-	matrix_max_nitems = l_max_nitems;
+	matrix_max_num_items = l_max_num_items;
 	matrix_max_pitch = l_max_pitch;
 	matrix_max_non_padded_dim = l_max_non_padded_dim;
+
+	#if NMFGPU_VERBOSE_2
+		print_message( verb_shown_by_all, "set_matrix_limits( data_alignment=%" PRI_IDX ", max_dimension=%" PRI_IDX "):\n"
+				"\tResulting values: matrix_max_num_items=%zu, matrix_max_pitch=%" PRI_IDX ", matrix_max_non_padded_dim=%"
+				PRI_IDX ".\n", data_alignment, max_dimension, matrix_max_num_items, matrix_max_pitch, matrix_max_non_padded_dim );
+	#endif
 
 	return EXIT_SUCCESS;
 
 } // set_matrix_limits
+
+////////////////////////////////////////////////
+
+/*
+ * Sets the maximum dimensions and number of items, for the DEFAULT
+ * data alignment (<DEFAULT_MEMORY_ALIGNMENT>).
+ *
+ * The resulting values are stored in the global variables "matrix_max_pitch",
+ * "matrix_max_non_padded_dim" and "matrix_max_num_items". In addition, the first
+ * and third variables are rounded down to a multiple of the given data alignment.
+ *
+ * Returns EXIT_SUCCESS.
+ */
+int set_default_matrix_limits( void )
+{
+
+	set_matrix_limits( 0, 0, 0 );
+
+	return EXIT_SUCCESS;
+
+} // set_default_matrix_limits
+
+////////////////////////////////////////////////
+
+/*
+ * Computes the padded dimension of "dim".
+ *
+ * Returns <pitch>, such that:
+ *	dim <= pitch
+ *	pitch is a multiple of <memory_alignment>
+ *
+ * WARNING:
+ *	Global variable "memory_alignment" must have been properly initialized.
+ */
+index_t get_padding( index_t dim )
+{
+
+	index_t padded_dim = dim;
+
+	// If "dim" is NOT a multiple of <memory_alignment>, computes the next multiple.
+	index_t const dim_mod_ma = ( dim % memory_alignment );
+	if ( dim_mod_ma )
+		padded_dim += (memory_alignment - dim_mod_ma);
+
+	return padded_dim;
+
+} // get_padding
 
 ////////////////////////////////////////////////
 
@@ -720,15 +893,16 @@ int set_matrix_limits( index_t data_alignment, index_t max_dimension )
 int check_arguments( int argc, char const *restrict *restrict argv, bool *restrict help, struct input_arguments *restrict arguments )
 {
 
-	bool const shown_by_all = false; // Messages shown by process 0 only
+	// Limits on matrix dimensions
+	index_t const max_pitch = matrix_max_pitch;
 
 	// Checks for invalid parameters
 	if ( ! ( (argc > 0) * (uintptr_t) argv * (uintptr_t) help * (uintptr_t) arguments ) ) {
 		int const errnum = EFAULT;
-		if ( argc <= 0 ) print_errnum( shown_by_all, errnum, "\ncheck_arguments( argc=%i )", argc );
-		if ( ! argv )	print_errnum( shown_by_all, errnum, "\ncheck_arguments( argv )" );
-		if ( ! help )	print_errnum( shown_by_all, errnum, "\ncheck_arguments( help )" );
-		if ( ! arguments ) print_errnum( shown_by_all, errnum, "\ncheck_arguments( arguments )" );
+		if ( argc <= 0 ) print_errnum( error_shown_by_all, errnum, "\ncheck_arguments( argc=%i )", argc );
+		if ( ! argv )	print_errnum( error_shown_by_all, errnum, "\ncheck_arguments( argv )" );
+		if ( ! help )	print_errnum( error_shown_by_all, errnum, "\ncheck_arguments( help )" );
+		if ( ! arguments ) print_errnum( error_shown_by_all, errnum, "\ncheck_arguments( arguments )" );
 		return EXIT_FAILURE;
 	}
 
@@ -777,6 +951,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 	 *	-k kStart
 	 *	-r
 	 *	-t stop_threshold
+	 *	-y locale (TODO)
 	 *	-z gpu_device
 	 */
 
@@ -792,7 +967,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val < INTMAX_C(0)) ) {
-					print_error( shown_by_all, "\nError: Invalid binary mode for input file: '%s'. "
+					print_errnum( error_shown_by_all, errno, "\nError: Invalid binary mode for input file: '%s'. "
 							"It must be a non-negative integer value.\n", optarg );
 					return EXIT_FAILURE;
 				}
@@ -814,7 +989,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val < INTMAX_C(0)) ) {
-					print_error( shown_by_all, "\nError: Invalid binary mode for output file(s): '%s'. "
+					print_errnum( error_shown_by_all, errno, "\nError: Invalid binary mode for output file(s): '%s'. "
 							"It must be a non-negative integer value.\n", optarg );
 					return EXIT_FAILURE;
 				}
@@ -837,7 +1012,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
-					print_error( shown_by_all, "\nError: Invalid number of iterations: '%s'. "
+					print_errnum( error_shown_by_all, errno, "\nError: Invalid number of iterations: '%s'. "
 							"It must be a positive integer value less than or equal to %" PRI_IDX ".\n",
 							optarg, IDX_MAX );
 					return EXIT_FAILURE;
@@ -853,7 +1028,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
-					print_error( shown_by_all, "\nError: Invalid number of iterations for "
+					print_errnum( error_shown_by_all, errno, "\nError: Invalid number of iterations for "
 							"convergence test: '%s'. It must be a positive integer value less than or equal to %"
 							PRI_IDX ".\n", optarg, IDX_MAX );
 					return EXIT_FAILURE;
@@ -868,10 +1043,10 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				errno = 0;
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
-				if ( *endptr + errno + (val < INTMAX_C(2)) + (val > (intmax_t) MATRIX_MAX_DIMENSION) ) {
-					print_error( shown_by_all, "\nError: invalid factorization rank: '%s'. "
+				if ( *endptr + errno + (val < INTMAX_C(2)) + (val > (intmax_t) max_pitch) ) {
+					print_errnum( error_shown_by_all, errno, "\nError: invalid factorization rank: '%s'. "
 							"It must be an integer value in the range [2 .. %" PRI_IDX "].\n",
-							optarg, MATRIX_MAX_DIMENSION );
+							optarg, max_pitch );
 					return EXIT_FAILURE;
 				}
 				l_k = (index_t) val;
@@ -893,7 +1068,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
-					print_error( shown_by_all, "\nError: invalid stopping threshold '%s'. "
+					print_errnum( error_shown_by_all, errno, "\nError: invalid stopping threshold '%s'. "
 							"It must be a positive integer value less than or equal to %" PRI_IDX ".\n",
 							optarg, IDX_MAX );
 					return EXIT_FAILURE;
@@ -909,7 +1084,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val < INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
-					print_error( shown_by_all, "\nError: invalid basis device ID number '%s'. "
+					print_errnum( error_shown_by_all, errno, "\nError: invalid basis device ID number '%s'. "
 							"It must be a non-negative integer value less than or equal to %" PRI_IDX ".\n",
 							optarg, IDX_MAX );
 					return EXIT_FAILURE;
@@ -921,7 +1096,8 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 
 			// Missing argument
 			case ':': {
-				print_error( shown_by_all, "\nError: option -%c requires an argument.\nSee help (option '-h').\n", optopt );
+				print_error( error_shown_by_all, "\nError: option -%c requires an argument.\nSee help (option '-h').\n",
+						optopt );
 				return EXIT_FAILURE;
 			} // break;	// Unreachable statement
 
@@ -941,7 +1117,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 
 	// Filename
 	if ( optind >= argc ) {
-		print_error( shown_by_all, "\nError: No filename. Not enough arguments.\nSee help (option '-h').\n" );
+		print_error( error_shown_by_all, "\nError: No filename. Not enough arguments.\nSee help (option '-h').\n" );
 		return EXIT_FAILURE;
 	}
 	l_filename = argv[optind];
@@ -987,70 +1163,21 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 
 } // check_arguments
 
-////////////////////////////////////////////////
-
-/*
- * Computes the padded dimension of "dim". That is, the next multiple of <memory_alignment>.
- *
- * Returns:
- *	+ <dim>, if it was already a multiple of <memory_alignment>.
- *	+ The next multiple, if "dim" was not a multiple of <memory_alignment>,
- *	  and the former is not greater than <matrix_max_pitch>.
- *	+ <matrix_max_pitch>, if "dim" is greater than or equal to.
- *
- * WARNING:
- *	memory_alignment must have been properly initialized with set_matrix_limits() function.
- */
-index_t get_padding( index_t dim )
-{
-
-	#if NMFGPU_VERBOSE_2
-		print_message( true, "get_padding( dim=%" PRI_IDX ", matrix_max_pitch=%" PRI_IDX ", memory_alignment=%" PRI_IDX ")\n",
-				dim, matrix_max_pitch, memory_alignment );
-	#endif
-
-	// ------------------
-
-	index_t padded_dim = matrix_max_pitch;
-
-	if ( dim < matrix_max_pitch ) {		// The result must be <= matrix_max_pitch
-
-		padded_dim = dim;
-
-		// If "dim" is NOT a multiple of <memory_alignment>, computes the next multiple.
-		index_t const dim_mod_ma = ( dim % memory_alignment );
-		if ( dim_mod_ma )
-			padded_dim += (memory_alignment - dim_mod_ma);
-	}
-
-	// ------------------
-
-	#if NMFGPU_VERBOSE_2
-		print_message( true, "get_padding( dim=%" PRI_IDX " )...Done.\n\tpadding=%" PRI_IDX "\n", dim, padded_dim );
-	#endif
-
-	return padded_dim;
-
-} // get_padding
-
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 /* Helper function for next_power_2() and prev_power_2().
  *
- * Computes the lowest previous-to-a-power-of-2 value >= x.
- *
- * WARNING:
- *	x >= 0
+ * Computes the next one-less-than-a-power-of-two value.
  *
  * Returns:
- *	y >= x, such that <y+1> is a power of 2.
+ *	The lowest y >= x, such that <y+1> is a power of 2.
  *	0, if x == 0
  */
-static index_t next_prev_power_2( index_t x )
+static size_t next_prev_power_2( size_t x )
 {
 
-	for ( index_t i = 0, b = 1 ; i <= (index_t) sizeof(index_t) ; i++, b <<= 1 )
+	for ( size_t i = 0, b = 1 ; i <= sizeof(size_t) ; i++, b <<= 1 )
 		x |= ( x >> b );
 
 	return x;
@@ -1060,21 +1187,21 @@ static index_t next_prev_power_2( index_t x )
 // ---------------------------------------------
 
 /*
- * Computes the lowest power of 2 >= x.
+ * Computes the lowest power-of-two >= x.
  *
  * WARNING:
- *	0 <= x <= (IDX_MAX+1)/2
+ *	x <= floor(SIZE_MAX / 2)
  *
  * Returns:
- *	x, if it is already a power of 2, or x == 0
- *	The next power of 2, if "x" is not a power of 2.
+ *	<x>, if it is already a power of two, or x == 0
+ *	The next power of two, if "x" is not a power of two.
  */
-index_t next_power_2( index_t x )
+size_t next_power_2( size_t x )
 {
 
-	if ( x & (x-1) ) {	// If it is not already a power of 2.
+	if ( x & (x-1) ) {	// If it is not already a power of two.
 
-		x = next_prev_power_2( x );
+		x = next_prev_power_2( x );	// Next one-less-than-a-power-of-two value.
 		x++;
 	}
 
@@ -1085,22 +1212,19 @@ index_t next_power_2( index_t x )
 ////////////////////////////////////////////////
 
 /*
- * Computes the highest power of 2 <= x.
- *
- * WARNING:
- *	x >= 0
+ * Computes the highest power-of-two <= x.
  *
  * Returns:
- *	x, if it is already a power of 2, or x == 0
- *	The previous power of 2, if "x" is not a power of 2.
+ *	<x>, if it is already a power of two, or x == 0
+ *	The previous power of two, if "x" is not a power of two.
  */
-index_t prev_power_2( index_t x )
+size_t prev_power_2( size_t x )
 {
 
-	if ( x & (x-1) ) {	// If it is not already a power of 2.
+	if ( x & (x-1) ) {	// If it is not already a power of two.
 
-		x = next_prev_power_2( x );
-		x -= (x >> 1);
+		x = next_prev_power_2( x );	// Next one-less-than-a-power-of-two value.
+		x = ((x >> 1) + 1);		// or, x -= (x >> 1);
 	}
 
 	return x;
@@ -1119,8 +1243,8 @@ size_t get_difference( index_t const *restrict classification, index_t const *re
 
 	for ( index_t i = 0 ; i < (m-1); i++ ) {
 		for ( index_t j = (i+1) ; j < m ; j++ ) {
-			index_t conn = ( classification[j] == classification[i] );
-			index_t conn_last = ( last_classification[j] == last_classification[i] );
+			bool conn = ( classification[j] == classification[i] );
+			bool conn_last = ( last_classification[j] == last_classification[i] );
 			diff += ( conn != conn_last );
 		}
 	}

@@ -36,6 +36,9 @@
 #
 # Makefile for bioNMF-GPU
 #
+# WARNING:
+#	Makefile supported on Mac OS X and Linux platforms only.
+#
 # Targets:
 #
 #	all:		Compiles all programs (default).
@@ -396,6 +399,7 @@ c_FILES		  := common.c $(matrix_dir)/matrix_io_routines.c $(matrix_dir)/matrix_i
 # Compiler options
 ########################################
 
+OS_SIZE := $(shell uname -m | sed -e "s/i.86/32/" -e "s/x86_64/64/" -e "s/armv7l/32/")
 default_CC := gcc
 
 CC ?= $(default_CC)
@@ -404,7 +408,7 @@ CC ?= $(default_CC)
 opt_level	   := 3
 common_CFLAGS	   := -O$(opt_level) -pipe -fPIC -fPIE -D_GNU_SOURCE -fpch-preprocess \
 			-Wall -Wextra -Wcast-align -Wstrict-overflow=5 -Wunsafe-loop-optimizations -Wmissing-declarations -Winline \
-			-Wno-type-limits -Wno-invalid-pch -Wno-unused-parameter -Wno-unused-variable
+			-Wno-type-limits -Wno-invalid-pch -Wno-unused-parameter -Wno-unused-variable -m$(OS_SIZE)
 common_LDFLAGS	:= -pie
 
 # Common flags for faster code:
@@ -418,8 +422,7 @@ common_fast_CFLAGS := -march=native -ffast-math -fbranch-target-load-optimize -f
 
 # Flags for C-only programs (i.e., flags for programs to be compiled with CC)
 c_only_CFLAGS := -std=c99 $(common_CFLAGS) \
-		-Wnested-externs -Wstrict-prototypes -Wmissing-prototypes
-c_only_single_CFLAGS := -Wunsuffixed-float-constants
+		-Wnested-externs -Wstrict-prototypes -Wmissing-prototypes -Wno-unsuffixed-float-constants -Wno-unused-result
 c_only_fast_CFLAGS := $(common_fast_CFLAGS)
 
 # Linkage program
@@ -434,7 +437,7 @@ NVCC_basename := $(notdir $(NVCC))
 
 
 # Flags for HOST code (always compiled as C++).
-nvcc_CFLAGS	 := --restrict --optimize $(opt_level) --cudart static $(addprefix --compiler-options ,$(common_CFLAGS))
+nvcc_CFLAGS	 := --restrict --optimize $(opt_level) $(addprefix --compiler-options ,$(common_CFLAGS)) --disable-warnings
 nvcc_fast_CFLAGS := --use_fast_math $(addprefix --compiler-options ,$(common_fast_CFLAGS))
 nvcc_LDLIBS	 := -lcudart
 
@@ -479,8 +482,8 @@ endif
 # Updates NVCC
 NVCC := $(CUDA_HOME)/bin/$(NVCC_basename)
 
-nvcc_libdir := $(CUDA_HOME)/lib
 nvcc_incdir := $(CUDA_HOME)/include
+nvcc_libdir := $(firstword $(wildcard $(CUDA_HOME)/lib$(OS_SIZE) $(CUDA_HOME)/lib))
 
 # Error message to show if no path to CUDA Toolkit was found.
 # NOTE:
@@ -605,7 +608,6 @@ CPPFLAGS :=
 
 # Use single-precision data.
 ifeq ($(SINGLE),1)
-	c_only_CFLAGS += $(c_only_single_CFLAGS)
 	CPPFLAGS += -DNMFGPU_SINGLE_PREC=1
 else
 	# Just in case it was not defined.
@@ -695,20 +697,20 @@ ifeq ($(DBG),1)
 	# Verbosity level
 	CPPFLAGS += -DNMFGPU_VERBOSE_2=1
 
-	# Data transfers
- 	CPPFLAGS += -DNMFGPU_DEBUG_TRANSF=1
+	# # Data transfers
+	# CPPFLAGS += -DNMFGPU_DEBUG_TRANSF=1
 
 	# CPPFLAGS += -DNMFGPU_FORCE_BLOCKS=1
 	# CPPFLAGS += -DNMFGPU_TEST_BLOCKS=1
-	# CPPFLAGS += -DNMFGPU_FORCE_DIMENSIONS=1
-	CPPFLAGS += -DNMFGPU_DEBUG_REDUCT=1
+	# CPPFLAGS += -DNMFGPU_DEBUG_REDUCT=1
 
-	# Flags for I/O Debug & testing.
-	CPPFLAGS += -DNMFGPU_DEBUG_READ_FILE=1
-	CPPFLAGS += -DNMFGPU_DEBUG_READ_FILE2=1
-	CPPFLAGS += -DNMFGPU_DEBUG_READ_MATRIX=1
-	CPPFLAGS += -DNMFGPU_DEBUG_READ_MATRIX2=1
-	CPPFLAGS += -DNMFGPU_TESTING=1
+	# # Flags for I/O Debug & testing.
+	# CPPFLAGS += -DNMFGPU_DEBUG_READ_FILE=1
+	# CPPFLAGS += -DNMFGPU_DEBUG_READ_FILE2=1
+	# CPPFLAGS += -DNMFGPU_DEBUG_READ_MATRIX=1
+	# CPPFLAGS += -DNMFGPU_DEBUG_READ_MATRIX2=1
+	# CPPFLAGS += -DNMFGPU_DEBUG_WRITE_MATRIX=1
+	# CPPFLAGS += -DNMFGPU_TESTING=1
 
 	CC_WARN_VERBOSE := 1
 	NVCC_WARN_VERBOSE := 1
@@ -745,7 +747,7 @@ endif
 
 # Shows extra warnings on code compiled by NVCC, including many "false-positive" warnings.
 ifeq ($(NVCC_WARN_VERBOSE),1)
-	nvcc_CFLAGS := $(subst -Wno-,-W,$(nvcc_CFLAGS))
+	nvcc_CFLAGS := $(filter-out --disable-warnings,$(subst -Wno-,-W,$(nvcc_CFLAGS)))
 	export OPENCC_FLAGS := $(subst -Wno-,-W,$(OPENCC_FLAGS))
 	PTXAS_WARN_VERBOSE := 1
 else

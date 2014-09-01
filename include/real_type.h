@@ -98,7 +98,9 @@
 	#endif
 #endif
 
-// Conversion format from string used in the scanf(3) family of functions.
+/* Conversion format from string used in the scanf(3) family of functions.
+ * WARNING: Please, do NOT set to longer than 6 characters.
+ */
 #ifndef SCNgREAL
 	#if NMFGPU_SINGLE_PREC
 		#define SCNgREAL "g"
