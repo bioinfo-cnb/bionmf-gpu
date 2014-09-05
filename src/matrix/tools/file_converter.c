@@ -132,7 +132,7 @@ static int print_file_converter_help( char const *restrict const execname )
 
 	// Checks for NULL parameters
 	if ( ! execname ) {
-		print_errnum( error_shown_by_all, EFAULT, "\nprint_file_converter_help( execname )" );
+		print_errnum( error_shown_by_all, EFAULT, "print_file_converter_help( execname )" );
 		return EXIT_FAILURE;
 	}
 
@@ -140,7 +140,7 @@ static int print_file_converter_help( char const *restrict const execname )
 
 	// ---------------------------
 
-	status = print_message( shown_by_all, "\n\t<< ASCII-Binary file converter >>\n\n"
+	status = print_message( shown_by_all, "\t<< ASCII-Binary file converter >>\n\n"
 				"Usage:\n\t%s <filename> [ -b <native_format> ] [ -cr ] [ -e <native_format> ]\n\t%s -h\n\n",
 				execname, execname );
 
@@ -271,7 +271,7 @@ int main( int argc, char const *restrict *restrict argv )
 		return EXIT_FAILURE;
 	}
 
-	print_message( shown_by_all, "\nOutput file: %s\n", filename_str );
+	print_message( shown_by_all, "Output file: %s\n", filename_str );
 
 	// --------------------------------------------------------------------- //
 
@@ -294,7 +294,7 @@ int main( int argc, char const *restrict *restrict argv )
 			gettimeofday( &t_ftv, NULL );
 			timersub( &t_ftv, &t_tv, &t_etv );	// etv = ftv - tv
 			float const total_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06f );
-			print_message( shown_by_all, "\nDone in %g seconds.\n", total_time );
+			print_message( shown_by_all, "Done in %g seconds.\n", total_time );
 		}
 	#endif
 

@@ -114,8 +114,8 @@ size_t read_line( FILE *restrict file, char *restrict *restrict str )
 
 	if ( ! ( (uintptr_t) file * (uintptr_t) str ) ) {	// (file == NULL) || (str == NULL)
 		int const errnum = EFAULT;
-		if ( ! file ) print_errnum( error_shown_by_all, errnum, "\nread_line(file)" );
-		if ( str ) { *str = NULL; } else { print_errnum( error_shown_by_all, errnum, "\nread_line(str)"); }
+		if ( ! file ) print_errnum( error_shown_by_all, errnum, "read_line(file)" );
+		if ( str ) { *str = NULL; } else { print_errnum( error_shown_by_all, errnum, "read_line(str)"); }
 		return 1;
 	}
 
@@ -178,7 +178,7 @@ size_t read_line( FILE *restrict file, char *restrict *restrict str )
 
 	// Maximum line length reached
 	if ( (len_data >= (max_size-1)) * (c != '\n') * (! feof(file)) ) {
-		print_error( error_shown_by_all, "\nMaximum line length (%zu characters) reached.\n", max_size );
+		print_error( error_shown_by_all, "Maximum line length (%zu characters) reached.\n", max_size );
 		*str = NULL;
 		free(data);
 		return 2;
@@ -196,7 +196,7 @@ size_t read_line( FILE *restrict file, char *restrict *restrict str )
 
 	#if NMFGPU_DEBUG_READ_FILE2
 	////////////////////////////////
-		print_message( dbg_shown_by_all, "\n\tLen=%zu(%zu):%s.\n\tResizing data from %zu to %zu.\n",
+		print_message( dbg_shown_by_all, "\tLen=%zu(%zu):%s.\n\tResizing data from %zu to %zu.\n",
 				len_data, strlen(data), data, max_len_data, len_data + 1 );
 	////////////////////////////////
 	#endif
@@ -235,9 +235,9 @@ size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict 
 
 	if ( ! ((uintptr_t) file * (uintptr_t) str * (delimiter > 0)) ) {	// (file == NULL) || (str == NULL) || (delimiter <= 0)
 		int const errnum = EFAULT;
-		if ( ! file ) print_errnum( error_shown_by_all, errnum, "\nread_token(file)" );
-		if ( str ) { *str = NULL; } else { print_errnum( error_shown_by_all, errnum, "\nread_token(str)"); }
-		if ( delimiter <= 0 ) print_errnum( error_shown_by_all, EINVAL, "\nread_token( delimiter=%i )", delimiter );
+		if ( ! file ) print_errnum( error_shown_by_all, errnum, "read_token(file)" );
+		if ( str ) { *str = NULL; } else { print_errnum( error_shown_by_all, errnum, "read_token(str)"); }
+		if ( delimiter <= 0 ) print_errnum( error_shown_by_all, EINVAL, "read_token( delimiter=%i )", delimiter );
 		if ( last_char ) *last_char = 0;
 		return 1;
 	}
@@ -262,7 +262,7 @@ size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict 
 
 			#if NMFGPU_DEBUG_READ_FILE2
 			////////////////////////////////
-				print_message( dbg_shown_by_all, "\n\t(Re)allocating memory for %zu characters (current len_data=%zu)...\n",
+				print_message( dbg_shown_by_all, "\t(Re)allocating memory for %zu characters (current len_data=%zu)...\n",
 					       max_len_data, len_data );
 			////////////////////////////////
 			#endif
@@ -298,7 +298,7 @@ size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict 
 
 		#if NMFGPU_DEBUG_READ_FILE2
 		////////////////////////////////
-			print_message( dbg_shown_by_all, "\n\tFormat data: '%s' (len=%zu)\n", str_format, strlen(str_format) );
+			print_message( dbg_shown_by_all, "\tFormat data: '%s' (len=%zu)\n", str_format, strlen(str_format) );
 		////////////////////////////////
 		#endif
 
@@ -310,15 +310,16 @@ size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict 
 		////////////////////////////////
 		{
 			int const err = errno;
-			print_message( dbg_shown_by_all, "\n\tOriginal(len=%zu):'%s',conv=%i,c=", strlen(p), p, conv );
+			print_message( dbg_shown_by_all, "\tOriginal(len=%zu):'%s',conv=%i,c=", strlen(p), p, conv );
 			switch( c[0] ) {
-				case 0	 : { append_printed_message( dbg_shown_by_all, "(empty)\n" ); } break;
+				case 0	 : { append_printed_message( dbg_shown_by_all, "(empty)" ); } break;
 				case '\r': { append_printed_message( dbg_shown_by_all, "\\r" ); } break;
 				case '\n': { append_printed_message( dbg_shown_by_all, "\\n" ); } break;
 				case '\t': { append_printed_message( dbg_shown_by_all, "\\t" ); } break;
 				case  ' ': { append_printed_message( dbg_shown_by_all, "' '" ); } break;
 				default  : { append_printed_message( dbg_shown_by_all, (isgraph(c[0]) ? "'%c'" : "'\\0x%X'"), c[0] ); } break;
 			}
+			append_printed_message( dbg_shown_by_all, "\n" );
 			errno = err;
 		}
 		////////////////////////////////
@@ -364,7 +365,7 @@ size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict 
 
 	// Maximum line length reached
 	if ( (len_data >= (max_size-1)) * (!c[0]) ) {
-		print_error( error_shown_by_all, "\nMaximum token length (%zu characters) reached.\n", max_size );
+		print_error( error_shown_by_all, "Maximum token length (%zu characters) reached.\n", max_size );
 		if ( last_char ) *last_char = 0;
 		*str = NULL;
 		free(data);
@@ -380,7 +381,7 @@ size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict 
 
 	#if NMFGPU_DEBUG_READ_FILE2
 	////////////////////////////////
-		print_message( dbg_shown_by_all, "\n\tLen=%zu (%zu):'%s'.\n", len_data, strlen(data), data );
+		print_message( dbg_shown_by_all, "\tLen=%zu (%zu):'%s'.\n", len_data, strlen(data), data );
 	////////////////////////////////
 	#endif
 
@@ -426,8 +427,8 @@ struct tag_t tokenize( char *restrict str, int delimiter, size_t *restrict ntoke
 
 	if ( ! ( (uintptr_t) str * (uintptr_t) ntokens ) ) {	// (str == NULL) || (ntokens == NULL)
 		int const errnum = EFAULT;
-		if ( ! str ) print_errnum( error_shown_by_all, errnum, "\ntokenize( str )");
-		if ( ! ntokens ) print_errnum( error_shown_by_all, errnum, "\ntokenize( ntokens )");
+		if ( ! str ) print_errnum( error_shown_by_all, errnum, "tokenize( str )");
+		if ( ! ntokens ) print_errnum( error_shown_by_all, errnum, "tokenize( ntokens )");
 		return new_empty_tag();
 	}
 
@@ -489,7 +490,7 @@ struct tag_t tokenize( char *restrict str, int delimiter, size_t *restrict ntoke
 
 	// Maximum number of tokens reached.
 	if ( (len_pstr >= (max_len_pstr-1)) * (uintptr_t)nt ) {
-		print_error( error_shown_by_all, "\nMaximum number of tokens (%zu) reached.\n", max_len_pstr );
+		print_error( error_shown_by_all, "Maximum number of tokens (%zu) reached.\n", max_len_pstr );
 		free(pstr);
 		return new_empty_tag();
 	}
@@ -562,22 +563,22 @@ int generate_tag(char const *restrict token_prefix, char const *restrict token_s
 
 	if ( ( t0 < 0 ) + ( num_tokens <= 0 ) + ( ! tag ) ) {
 		int const errnum = EINVAL;
-		if ( t0 < 0 ) print_errnum( error_shown_by_all, errnum, "\ngenerate_tag( t0=%" PRI_IDX " )", t0 );
-		if ( num_tokens <= 0 ) print_errnum( error_shown_by_all, errnum, "\ngenerate_tag( num_tokens=%" PRI_IDX " )", num_tokens );
-		if ( ! tag ) print_errnum( error_shown_by_all, EFAULT, "\ngenerate_tag( tag )" );
+		if ( t0 < 0 ) print_errnum( error_shown_by_all, errnum, "generate_tag( t0=%" PRI_IDX " )", t0 );
+		if ( num_tokens <= 0 ) print_errnum( error_shown_by_all, errnum, "generate_tag( num_tokens=%" PRI_IDX " )", num_tokens );
+		if ( ! tag ) print_errnum( error_shown_by_all, EFAULT, "generate_tag( tag )" );
 		return EXIT_FAILURE;
 	}
 
 	index_t const max_num_tokens = MAX( matrix_max_pitch, matrix_max_non_padded_dim );
 
 	if ( num_tokens > max_num_tokens ) {
-		print_error( error_shown_by_all, "\ngenerate_tag( num_tokens=%" PRI_IDX " ): Excessive number of tokens. Maximum allowed: %"
+		print_error( error_shown_by_all, "generate_tag( num_tokens=%" PRI_IDX " ): Excessive number of tokens. Maximum allowed: %"
 				PRI_IDX ".\n", num_tokens, max_num_tokens );
 		return EXIT_FAILURE;
 	}
 
 	if ( (IDX_MAX - num_tokens) < t0 ) {
-		print_error( error_shown_by_all, "\ngenerate_tag( t0=%" PRI_IDX ", num_tokens=%" PRI_IDX " ): The provided parameters "
+		print_error( error_shown_by_all, "generate_tag( t0=%" PRI_IDX ", num_tokens=%" PRI_IDX " ): The provided parameters "
 				"exceed the limits used for matrix dimensions.\n\t<t0 + num_tokens> must NOT be greater than %"
 				PRI_IDX ".\n", t0, num_tokens, IDX_MAX );
 		return EXIT_FAILURE;
@@ -608,7 +609,7 @@ int generate_tag(char const *restrict token_prefix, char const *restrict token_s
 	max_len_tokens += (strlen( tk_p ) + strlen( tk_s ) + 1);	// +1 for the delimiter
 	max_len_tokens *= num_tokens;
 	if ( max_len_tokens > matrix_max_num_items )
-		print_error( error_shown_by_all, "\ngenerate_tag(): The provided parameters exceed the maximum length for a line (%zu).\n",
+		print_error( error_shown_by_all, "generate_tag(): The provided parameters exceed the maximum length for a line (%zu).\n",
 				matrix_max_num_items );
 
 	// ----------------------------
@@ -687,9 +688,9 @@ int retok( struct tag_t tag, index_t num_tokens )
 
 	if ( (! ((uintptr_t) str * (uintptr_t) pstr)) + (num_tokens <= 0) ) {	// str == NULL || ntokens == NULL || num_tokens <= 0
 		int const errnum = EFAULT;
-		if ( ! str )  print_errnum( error_shown_by_all, errnum, "\nretok( tag.tokens )");
-		if ( ! pstr ) print_errnum( error_shown_by_all, errnum, "\nretok( tag.ptokens[] )");
-		if ( num_tokens <= 0 ) print_errnum( error_shown_by_all, EINVAL, "\nretok( num_tokens )" );
+		if ( ! str )  print_errnum( error_shown_by_all, errnum, "retok( tag.tokens )");
+		if ( ! pstr ) print_errnum( error_shown_by_all, errnum, "retok( tag.ptokens[] )");
+		if ( num_tokens <= 0 ) print_errnum( error_shown_by_all, EINVAL, "retok( num_tokens )" );
 		return EXIT_FAILURE;
 	}
 
@@ -730,7 +731,7 @@ int read_tag( FILE *restrict file, int delimiter, struct tag_t *restrict tag, si
 {
 
 	if ( ! tag ) {
-		print_errnum( error_shown_by_all, EFAULT, "\nread_tag( tag )" );
+		print_errnum( error_shown_by_all, EFAULT, "read_tag( tag )" );
 		return 2;
 	}
 
@@ -808,10 +809,10 @@ int write_tag( FILE *restrict file, struct tag_t tag, char const *restrict const
 	if ( (! ((uintptr_t) file * (uintptr_t) tokens_name)) + (num_tokens < 0) + (delimiter <= 0) ) {
 		int const err_null = EFAULT;
 		int const err_inval = EINVAL;
-		if ( ! file ) print_errnum( error_shown_by_all, err_null, "\nwrite_tag( file )" );
-		if ( ! tokens_name )  print_errnum( error_shown_by_all, err_null, "\nwrite_tag( tokens_name )" );
-		if ( num_tokens < 0 ) print_errnum( error_shown_by_all, err_inval, "\nwrite_tag( num_tokens=%" PRI_IDX " )", num_tokens );
-		if ( delimiter <= 0 ) print_errnum( error_shown_by_all, err_inval, "\nwrite_tag( delimiter=%i )", delimiter );
+		if ( ! file ) print_errnum( error_shown_by_all, err_null, "write_tag( file )" );
+		if ( ! tokens_name )  print_errnum( error_shown_by_all, err_null, "write_tag( tokens_name )" );
+		if ( num_tokens < 0 ) print_errnum( error_shown_by_all, err_inval, "write_tag( num_tokens=%" PRI_IDX " )", num_tokens );
+		if ( delimiter <= 0 ) print_errnum( error_shown_by_all, err_inval, "write_tag( delimiter=%i )", delimiter );
 		return EXIT_FAILURE;
 	}
 
@@ -884,15 +885,15 @@ int show_tag( struct tag_t tag, char const *restrict const tokens_name, index_t 
 	char const *const *restrict const pdata = tag.ptokens;
 
 	if ( (num_tokens < 0) + (pnumtokens < 0) + (pnumtokens > num_tokens) ) {
-		print_errnum( error_shown_by_all, EINVAL, "\nshow_tag( pnumtokens=%" PRI_IDX ", num_tokens=%" PRI_IDX " )",
+		print_errnum( error_shown_by_all, EINVAL, "show_tag( pnumtokens=%" PRI_IDX ", num_tokens=%" PRI_IDX " )",
 				pnumtokens, num_tokens );
 		return EXIT_FAILURE;
 	}
 
 	if ( (prefix * (! tokens_name)) + ((pnumtokens > 1) * (! pdata)) ) {
 		int const errnum = EFAULT;
-		if ( prefix * (! tokens_name) )     print_errnum( error_shown_by_all, errnum, "\nshow_tag( tokens_name )" );
-		if ( (pnumtokens > 1) * (! pdata) ) print_errnum( error_shown_by_all, errnum, "\nshow_tag( pdata )" );
+		if ( prefix * (! tokens_name) )     print_errnum( error_shown_by_all, errnum, "show_tag( tokens_name )" );
+		if ( (pnumtokens > 1) * (! pdata) ) print_errnum( error_shown_by_all, errnum, "show_tag( pdata )" );
 		return EXIT_FAILURE;
 	}
 
@@ -904,7 +905,7 @@ int show_tag( struct tag_t tag, char const *restrict const tokens_name, index_t 
 
 
 	// Prefix.
-	if ( prefix && (print_message( all_processes, "\n%s (%" PRI_IDX "):\n", tokens_name, num_tokens ) != EXIT_SUCCESS) )
+	if ( prefix && (print_message( all_processes, "%s (%" PRI_IDX "):\n", tokens_name, num_tokens ) != EXIT_SUCCESS) )
 		return EXIT_FAILURE;
 
 	// Tokens

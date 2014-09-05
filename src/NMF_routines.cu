@@ -41,6 +41,9 @@
  *	Data type:
  *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
  *
+ *	CPU timing:
+ *		NMFGPU_PROFILING_GLOBAL: Compute total elapsed time.
+ *
  *	GPU timing (WARNING: They PREVENT asynchronous operations. The CPU thread is blocked on synchronization):
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
@@ -52,6 +55,7 @@
  *	Debug:
  *		NMFGPU_CPU_RANDOM: Uses the CPU (host) random generator (not the CURAND library).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
+ *		NMFGPU_DEBUG_REDUCT: Shows partial results of the reduction operation.
  *		NMFGPU_DEBUG_TRANSF: Shows the result of each data transfer.
  *		NMFGPU_SYNC_TRANSF: Performs synchronous data transfers.
  *
@@ -195,8 +199,8 @@ int stepM = 1;		// Loop directions: +1 (forward) || -1 (backward).
 index_t psNMF_N = 0;	// Current index in streams_NMF[].
 index_t psNMF_M = 0;	// Current index in streams_NMF[].
 
-index_t colIdx = 0;	// Current column index in Vcol, H and d_H (actually, row index, since H is transposed).
-index_t rowIdx = 0;	// Current row index in Vrow and W.
+index_t colIdx = 0;	// Current column index in Vcol. For H and d_H, it is <bM + colIdx>
+index_t rowIdx = 0;	// Current row index in Vrow. For W and d_W, it is <bN + rowIdx>
 
 // ---------------------------------------------
 
@@ -206,7 +210,7 @@ index_t rowIdx = 0;	// Current row index in Vrow and W.
 	static bool const verb_shown_by_all = false;		// Information messages in verbose mode.
 #endif
 
-#if NMFGPU_DEBUG
+#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 	static bool const sys_error_shown_by_all = true;	// System error messages
 #endif
 
@@ -252,15 +256,21 @@ int init_random( index_t seed )
 
 /*
  * Finalizes the selected random generator.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void destroy_random( void )
+int destroy_random( void )
 {
+
+	int status = EXIT_SUCCESS;
 
 	#if ! NMFGPU_CPU_RANDOM
 
-		finalize_randomGenerator();
+		status = finalize_randomGenerator();
 
 	#endif
+
+	return status;
 
 } // destroy_random
 
@@ -275,17 +285,27 @@ void destroy_random( void )
  * If 'event_A' is non-NULL, the operation is recorded as an event.
  *
  * WARNING: Requires the random generator properly initialized, with a seed set.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t height, index_t width, index_t padding,
-			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-				bool transpose, char const *__restrict__ const matrix_name_A,
+int set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t height, index_t width, index_t padding,
+			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF)
+				bool transpose,
+			#endif
+			#if NMFGPU_CPU_RANDOM && (NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL))
+				char const *__restrict__ const matrix_name_A,
+			#endif
+			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF) \
+				|| ((! NMFGPU_CPU_RANDOM) && (! NMFGPU_PROFILING_GLOBAL))
 				char const *__restrict__ const matrix_name_dA,
 			#endif
-			#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
+			#if ( NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF )
 				timing_data_t *__restrict__ const upload_timing,
 			#endif
 			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
 {
+
+	int status = EXIT_SUCCESS;
 
 	#if NMFGPU_CPU_RANDOM
 
@@ -310,14 +330,20 @@ void set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t he
 		/////////////////////////////
 
 		// Uploads the new values.
-		upload_matrix( A, height, padding, d_A,
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					width, transpose, matrix_name_A, matrix_name_dA,
-				#endif
-				#if NMFGPU_PROFILING_TRANSF
-					upload_timing,
-				#endif
-				stream_A, event_A );
+		status = upload_matrix( A, height, padding, d_A,
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+						width, transpose,
+					#endif
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+						matrix_name_A,
+					#endif
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+						matrix_name_dA,
+					#endif
+					#if NMFGPU_PROFILING_TRANSF
+						upload_timing,
+					#endif
+					stream_A, event_A );
 
 	// ---------------------------------
 
@@ -325,14 +351,18 @@ void set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t he
 
 		// Device random generator
 
-		matrix_random( d_A, height, width, padding,
-				#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-					transpose, matrix_name_dA,
-				#endif
-				stream_A, event_A );
+		status = matrix_random( d_A, height, width, padding,
+					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+						transpose,
+					#endif
+					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+						matrix_name_dA,
+					#endif
+					stream_A, event_A );
 
 	#endif
 
+	return status;
 
 } // set_random_values
 
@@ -345,13 +375,15 @@ void set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t he
  * H(BLM,Kp) = H(BLM,Kp) .* Haux(BLM,Kp) ./ accum_W(Kp)
  *
  * WARNING: CUBLAS stream must have been set to streams_NMF[psNMF_M].
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static void get_H_BLM( index_t BLM, index_t BLMp )
+static int get_H_BLM( index_t BLM, index_t BLMp )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t\t\t-----get_H_BLM(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX ")-----\n",
-				BLM, BLMp, colIdx );
+		print_message( verb_shown_by_all, "\t\t\t\t-----get_H_BLM(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
+				", colIdx=%" PRI_IDX ")-----\n", BLM, BLMp, colIdx );
 	#endif
 
 	// ---------------------------------
@@ -359,91 +391,141 @@ static void get_H_BLM( index_t BLM, index_t BLMp )
 	real *const d_Haux = d_Aux;		// Temporary matrix: W' * WH.
 	real *const d_accum_w = d_accum;	// Accumulator vector: SUM(W).
 
-	size_t const offset_dH = (size_t) colIdx * (size_t) Kp;
-
-	#ifdef NMFGPU_DEBUG
-		cublasStatus_t cublas_status = CUBLAS_STATUS_SUCCESS;
-	#endif
+	size_t const offset_dH = (size_t) (bM + colIdx) * (size_t) Kp;
 
 	// ----------------------------------
 
 	// WH(N,BLMp) = W * H(BLM,Kp)
-
-	#ifdef NMFGPU_DEBUG
-		cublas_status =
-	#endif
-		// streams_NMF[ psNMF_M ]
-		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, BLM, N, K, d_one, &d_H[ offset_dH ], Kp, d_W, Kp, d_zero, d_WH, BLMp );
-
-	#ifdef NMFGPU_DEBUG
-	///////////////////////////////
 	{
-		print_message( dbg_shown_by_all, "--- Resulting WHcol=W*H (BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX
-				"): ---\n", BLM, BLMp, colIdx );
-		check_cublas_status_st( cublas_status );
-		check_cuda_status();
-		bool const real_data = true;
-		bool const transpose = false;
-		struct matrix_tags_t const *__restrict__ mt = NULL;
-		show_device_matrix( d_WH, N, BLM, BLMp, real_data, transpose, dbg_shown_by_all, mt );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
+		#endif
+
+			// streams_NMF[ psNMF_M ]
+			CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, BLM, N, K, d_one, &d_H[ offset_dH ], Kp, d_W, Kp,
+					d_zero, d_WH, BLMp );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "get_H_BLM(): cublas_gemm( W * H ): %s\n",
+						getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+
+		#ifdef NMFGPU_DEBUG
+		///////////////////////////////
+		{
+			print_message( dbg_shown_by_all, "--- Resulting WHcol=W*H (BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
+					", colIdx=%" PRI_IDX "): ---\n", BLM, BLMp, colIdx );
+			int const status1 = check_cuda_status();
+			bool const real_data = true;
+			bool const transpose = false;
+			struct matrix_tags_t const *__restrict__ mt = NULL;
+			int const status2 = show_device_matrix( d_WH, N, BLM, BLMp, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
+		}
+		/////////////////////////////
+		#endif
 	}
-	/////////////////////////////
-	#endif
 
 	// ---------------------------
 
         // WH(N,BLMp) = Vcol(N,BLMp) ./ WH(N,BLMp)
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
 
-        matrix_div_sub( d_WH, d_Vcol, N, BLMp,
-			#ifdef NMFGPU_DEBUG
-				BLM, "WHcol", "Vcol",
-			#endif
-			true,	// division
-			#if NMFGPU_PROFILING_KERNELS
-				div_timing,
-			#endif
-			streams_NMF[ psNMF_M ], event_Vcol );
+		matrix_div_sub( d_WH, d_Vcol, N, BLMp,
+				#ifdef NMFGPU_DEBUG
+					BLM,
+				#endif
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					"WHcol", "Vcol",
+				#endif
+				true,	// division
+				#if NMFGPU_PROFILING_KERNELS
+					div_timing,
+				#endif
+				streams_NMF[ psNMF_M ], event_Vcol );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ----------------------------
 
         // Haux(BLM,Kp) = W' * WH(N,BLMp)
-
-	#ifdef NMFGPU_DEBUG
-		cublas_status =
-	#endif
-		// streams_NMF[ psNMF_M ]
-		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, K, BLM, N, d_one, d_W, Kp, d_WH, BLMp, d_zero, d_Haux, Kp );
-
-	#ifdef NMFGPU_DEBUG
-	///////////////////////////////
 	{
-		print_message( dbg_shown_by_all, "--- Resulting d_Haux (BLM=%" PRI_IDX "): ---\n", BLM );
-		check_cublas_status_st( cublas_status );
-		check_cuda_status();
-		bool const real_data = true;
-		bool const transpose = true;
-		struct matrix_tags_t const *__restrict__ mt = NULL;
-		show_device_matrix( d_Haux, BLM, K, Kp, real_data, transpose, dbg_shown_by_all, mt );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
+		#endif
+
+			// streams_NMF[ psNMF_M ]
+			CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_T, K, BLM, N, d_one, d_W, Kp, d_WH, BLMp, d_zero, d_Haux, Kp );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "get_H_BLM(): cublas_gemm( W' * WH ): %s\n",
+						getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+
+		#ifdef NMFGPU_DEBUG
+		///////////////////////////////
+		{
+			print_message( dbg_shown_by_all, "--- Resulting d_Haux (BLM=%" PRI_IDX "): ---\n", BLM );
+			int const status1 = check_cuda_status();
+			bool const real_data = true;
+			bool const transpose = true;
+			struct matrix_tags_t const *__restrict__ mt = NULL;
+			int const status2 = show_device_matrix( d_Haux, BLM, K, Kp, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
+		}
+		/////////////////////////////
+		#endif
 	}
-	/////////////////////////////
-	#endif
 
 	// ----------------------------
 
         // H(BLM,Kp) = H(BLM,Kp) .* Haux(BLM,Kp) ./ accum_W(Kp)
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
 
-        matrix_mul_div( &d_H[ offset_dH ], d_Haux, d_accum_w, BLM, Kp,
-			#ifdef NMFGPU_DEBUG
-				K, true, "H", "Haux", "accum_W",	// transpose
-			#endif
-			streams_NMF[ psNMF_M ] );
+		matrix_mul_div( &d_H[ offset_dH ], d_Haux, d_accum_w, BLM, Kp,
+				#ifdef NMFGPU_DEBUG
+					K, true,	// transpose
+				#endif
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					"H",
+				#endif
+				#if NMFGPU_DEBUG
+					"Haux", "accum_W",
+				#endif
+				streams_NMF[ psNMF_M ] );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ----------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t\t\t-----End of get_H_BLM(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX
+		print_message( verb_shown_by_all, "\t\t\t\t-----End of get_H_BLM(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", colIdx=%" PRI_IDX
 				")-----\n", BLM, BLMp, colIdx );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // get_H_BLM
 
@@ -460,12 +542,14 @@ static void get_H_BLM( index_t BLM, index_t BLMp )
  * Pointer to 'd_H' is also updated.
  *
  * WARNING: CUBLAS stream must have been set to streams_NMF[psNMF_M].
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static void getH_loop( index_t const num_steps, index_t const BLM, index_t const BLMp )
+static int getH_loop( index_t const num_steps, index_t const BLM, index_t const BLMp )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t----- getH_loop(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", num_steps=%" PRI_IDX
+		print_message( verb_shown_by_all, "\t\t----- getH_loop(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", num_steps=%" PRI_IDX
 				", stepM=%i, colIdx=%" PRI_IDX ") -----\n", BLM, BLMp, num_steps, stepM, colIdx );
 	#endif
 
@@ -482,7 +566,18 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 	 * Haux(BLM,Kp) = W' * WH(N,BLMp)
 	 * H(BLM,Kp) = H(BLM,Kp) .* Haux(BLM,Kp) ./ accum_W
 	 */
-	get_H_BLM( BLM, BLMp );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		get_H_BLM( BLM, BLMp );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// --------------------
 
@@ -491,7 +586,7 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 	for ( index_t st = 1 ; st < num_steps ; st++ ) {
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t\t\t-----getH_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%"
+			print_message( verb_shown_by_all, "\t\t\t-----getH_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%"
 					PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n", st, num_steps, BLM, BLMp, stepM, colIdx );
 		#endif
 
@@ -508,16 +603,32 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 					PRI_IDX ", pitch=%" PRI_IDX "): ---\n", N, BLM, BLMp, colIdx, MpPp);
 		//////////////////////////////
 		#endif
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
 
-		upload_matrix_partial( Vcol, N, MpPp, 0, colIdx,	// Starting row: 0
-					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						BLM, "Vcol", "d_Vcol",
-					#endif
-					BLMp, d_Vcol, stream_Vcol, event_Vcol
-					#if NMFGPU_PROFILING_TRANSF
-						, &upload_Vcol_timing
-					#endif
-				);
+			upload_matrix_partial( Vcol, N, MpPp, 0, colIdx,	// Starting row: 0
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							BLM,
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+							"Vcol",
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							"d_Vcol",
+						#endif
+						BLMp, d_Vcol, stream_Vcol, event_Vcol
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vcol_timing
+						#endif
+						);
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// ----------------
 
@@ -525,7 +636,21 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 		psNMF_M += stepM;	// forward or backward
 
 		// Sets new CUBLAS stream.
-		cublasSetStream( cublas_handle, streams_NMF[ psNMF_M ] );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
+
+				cublasSetStream( cublas_handle, streams_NMF[ psNMF_M ] );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "getH_loop(): cublasSetStream( streams_NMF[" PRI_IDX
+							"] ): %s\n", psNMF_M, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// -----------------------
 
@@ -534,10 +659,21 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 		 * Haux(BLM,Kp) = W' * WH(N,BLMp)
 		 * H(BLM,Kp) = H(BLM,Kp) .* Haux(BLM,Kp) ./ accum_W
 		 */
-		get_H_BLM( BLM, BLMp );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			get_H_BLM( BLM, BLMp );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t\t\t-----getH_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLM=%" PRI_IDX
+			print_message( verb_shown_by_all, "\t\t\t-----getH_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLM=%" PRI_IDX
 					", BLMp=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n", st, num_steps, BLM, BLMp, stepM, colIdx );
 		#endif
 
@@ -546,9 +682,11 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
 	// -------------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t-----End of getH_loop(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", num_steps=%" PRI_IDX
+		print_message( verb_shown_by_all, "\t\t-----End of getH_loop(BLM=%" PRI_IDX ", BLMp=%" PRI_IDX ", num_steps=%" PRI_IDX
 				", stepM=%i, colIdx=%" PRI_IDX ")-----\n", BLM, BLMp, num_steps, stepM, colIdx );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // getH_loop
 
@@ -565,23 +703,39 @@ static void getH_loop( index_t const num_steps, index_t const BLM, index_t const
  * Once all these blocks are processed, it updates 'pBLM' to process any
  * remaining block(s) (getH_loop() is called again).
  * It also updates 'stepM' according to the processing direction (forward or backward).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void update_H( void )
+int update_H( void )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n-----update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n",
+		print_message( verb_shown_by_all, "-----update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n",
 				pBLM, stepM, colIdx );
 	#endif
 
 	// ----------------------------------
 
 	// Reduces d_W to a row.
-	matrix_to_row( d_W, N, Kp,
-			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-				K, "d_W",
-			#endif
-			d_Aux, d_accum, stream_W );
+	{
+		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		matrix_to_row( d_W, N, Kp,
+				#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+					K,
+				#endif
+				#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					"d_W",
+				#endif
+				d_Aux, d_accum, stream_W );
+
+		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ----------------------------------
 
@@ -597,37 +751,44 @@ void update_H( void )
 	// --------------------------------
 
 	// Changes CUBLAS stream.
-	cublasSetStream( cublas_handle, streams_NMF[ psNMF_M ] );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
+		#endif
+
+		cublasSetStream( cublas_handle, streams_NMF[ psNMF_M ] );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "update_H(): cublasSetStream( streams_NMF[" PRI_IDX
+						"] ): %s\n", psNMF_M, getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+	}
+
+	// --------------------------------
 
 	// Delays further operations until d_W is ready.
-	{
-		#if NMFGPU_DEBUG
-			cudaError_t cuda_status = cudaSuccess;
+	for ( index_t i = 0, ps = psNMF_M ; i < num_steps ; i++, ps += stepM ) {
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cudaError_t const cuda_status =
 		#endif
 
-		for ( index_t i = 0, ps = psNMF_M ; i < num_steps ; i++, ps += stepM ) {
+			cudaStreamWaitEvent( streams_NMF[ ps ], event_W, 0 );
 
-			#if NMFGPU_DEBUG
-				cudaError_t const cs =
-			#endif
-
-				cudaStreamWaitEvent( streams_NMF[ ps ], event_W, 0 );
-
-			#if NMFGPU_DEBUG
-				if ( cs != cudaSuccess )
-					cuda_status = cs;
-			#endif
-		}
-
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error: could not delay operations until d_W is ready: %s\n"
-						"Error in update_H(psNMF_M=%" PRI_IDX ", pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX
-						").\n", cudaGetErrorString(cuda_status), psNMF_M, pBLM, stepM, colIdx );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "update_H(psNMF_M=%" PRI_IDX ", pBLM=%" PRI_IDX
+						", stepM=%i, colIdx=%" PRI_IDX "): cudaStreamWaitEvent( streams_NMF[%"
+						PRI_IDX "], event_W ): %s\n", psNMF_M, pBLM, stepM, colIdx, ps,
+						cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
-	}
+
+	} // for
 
 	// --------------------------------
 
@@ -636,7 +797,18 @@ void update_H( void )
 	 * Haux(BLM,Kp) = W' * WH(N,BLMp)
 	 * H(BLM,Kp) = H(BLM,Kp) .* Haux(BLM,Kp) ./ accum_W
 	 */
-	getH_loop( num_steps, BLM, BLMp );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		getH_loop( num_steps, BLM, BLMp );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// --------------------------------
 
@@ -645,7 +817,7 @@ void update_H( void )
 	if ( block_M.num_steps[1] ) {	// There are more blocks in dimension "M" to process.
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t-----update_H(pBLM=%" PRI_IDX ",stepM=%i,colIdx=%" PRI_IDX ",psNMF_M=%" PRI_IDX
+			print_message( verb_shown_by_all, "\t-----update_H(pBLM=%" PRI_IDX ",stepM=%i,colIdx=%" PRI_IDX ",psNMF_M=%" PRI_IDX
 					"): New block-----\n", pBLM, stepM, colIdx, psNMF_M );
 		#endif
 
@@ -687,14 +859,28 @@ void update_H( void )
 		psNMF_M += stepM;	// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( cublas_handle, streams_NMF[ psNMF_M ] );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
+
+				cublasSetStream( cublas_handle, streams_NMF[ psNMF_M ] );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "update_H(new block): cublasSetStream( streams_NMF[" PRI_IDX
+							"] ): %s\n", psNMF_M, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// ------------------------
 
 		// Transfers (asynchronously) a new <N x BLM> block from Vcol to d_Vcol.
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t-----update_H: New block (pBLM=%" PRI_IDX ", stepM=%i, BLM=%" PRI_IDX ", BLMp=%"
+			print_message( verb_shown_by_all, "\t-----update_H: New block (pBLM=%" PRI_IDX ", stepM=%i, BLM=%" PRI_IDX ", BLMp=%"
 					PRI_IDX ", num_steps=%" PRI_IDX ", colIdx=%" PRI_IDX ", psNMF_M=%" PRI_IDX ")-----\n", pBLM,
 					stepM, BLM, BLMp, num_steps, colIdx, psNMF_M );
 		#endif
@@ -705,16 +891,32 @@ void update_H( void )
 					PRI_IDX ", pitch=%" PRI_IDX "): ---\n", N, BLM, BLMp, colIdx, MpPp);
 		//////////////////////////////
 		#endif
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
 
-		upload_matrix_partial( Vcol, N, MpPp, 0, colIdx,	// Starting row: 0
-					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						BLM, "Vcol", "d_Vcol",
-					#endif
+			upload_matrix_partial( Vcol, N, MpPp, 0, colIdx,	// Starting row: 0
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							BLM,
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+							"Vcol",
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							"d_Vcol",
+						#endif
 						BLMp, d_Vcol, stream_Vcol, event_Vcol
-					#if NMFGPU_PROFILING_TRANSF
-						, &upload_Vcol_timing
-					#endif
-				);
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vcol_timing
+						#endif
+						);
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// -------------------------
 
@@ -725,7 +927,18 @@ void update_H( void )
 		 * Haux(BLM,Kp) = W' * WH(N,BLMp)
 		 * H(BLM,Kp) = H(BLM,Kp) .* Haux(BLM,Kp) ./ accum_W
 		 */
-		getH_loop( num_steps, BLM, BLMp );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			getH_loop( num_steps, BLM, BLMp );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// -------------------------
 
@@ -733,7 +946,7 @@ void update_H( void )
 		stepM *= (-1);
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t-----update_H: End of new block (pBLM=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%"
+			print_message( verb_shown_by_all, "\t-----update_H: End of new block (pBLM=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%"
 					PRI_IDX ", num_steps=%" PRI_IDX ", colIdx=%" PRI_IDX "). New StepM=%i -----\n", pBLM, BLM, BLMp,
 					num_steps, colIdx, stepM );
 		#endif
@@ -744,47 +957,50 @@ void update_H( void )
 
 	// Records as an event all previous operations on matrix H.
 	{
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaEventRecord( event_H, streams_NMF[ psNMF_M ] );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error recording CUDA event: %s\nError in update_H(pBLM=%" PRI_IDX
-						", stepM=%i, colIdx=%" PRI_IDX ").\n", cudaGetErrorString(cuda_status), pBLM, stepM, colIdx );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "Error in update_H( pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX
+						"): cudaEventRecord( event_H, streams_NMF[%" PRI_IDX "] ): %s\n", pBLM, stepM, colIdx,
+						psNMF_M, cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// ------------------------
 
 	// Delays further operations on "stream_H" until "event_H" completes.
 	{
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaStreamWaitEvent( stream_H, event_H, 0 );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error: could not delay operations until event_H completes: %s\n"
-						"Error in update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ").\n",
-						cudaGetErrorString(cuda_status), pBLM, stepM, colIdx );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "Error in update_H( pBLM=%" PRI_IDX ", stepM=%i, colIdx=%"
+						PRI_IDX "): cudaStreamWaitEvent( stream_H, event_H ): %s\n", pBLM, stepM, colIdx,
+						cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// ------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( dbg_shown_by_all, "\n-----End of update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n",
+		print_message( dbg_shown_by_all, "-----End of update_H(pBLM=%" PRI_IDX ", stepM=%i, colIdx=%" PRI_IDX ")-----\n",
 				pBLM, stepM, colIdx );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // update_H
 
@@ -797,12 +1013,14 @@ void update_H( void )
  * W(BLN,Kp) = W(BLN,Kp) .* Waux(BLN,Kp) ./ accum_h
  *
  * WARNING: CUBLAS stream must have been set to streams_NMF[psNMF_N].
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static void get_W_BLN( index_t const BLN )
+static int get_W_BLN( index_t const BLN )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t\t\t-----get_W_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
+		print_message( verb_shown_by_all, "\t\t\t\t-----get_W_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
 	#endif
 
 	// ---------------------------------
@@ -810,95 +1028,143 @@ static void get_W_BLN( index_t const BLN )
 	real *const d_Waux = d_Aux;		// Temporary matrix: WH * H'
 	real *const d_accum_h = d_accum;	// Accumulator vector: SUM(H).
 
-	size_t const offset_dW = (size_t) rowIdx * (size_t) Kp;
-
-	#ifdef NMFGPU_DEBUG
-		cublasStatus_t cublas_status = CUBLAS_STATUS_SUCCESS;
-	#endif
+	size_t const offset_dW = (size_t) (bN + rowIdx) * (size_t) Kp;
 
 	// ----------------------------------
 
 	// WH(BLN,Mp) = W(BLN,Kp) * H
-
-	#ifdef NMFGPU_DEBUG
-		cublas_status =
-	#endif
-		// streams_NMF[ psNMF_N ]
-		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, &d_W[ offset_dW ], Kp, d_zero, d_WH, Mp );
-
-	#ifdef NMFGPU_DEBUG
-	///////////////////////////////
 	{
-		print_message( dbg_shown_by_all, "--- Resulting WHrow=W*H (BLN=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%" PRI_IDX "): ---\n",
-				BLN, Mp, rowIdx );
-		check_cublas_status_st( cublas_status );
-		check_cuda_status();
-		bool const real_data = true;
-		bool const transpose = false;
-		struct matrix_tags_t const *__restrict__ mt = NULL;
-		show_device_matrix( d_WH, BLN, M, Mp, real_data, transpose, dbg_shown_by_all, mt );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
+		#endif
+
+			// streams_NMF[ psNMF_N ]
+			CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, &d_W[ offset_dW ], Kp,
+					d_zero, d_WH, Mp );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "get_W_BLN(): cublas_gemm( W * H ): %s\n",
+						getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+
+		#ifdef NMFGPU_DEBUG
+		///////////////////////////////
+		{
+			print_message( dbg_shown_by_all, "--- Resulting WHrow=W*H (BLN=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%"
+					PRI_IDX "): ---\n", BLN, Mp, rowIdx );
+			int const status1 = check_cuda_status();
+			bool const real_data = true;
+			bool const transpose = false;
+			struct matrix_tags_t const *__restrict__ mt = NULL;
+			int const status2 = show_device_matrix( d_WH, BLN, M, Mp, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
+		}
+		/////////////////////////////
+		#endif
 	}
-	/////////////////////////////
-	#endif
 
 	// ---------------------------
 
 	// WH(BLN,Mp) = Vrow(BLN,Mp) ./ WH(BLN,Mp)
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
 
-	matrix_div_sub( d_WH, d_Vrow, BLN, Mp,
-			#ifdef NMFGPU_DEBUG
-				M, "WHrow", "Vrow",
-			#endif
-			true,	// division
-			#if NMFGPU_PROFILING_KERNELS
-				div_timing,
-			#endif
-			streams_NMF[ psNMF_N ], event_Vrow );
+		matrix_div_sub( d_WH, d_Vrow, BLN, Mp,
+				#ifdef NMFGPU_DEBUG
+					M,
+				#endif
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					"WHrow", "Vrow",
+				#endif
+				true,	// division
+				#if NMFGPU_PROFILING_KERNELS
+					div_timing,
+				#endif
+				streams_NMF[ psNMF_N ], event_Vrow );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ---------------------------
 
 	// Waux(BLN,Kp) = WH(BLN,Mp) * H'
-
-	#ifdef NMFGPU_DEBUG
-		cublas_status =
-	#endif
-
-		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, K, BLN, M, d_one, d_H, Kp, d_WH, Mp, d_zero, d_Waux, Kp );
-
-	#ifdef NMFGPU_DEBUG
-	///////////////////////////////
 	{
-		print_message( dbg_shown_by_all, "--- Resulting d_Waux (BLN=%" PRI_IDX "): ---\n", BLN );
-		check_cublas_status_st( cublas_status );
-		check_cuda_status();
-		bool const real_data = true;
-		bool const transpose = false;
-		struct matrix_tags_t const *__restrict__ mt = NULL;
-		show_device_matrix( d_Waux, BLN, K, Kp, real_data, transpose, dbg_shown_by_all, mt );
-	}
-	/////////////////////////////
-	#endif
 
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
+		#endif
+
+			CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, K, BLN, M, d_one, d_H, Kp, d_WH, Mp, d_zero, d_Waux, Kp );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "get_W_BLN(): cublas_gemm( WH * H' ): %s\n",
+						getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+
+		#ifdef NMFGPU_DEBUG
+		///////////////////////////////
+		{
+			print_message( dbg_shown_by_all, "--- Resulting d_Waux (BLN=%" PRI_IDX "): ---\n", BLN );
+			int const status1 = check_cuda_status();
+			bool const real_data = true;
+			bool const transpose = false;
+			struct matrix_tags_t const *__restrict__ mt = NULL;
+			int const status2 = show_device_matrix( d_Waux, BLN, K, Kp, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
+		}
+		/////////////////////////////
+		#endif
+	}
 
 	// ----------------------------
 
 
 	// W(BLN,Kp) = W(BLN,Kp) .* Waux(BLN,Kp) ./ accum_H(Kp)
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
 
-	matrix_mul_div( &d_W[ offset_dW ], d_Waux, d_accum_h, BLN, Kp,
-			#ifdef NMFGPU_DEBUG
-				K, false, "W", "Waux", "accum_H",	// No matrix transposing.
-			#endif
-			streams_NMF[ psNMF_N ] );
+		matrix_mul_div( &d_W[ offset_dW ], d_Waux, d_accum_h, BLN, Kp,
+				#ifdef NMFGPU_DEBUG
+					K, false,	// No matrix transposing.
+				#endif
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					"W",
+				#endif
+				#if NMFGPU_DEBUG
+					"Waux", "accum_H",
+				#endif
+				streams_NMF[ psNMF_N ] );
 
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ----------------------------
 
-
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t\t\t-----End of get_W_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n",
+		print_message( verb_shown_by_all, "\t\t\t\t-----End of get_W_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n",
 				BLN, rowIdx );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // getWrow
 
@@ -915,12 +1181,14 @@ static void get_W_BLN( index_t const BLN )
  * Pointer to 'd_W' is also updated.
  *
  * WARNING: CUBLAS stream must have been set to streams_NMF[psNMF_N].
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static void getW_loop( index_t const num_steps, index_t const BLN )
+static int getW_loop( index_t const num_steps, index_t const BLN )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t-----getW_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( verb_shown_by_all, "\t\t-----getW_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
 				BLN, num_steps, stepN );
 	#endif
 
@@ -937,7 +1205,18 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 	 * Waux(BLN,Kp) = WH(BLN,Mp) * H'
 	 * W(BLN,Kp) = W(BLN,Kp) .* Waux(BLN,Kp) ./ accum_h
 	 */
-	get_W_BLN( BLN );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		get_W_BLN( BLN );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// --------------------
 
@@ -946,8 +1225,8 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 	for ( index_t st = 1 ; st < num_steps ; st++ ) {
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t\t\t-----getW_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLN=%" PRI_IDX ", rowIdx=%"
-					PRI_IDX ", stepN=%i)-----\n", st, num_steps, BLN, rowIdx, stepN );
+			print_message( verb_shown_by_all, "\t\t\t-----getW_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLN=%"
+					PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n", st, num_steps, BLN, rowIdx, stepN );
 		#endif
 
 		// ----------------
@@ -959,19 +1238,35 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 		///////////////////////////////
-			print_message( dbg_shown_by_all, "--- Vrow processed (BLN=%" PRI_IDX ", new rowIdx=%" PRI_IDX "): ---\n", BLN,  rowIdx );
+			print_message( dbg_shown_by_all, "--- Vrow processed (BLN=%" PRI_IDX ", new rowIdx=%" PRI_IDX "): ---\n", BLN, rowIdx );
 		//////////////////////////////
 		#endif
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
 
-		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
-					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						M, "Vrow", "d_Vrow",
-					#endif
+			upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							M,
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+							"Vrow",
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							"d_Vrow",
+						#endif
 						Mp, d_Vrow, stream_Vrow, event_Vrow
-					#if NMFGPU_PROFILING_TRANSF
-						, &upload_Vrow_timing
-					#endif
-				);
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vrow_timing
+						#endif
+						);
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// ----------------
 
@@ -979,7 +1274,21 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 		psNMF_N += stepN;	// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
+
+			cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "getW_loop(): cublasSetStream( streams_NMF[" PRI_IDX
+							"] ): %s\n", psNMF_N, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// ----------------
 
@@ -988,12 +1297,23 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 		 * Waux(BLN,Kp) = WH(BLN,Mp) * H'
 		 * W(BLN,Kp) = W(BLN,Kp) .* Waux(BLN,Kp) ./ accum_h
 		 */
-		get_W_BLN( BLN );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			get_W_BLN( BLN );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// ----------------
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t\t\t-----getW_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLN=%"
+			print_message( verb_shown_by_all, "\t\t\t-----getW_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLN=%"
 					PRI_IDX ", stepN=%i)-----\n", st, num_steps, BLN, stepN );
 		#endif
 
@@ -1002,9 +1322,11 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
 	// --------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t-----End of getW_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( verb_shown_by_all, "\t\t-----End of getW_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
 				BLN, num_steps, stepN );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // getW_loop
 
@@ -1021,24 +1343,39 @@ static void getW_loop( index_t const num_steps, index_t const BLN )
  * Once all these blocks are processed, it updates 'pBLN' to process any
  * remaining block(s) (getW_loop() is called again).
  * It also updates 'stepN' according to the processing direction (forward or backward).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void update_W( void )
+int update_W( void )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n-----update_W(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( verb_shown_by_all, "-----update_W(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
 				pBLN, rowIdx, stepN );
 	#endif
 
 	// ----------------------------------
 
 	// Reduces d_H to a row.
+	{
+		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
 
-	matrix_to_row( d_H, M, Kp,
-			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-				K, "d_H",
-			#endif
-			d_Aux, d_accum, stream_H );
+		matrix_to_row( d_H, M, Kp,
+				#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+					K,
+				#endif
+				#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					"d_H",
+				#endif
+				d_Aux, d_accum, stream_H );
+
+		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ----------------------------------
 
@@ -1053,36 +1390,42 @@ void update_W( void )
 	// --------------------------------
 
 	// Changes CUBLAS stream.
-	cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
+		#endif
+
+			cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "update_W(): cublasSetStream( streams_NMF[" PRI_IDX
+						"] ): %s\n", psNMF_N, getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+	}
+
+	// --------------------------------
 
 	// Delays further operations until d_H is ready.
-	{
-		#if NMFGPU_DEBUG
-			cudaError_t cuda_status = cudaSuccess;
+
+	for ( index_t i = 0, ps = psNMF_N ; i < num_steps ; i++, ps += stepN ) {
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cudaError_t const cuda_status =
 		#endif
 
-		for ( index_t i = 0, ps = psNMF_N ; i < num_steps ; i++, ps += stepN ) {
+			cudaStreamWaitEvent( streams_NMF[ ps ], event_H, 0 );
 
-			#if NMFGPU_DEBUG
-				cudaError_t const cs =
-			#endif
-
-				cudaStreamWaitEvent( streams_NMF[ ps ], event_H, 0 );
-
-			#if NMFGPU_DEBUG
-				if ( cs != cudaSuccess )
-					cuda_status = cs;
-			#endif
-		}
-
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error: Could not delay operations until d_H is ready: %s\n"
-						"Error in update_W(psNMF_N=%" PRI_IDX ", pBLN=%" PRI_IDX ", stepN=%i).\n",
-						cudaGetErrorString(cuda_status), psNMF_N, pBLN, stepN );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "Error in update_W( psNMF_N=%" PRI_IDX ", pBLN=%" PRI_IDX
+						", stepN=%i): cudaStreamWaitEvent( streams_NMF[%" PRI_IDX "], event_H ): %s\n",
+						psNMF_N, pBLN, stepN, ps, cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// --------------------------------
@@ -1092,7 +1435,18 @@ void update_W( void )
 	 * Waux(BLN,Kp) = WH(BLN,Mp) * H'
 	 * W(BLN,Kp) = W(BLN,Kp) .* Waux(BLN,Kp) ./ accum_h
 	 */
-	getW_loop( num_steps, BLN );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		getW_loop( num_steps, BLN );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// --------------------------------
 
@@ -1101,8 +1455,8 @@ void update_W( void )
 	if ( block_N.num_steps[1] ) {  // There are more blocks in dimension "N" to process.
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t-----update_W(pBLN=%" PRI_IDX ",stepN=%i, psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX
-					"): New block-----\n", pBLN, stepN, psNMF_N, rowIdx );
+			print_message( verb_shown_by_all, "\t-----update_W(pBLN=%" PRI_IDX ",stepN=%i, psNMF_N=%" PRI_IDX
+					", rowIdx=%" PRI_IDX "): New block-----\n", pBLN, stepN, psNMF_N, rowIdx );
 		#endif
 
 		// Updates pointers to Vrow (HOST matrix) and d_W (DEVICE matrix) and changes block information.
@@ -1142,34 +1496,64 @@ void update_W( void )
 		psNMF_N += stepN;			// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
+
+				cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "update_W(new block): cublasSetStream( streams_NMF["
+							PRI_IDX "] ): %s\n", psNMF_N, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// ----------------
 
 		// Transfers (asynchronously) a new <BLN x M> block from Vrow to d_Vrow.
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t-----update_W: New block (pBLN=%" PRI_IDX ", stepN=%i, BLN=%" PRI_IDX
+			print_message( verb_shown_by_all, "\t-----update_W: New block (pBLN=%" PRI_IDX ", stepN=%i, BLN=%" PRI_IDX
 					", num_steps=%" PRI_IDX ", psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", pBLN, stepN,
 					BLN, num_steps, psNMF_N, rowIdx );
 		#endif
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 		///////////////////////////////
-			print_message( dbg_shown_by_all, "--- Vrow processed (BLN=%" PRI_IDX ", M=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%"
-					PRI_IDX "): ---\n", BLN, M, Mp, rowIdx );
+			print_message( dbg_shown_by_all, "--- Vrow processed (BLN=%" PRI_IDX ", M=%" PRI_IDX ", Mp=%" PRI_IDX
+					", rowIdx=%" PRI_IDX "): ---\n", BLN, M, Mp, rowIdx );
 		//////////////////////////////
 		#endif
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
 
-		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
-					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						M, "Vrow", "d_Vrow",
-					#endif
-					Mp, d_Vrow, stream_Vrow, event_Vrow
-					#if NMFGPU_PROFILING_TRANSF
-						, &upload_Vrow_timing
-					#endif
-				);
+			upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							M,
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+							"Vrow",
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							"d_Vrow",
+						#endif
+						Mp, d_Vrow, stream_Vrow, event_Vrow
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vrow_timing
+						#endif
+						);
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// ---------------------------
 
@@ -1180,7 +1564,18 @@ void update_W( void )
 		 * Waux(BLN,Kp) = WH(BLN,Mp) * H'
 		 * W(BLN,Kp) = W(BLN,Kp) .* Waux(BLN,Kp) ./ accum_h
 		 */
-		getW_loop( num_steps, BLN );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			getW_loop( num_steps, BLN );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// -------------------------
 
@@ -1188,8 +1583,8 @@ void update_W( void )
 		stepN *= (-1);
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t-----update_W: End of new block (pBLN=%" PRI_IDX ", BLN=%" PRI_IDX ", num_steps=%"
-					PRI_IDX "). New StepN=%i -----\n", pBLN, BLN, num_steps, stepN );
+			print_message( verb_shown_by_all, "\t-----update_W: End of new block (pBLN=%" PRI_IDX ", BLN=%"
+					PRI_IDX ", num_steps=%" PRI_IDX "). New StepN=%i -----\n", pBLN, BLN, num_steps, stepN );
 		#endif
 
 	} // if ( block_N.num_steps[1] > 0 )
@@ -1198,47 +1593,50 @@ void update_W( void )
 
 	// Records as an event all previous operations on matrix W.
 	{
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaEventRecord( event_W, streams_NMF[ psNMF_N ] );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error recording CUDA event: %s\nError in update_W(pBLN=%"
-						PRI_IDX ", stepN=%i).\n", cudaGetErrorString(cuda_status), pBLN, stepN );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "Error in update_W( pBLN=%" PRI_IDX ", stepN=%i): "
+						"cudaEventRecord( event_W, streams_NMF[%" PRI_IDX "] ): %s\n", pBLN, stepN,
+						psNMF_N, cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// -----------------------
 
 	// Delays further operations on "stream_W" until "event_W" completes.
 	{
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaStreamWaitEvent( stream_W, event_W, 0 );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error: could not delay operations until event_H completes: %s\n"
-						"Error in update_W(pBLN=%" PRI_IDX ", stepN=%i).\n", cudaGetErrorString(cuda_status),
-						pBLN, stepN );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "Error in update_W( pBLN=%" PRI_IDX", stepN=%i): "
+						"cudaStreamWaitEvent( stream_W, event_W ): %s\n", pBLN, stepN,
+						cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// -----------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n-----End of update_W(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( verb_shown_by_all, "-----End of update_W(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
 				pBLN, rowIdx, stepN );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // update_W
 
@@ -1247,11 +1645,13 @@ void update_W( void )
 /*
  * Computes classification vector from matrix d_H (full size), and stores it in "ld_classification[]".
  * Then it is downloaded from the GPU and stored in "lh_classification[]".
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void get_classification( index_t *__restrict__ ld_classification, index_t *__restrict__ lh_classification )
+int get_classification( index_t *__restrict__ ld_classification, index_t *__restrict__ lh_classification )
 {
 
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+	#if NMFGPU_VERBOSE_2
 		print_message( verb_shown_by_all, "get_classification()...\n" );
 	#endif
 
@@ -1260,49 +1660,91 @@ void get_classification( index_t *__restrict__ ld_classification, index_t *__res
 	// Stream for this operation.
 	cudaStream_t stream_A = stream_H;
 
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-		bool const real_data = false;
-		bool transpose = true;		// Matrix transposing
-	#endif
-
 	// ---------------------------------
 
 	// Computes the classification vector: Column index of highest values.
+	{
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+			bool transpose = true;		// Matrix transposing
+		#endif
 
-	matrix_idx_max( d_H, K, Kp, M,
-			#if NMFGPU_DEBUG
-				transpose, "d_H", "d_classification",
-			#endif
-			stream_A, ld_classification );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		matrix_idx_max( d_H, K, Kp, M,
+				#if NMFGPU_DEBUG
+					transpose,
+				#endif
+				#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+					"d_H",
+				#endif
+				#if NMFGPU_DEBUG
+					"d_classification",
+				#endif
+				stream_A, ld_classification );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ------------------------------
 
 	// Downloads output vector.
+	{
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+			bool const real_data = false;	// Index-type data
+			bool const transpose = false;	// No matrix transposing.
+		#endif
 
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-		transpose = false;
-	#endif
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
 
-	download_matrix( (void *) lh_classification, 1, Mp, sizeof(index_t),(void const *) ld_classification,
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				M, real_data, transpose, "classification", "d_classification",
-			#endif
-			#if NMFGPU_PROFILING_TRANSF
-				&download_classf_timing,
-			#endif
-			stream_A );
+			download_matrix( (void *) lh_classification, 1, Mp, sizeof(index_t), (void const *) ld_classification,
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+						M, real_data, transpose, "classification",
+					#endif
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+						|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
+						"d_classification",
+					#endif
+					#if NMFGPU_PROFILING_TRANSF
+						&download_classf_timing,
+					#endif
+					stream_A );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// -----------------------------
 
 	// Waits until complete.
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
 
-	sync_GPU( stream_A );
+			sync_GPU( stream_A );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// -----------------------------
 
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+	#if NMFGPU_VERBOSE_2
 		print_message( verb_shown_by_all, "get_classification()... Done.\n" );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // get_classification
 
@@ -1315,66 +1757,87 @@ void get_classification( index_t *__restrict__ ld_classification, index_t *__res
  * dot_V(BLN)	= SUM(V**2)
  *
  * WARNING: CUBLAS stream must have been set to streams_NMF[psNMF_N].
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V )
+static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t\t\t-----get_dot_VWH_BLN(BLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
+		print_message( verb_shown_by_all, "\t\t\t\t-----get_dot_VWH_BLN(BLN=%" PRI_IDX
+				", rowIdx=%" PRI_IDX ")-----\n", BLN, rowIdx );
 	#endif
 
 	// ---------------------------------
 
-	#ifdef NMFGPU_DEBUG
-		cublasStatus_t cublas_status = CUBLAS_STATUS_SUCCESS;
-		cudaError_t cuda_status = cudaSuccess;
-	#endif
-
 	// Uses all available streams, starting from streams_NMF[ psNMF_N ].
 	index_t stream_idx = psNMF_N;
 
-	size_t const offset_dW = (size_t) rowIdx * (size_t) Kp;
+	size_t const offset_dW = (size_t) (bN + rowIdx) * (size_t) Kp;
 
 	// ----------------------------------
 
 	// WH(BLN,Mp) = W(BLN,Kp) * H(M,Kp)
-
-	#ifdef NMFGPU_DEBUG
-		cublas_status =
-	#endif
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
+		#endif
 
 		// streams_NMF[ psNMF_N ]
-		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, &d_W[ offset_dW ], Kp, d_zero, d_WH, Mp );
+		CUBLAS_R_GEMM( cublas_handle, CUBLAS_OP_T, CUBLAS_OP_N, M, BLN, K, d_one, d_H, Kp, &d_W[ offset_dW ], Kp,
+				d_zero, d_WH, Mp );
 
-	#ifdef NMFGPU_DEBUG
-	///////////////////////////////
-	{
-		print_message( dbg_shown_by_all, "--- Resulting WHrow=W*H (BLN=%" PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%" PRI_IDX
-				"): ---\n", BLN, Mp, rowIdx );
-		check_cublas_status_st( cublas_status );
-		check_cuda_status();
-		bool const real_data = true;
-		bool const transpose = false;
-		struct matrix_tags_t const *__restrict__ mt = NULL;
-		show_device_matrix( d_WH, BLN, M, Mp, real_data, transpose, dbg_shown_by_all, mt );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "get_dot_VWH_BLN(): cublas_gemm( W * H ): %s\n",
+						getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+
+		#ifdef NMFGPU_DEBUG
+		///////////////////////////////
+		{
+			print_message( dbg_shown_by_all, "--- Resulting WHrow=W*H (BLN=%" PRI_IDX ", Mp=%" PRI_IDX
+					", rowIdx=%" PRI_IDX "): ---\n", BLN, Mp, rowIdx );
+			int const status1 = check_cuda_status();
+			bool const real_data = true;
+			bool const transpose = false;
+			struct matrix_tags_t const *__restrict__ mt = NULL;
+			int const status2 = show_device_matrix( d_WH, BLN, M, Mp, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
+		}
+		/////////////////////////////
+		#endif
 	}
-	/////////////////////////////
-	#endif
 
 	// ---------------------------
 
 	// WH(BLN,Mp) = Vcol(BLN,Mp) - WH(BLN,Mp)
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
 
-	matrix_div_sub( d_WH, d_Vrow, BLN, Mp,
-			#ifdef NMFGPU_DEBUG
-				M, "WHrow", "Vrow",
-			#endif
-			false,	// subtraction
-			#if NMFGPU_PROFILING_KERNELS
-				sub_timing,
-			#endif
-			streams_NMF[ psNMF_N ], event_Vrow );
+		matrix_div_sub( d_WH, d_Vrow, BLN, Mp,
+				#ifdef NMFGPU_DEBUG
+					M,
+				#endif
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					"WHrow", "Vrow",
+				#endif
+				false,	// subtraction
+				#if NMFGPU_PROFILING_KERNELS
+					sub_timing,
+				#endif
+				streams_NMF[ psNMF_N ], event_Vrow );
 
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ---------------------------
 
@@ -1387,14 +1850,18 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 	real *pd_WH = d_WH;
 	real *pd_dot_VWH = &d_dot_VWH[ rowIdx ];
 	{
-		#ifdef NMFGPU_DEBUG
-			cublasStatus_t const cs =
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
 		#endif
+
 			CUBLAS_R_DOT( cublas_handle, M, pd_WH, 1, pd_WH, 1, pd_dot_VWH );
 
-		#ifdef NMFGPU_DEBUG
-			if ( cs != CUBLAS_STATUS_SUCCESS );
-				cublas_status = cs;
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "get_dot_VWH_BLN(): cublas_dot( V-WH, 0/BLN=%"
+							PRI_IDX " ): %s\n", BLN, getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
 		#endif
 
 		// --------------------
@@ -1411,32 +1878,60 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 	for ( index_t i = 1 ; i < BLN ; i++, pd_WH += Mp, pd_dot_VWH++ ) {
 
 		// Sets new CUBLAS stream.
-		cublasSetStream( cublas_handle, streams_NMF[ stream_idx ] );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
 
-		// Delays the operation until 'event_Vrow' completes.
-		#if NMFGPU_DEBUG
-			cudaError_t const ce =
-		#endif
+				cublasSetStream( cublas_handle, streams_NMF[ stream_idx ] );
 
-			cudaStreamWaitEvent( streams_NMF[ stream_idx ], event_Vrow, 0 );
-
-		#ifdef NMFGPU_DEBUG
-			if ( ce != cudaSuccess );
-				cuda_status = ce;
-		#endif
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "get_dot_VWH_BLN(): cublasSetStream( V-WH, %"
+							PRI_IDX "/BLN=%" PRI_IDX ", streams_NMF[" PRI_IDX "] ): %s\n", i, BLN,
+							stream_idx, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// --------------------
 
-		#ifdef NMFGPU_DEBUG
-			cublasStatus_t const cs =
-		#endif
+		// Delays the operation until 'event_Vrow' completes.
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cudaError_t const cuda_status =
+			#endif
+
+			cudaStreamWaitEvent( streams_NMF[ stream_idx ], event_Vrow, 0 );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cuda_status != cudaSuccess ) {
+					print_error( sys_error_shown_by_all, "get_dot_VWH_BLN( V-WH, %" PRI_IDX "/BLN=%" PRI_IDX
+							", stepN=%i): cudaStreamWaitEvent( streams_NMF[%" PRI_IDX "], event_Vrow ): %s\n",
+							pBLM, stepM, colIdx, cudaGetErrorString(cuda_status) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
+
+		// --------------------
+
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
 
 			CUBLAS_R_DOT( cublas_handle, M, pd_WH, 1, pd_WH, 1, pd_dot_VWH );
 
-		#ifdef NMFGPU_DEBUG
-			if ( cs != CUBLAS_STATUS_SUCCESS );
-				cublas_status = cs;
-		#endif
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "get_dot_VWH_BLN(): cublas_dot( V-WH, %" PRI_IDX "/BLN=%"
+							PRI_IDX " ): %s\n", i, BLN, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// --------------------
 
@@ -1450,16 +1945,15 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 	#ifdef NMFGPU_DEBUG
 	///////////////////////////////
 	{
-		print_message( dbg_shown_by_all, "--- Resulting d_dot_VWH[] in get_dot_VWH_BLN(BLN=%" PRI_IDX ", Mp=%" PRI_IDX
-				", rowIdx=%" PRI_IDX "): ---\n", BLN, Mp, rowIdx );
-		check_cublas_status_st( cublas_status );
-		check_cuda_status_st( cuda_status );
+		print_message( dbg_shown_by_all, "--- Resulting d_dot_VWH[] in get_dot_VWH_BLN(BLN=%" PRI_IDX
+				", Mp=%" PRI_IDX ", rowIdx=%" PRI_IDX "): ---\n", BLN, Mp, rowIdx );
+		int const status1 = check_cuda_status();
 		bool const real_data = true;
 		bool const transpose = false;
 		struct matrix_tags_t const *__restrict__ mt = NULL;
-		show_device_matrix( &d_dot_VWH[ rowIdx ], 1, BLN, BLN, real_data, transpose, dbg_shown_by_all, mt );
-		cublas_status = CUBLAS_STATUS_SUCCESS;	// Resets status values.
-		cuda_status = cudaSuccess;
+		int const status2 = show_device_matrix( &d_dot_VWH[ rowIdx ], 1, BLN, BLN, real_data, transpose, dbg_shown_by_all, mt );
+		if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+			return EXIT_FAILURE;
 	}
 	/////////////////////////////
 	#endif
@@ -1477,34 +1971,60 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 	for ( index_t i = 0 ; i < BLN ; i++, pd_Vrow += Mp, pd_dot_V++ ) {
 
 		// Sets new CUBLAS stream.
-		cublasSetStream( cublas_handle, streams_NMF[ stream_idx ] );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
+
+				cublasSetStream( cublas_handle, streams_NMF[ stream_idx ] );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "get_dot_VWH_BLN(): cublasSetStream( V, %"
+							PRI_IDX "/BLN=%" PRI_IDX ", streams_NMF[" PRI_IDX "] ): %s\n", i, BLN,
+							stream_idx, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// --------------------
 
 		// Delays the operation until 'event_Vrow' completes.
-		#if NMFGPU_DEBUG
-			cudaError_t const ce =
-		#endif
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cudaError_t const cuda_status =
+			#endif
 
-			cudaStreamWaitEvent( streams_NMF[ stream_idx ], event_Vrow, 0 );
+				cudaStreamWaitEvent( streams_NMF[ stream_idx ], event_Vrow, 0 );
 
-		#ifdef NMFGPU_DEBUG
-			if ( ce != cudaSuccess );
-				cuda_status = ce;
-		#endif
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cuda_status != cudaSuccess ) {
+					print_error( sys_error_shown_by_all, "get_dot_VWH_BLN(): cudaStreamWaitEvent( V, %"
+							PRI_IDX "/BLN=%" PRI_IDX ", streams_NMF[%" PRI_IDX "] ): %s\n", i, BLN,
+							stream_idx, cudaGetErrorString(cuda_status) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// --------------------
 
-		#ifdef NMFGPU_DEBUG
-			cublasStatus_t const cs =
-		#endif
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
 
 			CUBLAS_R_DOT( cublas_handle, M, pd_Vrow, 1, pd_Vrow, 1, pd_dot_V );
 
-		#ifdef NMFGPU_DEBUG
-			if ( cs != CUBLAS_STATUS_SUCCESS );
-				cublas_status = cs;
-		#endif
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "get_dot_VWH_BLN(): cublas_dot( V, %" PRI_IDX "/BLN=%"
+							PRI_IDX " ): %s\n", i, BLN, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// --------------------
 
@@ -1515,21 +2035,23 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
 
 	} // for
 
-
 	#ifdef NMFGPU_DEBUG
 	///////////////////////////////
 	{
-		print_message( dbg_shown_by_all, "--- Resulting d_dot_V[] in get_dot_VWH_BLN(BLN=%" PRI_IDX ", Mp=%" PRI_IDX
-				", rowIdx=%" PRI_IDX "): ---\n", BLN, Mp, rowIdx );
-		check_cublas_status_st( cublas_status );
-		check_cuda_status_st( cuda_status );
+		print_message( dbg_shown_by_all, "--- Resulting d_dot_V[] in get_dot_VWH_BLN(BLN=%"
+				PRI_IDX ", Mp=%" PRI_IDX ", rowIdx=%" PRI_IDX "): ---\n", BLN, Mp, rowIdx );
+		int const status1 = check_cuda_status();
 		bool const real_data = true;
 		bool const transpose = false;
 		struct matrix_tags_t const *__restrict__ mt = NULL;
-		show_device_matrix( &d_dot_V[ rowIdx ], 1, BLN, BLN, real_data, transpose, dbg_shown_by_all, mt );
+		int const status2 = show_device_matrix( &d_dot_V[ rowIdx ], 1, BLN, BLN, real_data, transpose, dbg_shown_by_all, mt );
+		if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+			return EXIT_FAILURE;
 	}
 	/////////////////////////////
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // get_dot_VWH_BLN
 
@@ -1542,12 +2064,14 @@ static void get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, re
  * dot_V(BLN)	= SUM(V**2)
  *
  * WARNING: CUBLAS stream must have been set to streams_NMF[psNMF_N].
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V )
+static int get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t-----get_dot_VWH_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( verb_shown_by_all, "\t\t-----get_dot_VWH_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
 				BLN, num_steps, stepN );
 	#endif
 
@@ -1564,7 +2088,18 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 	 * dot_VWH(BLN) = SUM((V-WH)**2)
 	 * dot_V(BLN)	= SUM(V**2)
 	 */
-	get_dot_VWH_BLN( BLN, d_dot_VWH, d_dot_V );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		get_dot_VWH_BLN( BLN, d_dot_VWH, d_dot_V );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// -----------------------
 
@@ -1573,7 +2108,7 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 	for ( index_t st = 1 ; st < num_steps ; st++ ) {
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t\t\t-----get_dot_VWH_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLN=%" PRI_IDX
+			print_message( verb_shown_by_all, "\t\t\t-----get_dot_VWH_loop:(step %" PRI_IDX "/%" PRI_IDX ", BLN=%" PRI_IDX
 					", stepN=%i)-----\n", st, num_steps, BLN, stepN );
 		#endif
 
@@ -1586,19 +2121,36 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 		///////////////////////////////
-			print_message( dbg_shown_by_all, "--- Vrow processed (BLN=%" PRI_IDX ", new rowIdx=%" PRI_IDX "): ---\n", BLN, rowIdx );
+			print_message( dbg_shown_by_all, "--- Vrow processed (BLN=%" PRI_IDX ", new rowIdx=%" PRI_IDX
+					"): ---\n", BLN, rowIdx );
 		//////////////////////////////
 		#endif
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
 
-		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
-					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						M, "Vrow", "d_Vrow",
-					#endif
-					Mp, d_Vrow, stream_Vrow, event_Vrow
-					#if NMFGPU_PROFILING_TRANSF
-						, &upload_Vrow_timing
-					#endif
-				);
+			upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							M,
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+							"Vrow",
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							"d_Vrow",
+						#endif
+						Mp, d_Vrow, stream_Vrow, event_Vrow
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vrow_timing
+						#endif
+						);
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// ----------------
 
@@ -1606,7 +2158,21 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 		psNMF_N += stepN;	// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
+
+			cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "get_dot_VWH_loop(): cublasSetStream( streams_NMF["
+							PRI_IDX "] ): %s\n", psNMF_N, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// ----------------
 
@@ -1615,11 +2181,22 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 		 * dot_VWH(BLN) = SUM((V-WH)**2)
 		 * dot_V(BLN)	= SUM(V**2)
 		 */
-		get_dot_VWH_BLN( BLN, d_dot_VWH, d_dot_V );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			get_dot_VWH_BLN( BLN, d_dot_VWH, d_dot_V );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t\t\t-----get_dot_VWH_loop: End of loop (step %" PRI_IDX " of %" PRI_IDX ", BLN=%"
-					PRI_IDX ", stepN=%i)-----\n", st, num_steps, BLN, stepN );
+			print_message( verb_shown_by_all, "\t\t\t-----get_dot_VWH_loop: End of loop (step %" PRI_IDX
+					" of %" PRI_IDX ", BLN=%" PRI_IDX ", stepN=%i)-----\n", st, num_steps, BLN, stepN );
 		#endif
 
 	} // for ( st=1 ; st<num_steps ; st++ )
@@ -1627,9 +2204,11 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
 	// --------------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n\t\t-----End of get_dot_VWH_loop(BLN=%" PRI_IDX ", num_steps=%" PRI_IDX ", stepN=%i)-----\n",
-				BLN, num_steps, stepN );
+		print_message( verb_shown_by_all, "\t\t-----End of get_dot_VWH_loop(BLN=%" PRI_IDX ", num_steps=%"
+				PRI_IDX ", stepN=%i)-----\n", BLN, num_steps, stepN );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // get_dot_VWH_loop
 
@@ -1646,12 +2225,14 @@ static void get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__
  * Once all these blocks are processed, it updates 'pBLN' to process any
  * remaining block(s) (get_dot_VWH_loop() is called again).
  * It also updates 'stepN' according to the processing direction (forward or backward).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V )
+static int get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n-----get_dot_VWH_N(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( verb_shown_by_all, "-----get_dot_VWH_N(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
 				pBLN, rowIdx, stepN);
 	#endif
 
@@ -1668,36 +2249,42 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 	// --------------------------------
 
 	// Changes CUBLAS stream.
-	cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
+		#endif
+
+			cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "get_dot_VWH_N(): cublasSetStream( streams_NMF["
+						PRI_IDX "] ): %s\n", psNMF_N, getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+	}
+
+	// --------------------------------
 
 	// Delays further operations until d_H is ready.
-	{
-		#if NMFGPU_DEBUG
-			cudaError_t cuda_status = cudaSuccess;
+
+	for ( index_t i = 0, ps = psNMF_N ; i < num_steps ; i++, ps += stepN ) {
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cudaError_t const cuda_status =
 		#endif
 
-		for ( index_t i = 0, ps = psNMF_N ; i < num_steps ; i++, ps += stepN ) {
+			cudaStreamWaitEvent( streams_NMF[ ps ], event_H, 0 );
 
-			#if NMFGPU_DEBUG
-				cudaError_t const cs =
-			#endif
-
-				cudaStreamWaitEvent( streams_NMF[ ps ], event_H, 0 );
-
-			#if NMFGPU_DEBUG
-				if ( cs != cudaSuccess )
-					cuda_status = cs;
-			#endif
-		}
-
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error: Could not delay operations until d_H is ready: %s\n"
-						"Error in get_dot_VWH_N(psNMF_N=%" PRI_IDX ", pBLN=%" PRI_IDX ", stepN=%i).\n",
-						cudaGetErrorString(cuda_status), psNMF_N, pBLN, stepN );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "get_dot_VWH_N( psNMF_N=%" PRI_IDX ", pBLN=%" PRI_IDX
+						", stepN=%i): cudaStreamWaitEvent( streams_NMF[%" PRI_IDX "], event_H ): %s\n",
+						psNMF_N, pBLN, stepN, ps, cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// --------------------------------
@@ -1707,7 +2294,18 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 	 * dot_VWH(BLN) = SUM((V-WH)**2)
 	 * dot_V(BLN)	= SUM(V**2)
 	 */
-	get_dot_VWH_loop( num_steps, BLN, d_dot_VWH, d_dot_V );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		get_dot_VWH_loop( num_steps, BLN, d_dot_VWH, d_dot_V );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// --------------------------------
 
@@ -1716,8 +2314,8 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 	if ( block_N.num_steps[1] ) {  // There are more blocks in dimension "N" to process.
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t-----get_dot_VWH_N(pBLN=%" PRI_IDX ",stepN=%i,psNMF_N=%" PRI_IDX ", rowIdx=%"
-					PRI_IDX "): New block-----\n", pBLN, stepN, psNMF_N, rowIdx );
+			print_message( verb_shown_by_all, "\t-----get_dot_VWH_N(pBLN=%" PRI_IDX ",stepN=%i,psNMF_N=%"
+					PRI_IDX ", rowIdx=%" PRI_IDX "): New block-----\n", pBLN, stepN, psNMF_N, rowIdx );
 		#endif
 
 		// Updates pointers to Vrow (HOST matrix) and d_W (DEVICE matrix) and changes block information.
@@ -1757,34 +2355,65 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 		psNMF_N += stepN;			// forward or backward
 
 		// Changes CUBLAS stream.
-		cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				cublasStatus_t const cublas_status =
+			#endif
+
+				cublasSetStream( cublas_handle, streams_NMF[ psNMF_N ] );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "get_dot_VWH_N(new block): cublasSetStream( streams_NMF["
+							PRI_IDX "] ): %s\n", psNMF_N, getCublasErrorString( cublas_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// ----------------
 
 		// Transfers (asynchronously) a new <BLN x M> block from Vrow to d_Vrow.
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t-----get_dot_VWH_N: New block (pBLN=%" PRI_IDX ", stepN=%i, BLN=%" PRI_IDX
-					", num_steps=%" PRI_IDX ", psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n", pBLN,
-					stepN, BLN, num_steps, psNMF_N, rowIdx );
+			print_message( verb_shown_by_all, "\t-----get_dot_VWH_N: New block (pBLN=%" PRI_IDX ", stepN=%i, BLN=%"
+					PRI_IDX ", num_steps=%" PRI_IDX ", psNMF_N=%" PRI_IDX ", rowIdx=%" PRI_IDX ")-----\n",
+					pBLN, stepN, BLN, num_steps, psNMF_N, rowIdx );
 		#endif
 
 		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 		///////////////////////////////
 			print_message( dbg_shown_by_all, "--- Vrow processed (BLN=%" PRI_IDX ", M=%" PRI_IDX ", Mp=%" PRI_IDX
-				", rowIdx=%" PRI_IDX "): ---\n", BLN, M, Mp, rowIdx );
+					", rowIdx=%" PRI_IDX "): ---\n", BLN, M, Mp, rowIdx );
 		//////////////////////////////
 		#endif
 
-		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
-					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						M, "Vrow", "d_Vrow",
-					#endif
-					Mp, d_Vrow, stream_Vrow, event_Vrow
-					#if NMFGPU_PROFILING_TRANSF
-						, &upload_Vrow_timing
-					#endif
-					);
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							M,
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+							"Vrow",
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+							"d_Vrow",
+						#endif
+						Mp, d_Vrow, stream_Vrow, event_Vrow
+						#if NMFGPU_PROFILING_TRANSF
+							, &upload_Vrow_timing
+						#endif
+						);
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// ---------------------------
 
@@ -1795,7 +2424,18 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 		 * dot_VWH(BLN) = SUM((V-WH)**2)
 		 * dot_V(BLN)	= SUM(V**2)
 		 */
-		get_dot_VWH_loop( num_steps, BLN, d_dot_VWH, d_dot_V );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			get_dot_VWH_loop( num_steps, BLN, d_dot_VWH, d_dot_V );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// -------------------------
 
@@ -1803,7 +2443,7 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 		stepN *= (-1);
 
 		#ifdef NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\n\t-----get_dot_VWH_N: End of new block (pBLN=%" PRI_IDX ", BLN=%" PRI_IDX
+			print_message( verb_shown_by_all, "\t-----get_dot_VWH_N: End of new block (pBLN=%" PRI_IDX ", BLN=%" PRI_IDX
 					", num_steps=%" PRI_IDX "). New StepN=%i -----\n", pBLN, BLN, num_steps, stepN );
 		#endif
 
@@ -1813,47 +2453,49 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
 
 	// Records as an event all previous operations.
 	{
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaEventRecord( event_W, 0 );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error recording CUDA event: %s\nError in get_dot_VWH_N(pBLN=%"
-						PRI_IDX ", stepN=%i).\n", cudaGetErrorString(cuda_status), pBLN, stepN );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "get_dot_VWH_N( pBLN=%" PRI_IDX ", stepN=%i): "
+						"cudaEventRecord( event_W ): %s\n", pBLN, stepN, cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// -----------------------
 
 	// Delays further operations on "stream_W" until "event_W" completes.
 	{
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaStreamWaitEvent( stream_W, event_W, 0 );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error: could not delay operations until event_H completes: %s\n"
-						"Error in get_dot_VWH_N(pBLN=%" PRI_IDX ", stepN=%i).\n",
-						cudaGetErrorString(cuda_status), pBLN, stepN );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "get_dot_VWH_N( pBLN=%" PRI_IDX ", stepN=%i): "
+						"cudaStreamWaitEvent( stream_W, event_H ): %s\n", pBLN, stepN,
+						cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// -----------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n-----End of get_dot_VWH_N(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
-				pBLN, rowIdx, stepN);
+		print_message( verb_shown_by_all, "-----End of get_dot_VWH_N(pBLN=%" PRI_IDX ", rowIdx=%"
+				PRI_IDX ", stepN=%i)-----\n", pBLN, rowIdx, stepN);
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // get_dot_VWH_N
 
@@ -1869,17 +2511,15 @@ static void get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_do
  *
  * Computes vectors d_dot_VWH[N] and d_dot_V[N], and reduces each to a single scalar.
  * Resulting values are returned in d_scalars_VWH[0] and d_scalars_VWH[1], respectively.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static void get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V, real *__restrict__ d_scalars_VWH )
+static int get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V, real *__restrict__ d_scalars_VWH )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n-----get_dot_VWH(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( verb_shown_by_all, "-----get_dot_VWH(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
 				pBLN, rowIdx, stepN);
-	#endif
-
-	#ifdef NMFGPU_DEBUG
-		cublasStatus_t cublas_status = CUBLAS_STATUS_SUCCESS;
 	#endif
 
 	// -----------------------
@@ -1889,7 +2529,18 @@ static void get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_
 	 * dot_VWH(BLN) = SUM((V-WH)**2)
 	 * dot_V(BLN)	= SUM(V**2)
 	 */
-	get_dot_VWH_N( d_dot_VWH, d_dot_V );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		get_dot_VWH_N( d_dot_VWH, d_dot_V );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// -----------------------
 
@@ -1897,103 +2548,126 @@ static void get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_
 
 	// Since all values are positive, we can use the sums of absolute values.
 	{
-		#ifdef NMFGPU_DEBUG
-			cublasStatus_t const cs =
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
 		#endif
+
 			CUBLAS_R_ASUM( cublas_handle, N, d_dot_VWH, 1, d_scalars_VWH );	// streams_NMF[ psNMF_N ]
 
-		#ifdef NMFGPU_DEBUG
-			if ( cs != CUBLAS_STATUS_SUCCESS );
-				cublas_status = cs;
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "get_dot_VWH(): cublas_asum( d_scalars_VWH[0] ): %s\n",
+						getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
 		#endif
 	}
 
 	// -----------------------
 
 	// Changes the CUBLAS stream
-	index_t stream_idx = psNMF_N + 1;
-	if ( stream_idx == num_streams_NMF )
-		stream_idx = 0;
+	{
+		index_t stream_idx = psNMF_N + 1;
+		if ( stream_idx == num_streams_NMF )
+			stream_idx = 0;
 
-	cublasSetStream( cublas_handle, streams_NMF[ stream_idx ] );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
+		#endif
+
+			cublasSetStream( cublas_handle, streams_NMF[ stream_idx ] );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "get_dot_VWH(): cublasSetStream( streams_NMF[" PRI_IDX
+						"] ): %s\n", stream_idx, getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+	}
 
 	// -----------------------
 
 	// d_scalars_VWH[1] = SUM(dot_VWH[...])
 	{
-		#ifdef NMFGPU_DEBUG
-			cublasStatus_t const cs =
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			cublasStatus_t const cublas_status =
 		#endif
+
 			// streams_NMF[ (psNMF_N + 1) % num_streams_NMF ]
 			CUBLAS_R_ASUM( cublas_handle, N, d_dot_V, 1, &d_scalars_VWH[1] );
 
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
+				print_error( sys_error_shown_by_all, "update_W(): cublas_asum( d_scalars_VWH[1] ): %s\n",
+						getCublasErrorString( cublas_status ) );
+				return EXIT_FAILURE;
+			}
+		#endif
+
 		#ifdef NMFGPU_DEBUG
-			if ( cs != CUBLAS_STATUS_SUCCESS );
-				cublas_status = cs;
+		///////////////////////////////
+		{
+			print_message( dbg_shown_by_all, "--- Resulting scalars in get_dot_VWH(): ---\n" );
+			int const status1 = check_cuda_status();
+			bool const real_data = true;
+			bool const transpose = false;
+			struct matrix_tags_t const *__restrict__ mt = NULL;
+			int const status2 = show_device_matrix( d_scalars_VWH, 1, 2, 2, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
+		}
+		/////////////////////////////
 		#endif
 	}
-
-	// -----------------------
-
-	#ifdef NMFGPU_DEBUG
-	///////////////////////////////
-	{
-		print_message( dbg_shown_by_all, "--- Resulting scalars in get_dot_VWH(): ---\n" );
-		check_cublas_status_st( cublas_status );
-		check_cuda_status();
-		bool const real_data = true;
-		bool const transpose = false;
-		struct matrix_tags_t const *__restrict__ mt = NULL;
-		show_device_matrix( d_scalars_VWH, 1, 2, 2, real_data, transpose, dbg_shown_by_all, mt );
-	}
-	/////////////////////////////
-	#endif
 
 	// -----------------------
 
 	// Records as an event all previous operations.
 	{
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaEventRecord( event_W, 0 );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
 				print_error( sys_error_shown_by_all, "Error recording CUDA event: %s\nError in get_dot_VWH(pBLN=%"
 						PRI_IDX ", stepN=%i).\n", cudaGetErrorString(cuda_status), pBLN, stepN );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// -----------------------
 
 	// Delays further operations on "stream_W" until "event_W" completes.
 	{
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaStreamWaitEvent( stream_W, event_W, 0 );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error: could not delay operations until event_H completes: %s\n"
-						"Error in get_dot_VWH(pBLN=%" PRI_IDX ", stepN=%i).\n",
-						cudaGetErrorString(cuda_status), pBLN, stepN );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "get_dot_VWH( pBLN=%" PRI_IDX ", stepN=%i): "
+						"cudaStreamWaitEvent( stream_W, event_W ): %s\n", pBLN, stepN,
+						cudaGetErrorString(cuda_status) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// -----------------------
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n-----End of get_dot_VWH(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
+		print_message( verb_shown_by_all, "-----End of get_dot_VWH(pBLN=%" PRI_IDX ", rowIdx=%" PRI_IDX ", stepN=%i)-----\n",
 				pBLN, rowIdx, stepN);
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // get_dot_VWH
 
@@ -2012,7 +2686,7 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\n-----Starting dot_product_VWH( rowIdx=%" PRI_IDX " )-----\n", rowIdx);
+		print_message( verb_shown_by_all, "-----Starting dot_product_VWH( rowIdx=%" PRI_IDX " )-----\n", rowIdx);
 	#endif
 
 	/* Sets pointers to be used as data matrix. We can use "d_Aux", since we need memory for two
@@ -2027,7 +2701,7 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 	 * HACK:
 	 *	When host memory is mapped into the address space of the device, d_scalars_VWH[] is actually
 	 *	a pointer to a vector stored in host memory. So, we just need to set h_scalars_VWH to point
-	 *	such array.
+	 *	to such array.
 	 *	On the other hand, if memory was NOT mapped, we need a local vector to store the values
 	 *	downloaded from d_scalars_VWH[2].
 	 */
@@ -2048,23 +2722,66 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 	 * d_scalars_VWH[0] = SUM(dot_VWH[...])
 	 * d_scalars_VWH[1] = SUM(dot_V[...])
 	 */
-	get_dot_VWH( d_dot_VWH, d_dot_V, d_scalars_VWH );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		get_dot_VWH( d_dot_VWH, d_dot_V, d_scalars_VWH );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ----------------------------------------
 
 	// Downloads partial results.
+	{
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+			bool const real_data = true;	// Real-type data
+			bool const transpose = false;	// No matrix transposing.
+		#endif
 
-	download_matrix( h_scalars_VWH, 1, 2, sizeof(real), d_scalars_VWH,
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					2, true, false, "h_dot_VWH", "d_scalars_VWH",	// Real data, NO matrix transposing
-				#endif
-				#if NMFGPU_PROFILING_TRANSF
-					NULL,
-				#endif
-				stream_W );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+			download_matrix( (void *) h_scalars_VWH, 1, 2, sizeof(real), (void const *) d_scalars_VWH,
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+						2, real_data, transpose, "h_dot_VWH",
+					#endif
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+						|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
+						"d_scalars_VWH",
+					#endif
+					#if NMFGPU_PROFILING_TRANSF
+						NULL,
+					#endif
+					stream_W );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
+
+	// ----------------------------------------
 
 	// Waits for the results...
-	sync_GPU( stream_W );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		sync_GPU( stream_W );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	// ----------------------------------------
 

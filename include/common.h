@@ -226,14 +226,13 @@ extern index_t K;	// Factorization rank.
 // Dimensions for multi-process version:
 extern index_t NpP;	// Number of rows of V assigned to this process (NpP <= N).
 extern index_t MpP;	// Number of columns of V assigned to this process (MpP <= M).
-extern index_t bN;	// Starting row (bN <= NpP).
-extern index_t bM;	// Starting column (bM <= MpP).
-
+extern index_t bN;	// Starting row ((bN + NpP) <= N).
+extern index_t bM;	// Starting column ((bM + MpPp) <= Mp).
 
 // Padded dimensions:
-extern index_t Mp;	// 'M' rounded up to the next multiple of <memory_alignment>.
-extern index_t Kp;	// 'K' rounded up to the next multiple of <memory_alignment>.
-extern index_t MpPp;	// 'MpP' rounded up to the next multiple of <memory_alignment> (MpPp <= Mp).
+extern index_t Mp;	// <M> rounded up to the next multiple of <memory_alignment>.
+extern index_t Kp;	// <K> rounded up to the next multiple of <memory_alignment>.
+extern index_t MpPp;	// <MpP> rounded up to the next multiple of <memory_alignment> (MpPp <= Mp).
 
 // Classification vectors.
 extern index_t *RESTRICT classification;
@@ -254,10 +253,10 @@ extern real *Vrow;		// Block of MpP columns from input matrix V.
  * Prints the given message composed by the format string "fmt" and the subsequent
  * arguments, if any.
  *
+ * The message is ALWAYS prefixed by a newline character ('\n').
+ *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * In addition, if (num_processes > 1), the message is prefixed with a newline
- * character ('\n') and the process ID.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ * In addition, if (num_processes > 1), the process ID is also printed.
  *
  * The string is always printed to the standard output stream ('stdout').
  *
@@ -271,12 +270,10 @@ int print_message( bool all_processes, char const *RESTRICT const fmt, ... );
  * Prints the given message, composed by the format string "fmt" and the subsequent
  * arguments, if any.
  *
- * This method is intended for successive portions of a previously printed message,
- * so it will never be prefixed, regardless of the arguments and the existing number
- * of processes.
+ * This method is intended for successive portions of a message that was previously
+ * printed, so it will never be prefixed by a newline nor the process ID.
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
  *
  * The string is always printed to the standard output stream ('stdout').
  *
@@ -287,13 +284,13 @@ int append_printed_message( bool all_processes, char const *RESTRICT const fmt, 
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent
- * arguments, if any.
+ * Prints the given error message, composed by the format string "fmt" and the
+ * subsequent arguments, if any.
+ *
+ * The message is ALWAYS prefixed by a newline character ('\n').
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * In addition, if (num_processes > 1), the message is prefixed with a newline
- * character ('\n') and the process ID.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ * In addition, if (num_processes > 1), the process ID is also printed.
  *
  * The string is always printed to the standard error stream ('stderr'). The
  * standard output stream ('stdout') is previously flushed for all processes.
@@ -305,15 +302,13 @@ int print_error( bool all_processes, char const *RESTRICT const fmt, ... );
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent
- * arguments, if any.
+ * Prints the given error message, composed by the format string "fmt" and the
+ * subsequent arguments, if any.
  *
- * This method is intended for successive portions of a previously printed message,
- * so it will never be prefixed, regardless of the arguments and the existing number
- * of processes.
+ * This method is intended for successive portions of a message that was previously
+ * printed, so it will never be prefixed by a newline nor the process ID.
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
  *
  * The string is always printed to the standard error stream ('stderr'). The
  * standard output stream ('stdout') is previously flushed for all processes.
@@ -325,46 +320,46 @@ int append_printed_error( bool all_processes, char const *RESTRICT const fmt, ..
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent
- * arguments, if any.
+ * Prints the given error message, composed by the format string "fmt" and the
+ * subsequent arguments, if any.
  *
- * This method is intended for successive portions of a previously printed message,
- * so it will never be prefixed, regardless of the arguments and the existing number
- * of processes.
+ * The message is ALWAYS prefixed by a newline character ('\n').
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ * In addition, if (num_processes > 1), the process ID is also printed.
  *
  * The string is always printed to the standard error stream ('stderr'). The
  * standard output stream ('stdout') is previously flushed for all processes.
+ *
  * Finally, if errnum is non-zero, this function behaves similar to perror(3).
  * That is, it appends to the message a colon, the string given by strerror(errnum)
- * and a newline character.
- *
- * Returns EXIT_SUCCESS or EXIT_FAILURE.
- */
-int append_printed_errnum( bool all_processes, int errnum, char const *RESTRICT const fmt, ... );
-
-////////////////////////////////////////////////
-
-/*
- * Prints the given message composed by the format string "fmt" and the subsequent
- * arguments, if any.
- *
- * If "all_processes" is 'true', the message is printed by all existing processes.
- * In addition, if (num_processes > 1), the message is prefixed with a newline
- * character ('\n') and the process ID.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
- *
- * The string is always printed to the standard error stream ('stderr'). The
- * standard output stream ('stdout') is previously flushed for all processes.
- * Finally, if errnum is non-zero, this function behaves similar to perror(3).
- * That is, it appends to the message a colon, the string given by strerror(errnum)
- * and a newline character.
+ * and a newline character. Otherwise, it just prints a newline.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int print_errnum( bool all_processes, int errnum, char const *RESTRICT const fmt, ... );
+
+////////////////////////////////////////////////
+
+/*
+ * Prints the given error message, composed by the format string "fmt" and the
+ * subsequent arguments, if any.
+ *
+ * This method is intended for successive portions of a message that was previously
+ * printed, so it will never be prefixed by a newline nor the process ID.
+ *
+ * If "all_processes" is 'true', the message is printed by all existing processes.
+ *
+ * The string is always printed to the standard error stream ('stderr'). The
+ * standard output stream ('stdout') is previously flushed for all processes.
+ *
+ * Finally, if errnum is non-zero, this function behaves similar to perror(3).
+ * That is, it appends to the message a colon, the string given by strerror(errnum)
+ * and a newline character. Otherwise, it just prints a newline.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
+ */
+int append_printed_errnum( bool all_processes, int errnum, char const *RESTRICT const fmt, ... );
 
 ////////////////////////////////////////////////
 
@@ -532,6 +527,8 @@ size_t get_difference( index_t const *RESTRICT classification, index_t const *RE
 
 /*
  * Retrieves a "random" value that can be used as seed.
+ *
+ * If NMFGPU_FIXED_INIT is non-zero, returns <FIXED_SEED>.
  */
 index_t get_seed( void );
 

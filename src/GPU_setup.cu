@@ -480,7 +480,6 @@ int check_cuda_status( void )
 
 } // check_cuda_status
 
-
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -544,7 +543,7 @@ static index_t setup_gpu_factorization_rank( index_t factorization_rank )
 	index_t const pitch = get_padding( factorization_rank );
 
 	if ( pitch > maxThreadsPerBlock ) {	// maxThreadsPerBlock << matrix_max_pitch
-		print_error( error_shown_by_all, "\nSorry, but the given factorization rank (K=%" PRI_IDX "), exceeds the limits for\n"
+		print_error( error_shown_by_all, "Sorry, but the given factorization rank (K=%" PRI_IDX "), exceeds the limits for\n"
 				"this GPU device. Maximum allowed value: %" PRI_IDX ".\n", factorization_rank, maxThreadsPerBlock );
 		return INDEX_C( 0 );
 	}
@@ -583,9 +582,9 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
 
 	if ( (dev_id < 0) + (factorization_rank < 2) ) {
 		errno = EINVAL;
-		if ( dev_id < 0 ) print_errnum( error_shown_by_all, errno, "\ninitialize_GPU( device_ID=%" PRI_IDX " )", dev_id );
+		if ( dev_id < 0 ) print_errnum( error_shown_by_all, errno, "initialize_GPU( device_ID=%" PRI_IDX " )", dev_id );
 		if ( factorization_rank < 2 )
-			print_errnum( error_shown_by_all, errno, "\ninitialize_GPU( factorization_rank=%" PRI_IDX " )", factorization_rank );
+			print_errnum( error_shown_by_all, errno, "initialize_GPU( factorization_rank=%" PRI_IDX " )", factorization_rank );
 		return 0;
 	}
 
@@ -774,14 +773,13 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
 		return 0;
 	}
 
-	// NOTE: Reduces 20% to leave place for any CUDA internal temporary buffer.
-	size_t const l_mem_size = (float) free_mem * 0.8f;	// Value is truncated.
+	// HACK: Reduces 20% to leave memory for any CUDA temporary buffer.
+	size_t const l_mem_size = free_mem * 0.8f;	// Value is truncated.
 
 		// // Other values for debugging:
-		//	l_mem_size = device_prop.totalGlobalMem;
-		//	l_mem_size = 1000 * 1024 * 1024;	// 1000MBytes (< 1GBytes)
-		//	l_mem_size =  512 * 1024 * 1024;	// 512MB
-		//	l_mem_size = 1024 * 1024;		// 1MB
+		//	l_mem_size = 1000 * 1024 * 1024;	// 1000 MiB (< 1 GiB)
+		//	l_mem_size =  512 * 1024 * 1024;	// 512 MiB
+		//	l_mem_size = 1024 * 1024;		// 1 MiB
 
 	// -------------------------------------
 
@@ -935,7 +933,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 
 		// Forces block sizes to be the half of dimensions:
 
-		print_message( verb_shown_by_all, "\nForcing blocks size to the half of dimensions.\n" );
+		print_message( verb_shown_by_all, "Forcing blocks size to the half of dimensions.\n" );
 
 		lBLN = (NpP/2) + (NpP % 2);
 
@@ -1049,12 +1047,8 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 		// Required Memory: max(BLN*Mp, N*BLMp) + BLN*Mp + N*BLMp,
 		//	where  BLN = (NpP/dBLN) and  BLMp = padding(MpP/dBLM)
 		//
-		// Increments iteratively the denominators 'dBLN' and 'dBLM'
-		// (one at a time, according to 'dim') until data_matrices fit into the memory.
-		//
-		// WARNING: if (MpP > memory_alignment), the resulting BLM must be a multiple of memory_alignment.
-		//
-		// It also checks that the resulting values don't exceed the maximum matrix size.
+		// Iteratively increments both denominators "dBLN" and "dBLM"
+		// (one at a time, according to <dimN>) until "data_matrices" fits into the memory.
 		//
 		// //////////////////////////
 
@@ -1065,7 +1059,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 		size_t rows = (size_t) lBLN * (size_t) Mp;	// d_Vrow: lBLN * Mp;
 
 		// Initial values for dBLM == 2
-		lBLMp = get_padding( (MpPp / 2) );		// Multiple of memory_alignment
+		lBLMp = get_padding( (MpPp / 2) );		// Multiple of <memory_alignment>
 		size_t cols = (size_t) N * (size_t) lBLMp;	// (d_Vcol)
 		lBLM = MIN( lBLMp, MpP );
 
@@ -1075,14 +1069,14 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 
 		do {
 			if ( dimN ) {	// Adjusts BLN
-				lBLN = (NpP / dBLN) + ((NpP % dBLN) != 0);
+				lBLN = (NpP / dBLN);			// <floor(NpP / dBLN)> increases the probability of fitting in memory.
 				rows = (size_t) lBLN * (size_t) Mp;
 				dBLN++;		// Denominator in next loop with dim=1.
 			} else {	// Adjusts BLM
-				lBLMp = (MpPp / dBLM) + ((MpPp % dBLM) != 0);
+				lBLMp = (MpPp / dBLM);			// <floor(MpPp / dBLMp)> increases the probability of fitting in memory.
 				lBLMp = get_padding( lBLMp );		// Multiple of memory_alignment
-				cols = (size_t) N * (size_t) lBLMp;	// (d_Vcol)
 				lBLM = MIN( lBLMp, MpP );
+				cols = (size_t) N * (size_t) lBLMp;	// (d_Vcol)
 				dBLM++;		// Denominator in next loop with dim=0.
 			}
 
@@ -1238,11 +1232,11 @@ static void init_block_conf( index_t D, index_t Dp, index_t BLD, index_t BLDp, b
 		 */
 
 		// Number of blocks in BL[0]
-		block_D->num_steps[0] = (Dp / BLDp) - (! (Dp % BLDp));	// "-1" if (Dp % BLDp) == 0.
+		block_D->num_steps[0] = (Dp / BLDp) - (! (Dp % BLDp));	// '-1' if (Dp % BLDp) == 0.
 
 		// Last block
 		block_D->BL[1] = ((D % BLDp) ? (D % BLDp) : BLD);
-		block_D->BLp[1] = ((Dp % BLDp) ? (Dp % BLDp) : BLDp);	// Already a multiple of memory_alignment
+		block_D->BLp[1] = ((Dp % BLDp) ? (Dp % BLDp) : BLDp);	// Already a multiple of <memory_alignment> (if both Dp and BLDp are).
 		block_D->num_steps[1] = 1;
 
 	} else {  // D == BLD : There is only one block (BL[0])
@@ -2268,8 +2262,6 @@ int finalize_GPU_device( void )
 
 	// First, it checks for previous errors.
 	status = check_cuda_status();
-	if ( status != EXIT_SUCCESS )
-		print_error( sys_error_shown_by_all, "Shutting down device...\n" );
 
 	// ------------------------------------------
 
@@ -2591,8 +2583,10 @@ int finalize_randomGenerator( void )
 
 /*
  * Blocks until GPU has completed all operations associated to 'stream'.
+ *
+ * return EXIT_SUCCESS or EXIT_FAILURE.
  */
-void sync_GPU( cudaStream_t stream )
+int sync_GPU( cudaStream_t stream )
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -2605,24 +2599,27 @@ void sync_GPU( cudaStream_t stream )
 	 *	 specified in initialize_GPU().
 	 */
 
-	#if NMFGPU_DEBUG
+	#if (! NMFGPU_PROFILING_GLOBAL)
 		cudaError_t const cuda_status =
 	#endif
-			cudaStreamSynchronize( stream );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess )
-					print_error( sys_error_shown_by_all, "Error in sync_GPU(): cudaStreamSynchronize(): %s\n",
-							cudaGetErrorString(cuda_status) );
-			#endif
-			///////////////////////////////
+		cudaStreamSynchronize( stream );
+
+	#if (! NMFGPU_PROFILING_GLOBAL)
+		if ( cuda_status != cudaSuccess ) {
+			print_error( sys_error_shown_by_all, "Error in sync_GPU(): cudaStreamSynchronize(): %s\n",
+					cudaGetErrorString(cuda_status) );
+			return EXIT_FAILURE;
+		}
+	#endif
 
 	// ---------------------------------
 
 	#if NMFGPU_VERBOSE_2
 		print_message( verb_shown_by_all, "sync_GPU(): Waiting for results... Done.\n" );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // sync_GPU
 

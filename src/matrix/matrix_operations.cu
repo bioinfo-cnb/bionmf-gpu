@@ -42,6 +42,9 @@
  *	Data type:
  *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
  *
+ *	CPU timing:
+ *		NMFGPU_PROFILING_GLOBAL: Compute total elapsed time.
+ *
  *	GPU timing (WARNING: They PREVENT asynchronous operations. The CPU thread is blocked on synchronization):
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
@@ -627,101 +630,112 @@ int show_device_matrix( void const *__restrict__ dMatrix, index_t nrows, index_t
  * If 'event_A' is non-NULL, the operation is recorded as an event.
  *
  * WARNING: Requires the CURAND Library properly initialized.
+ *
+ * Return EXIT_SUCCESS or EXIT_FAILURE.
  */
-void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index_t padding,
+int matrix_random( real *__restrict__ d_A, index_t height, index_t width, index_t padding,
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-				bool transpose, char const *__restrict__ const matrix_name,
+				bool transpose,
+			#endif
+			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+				char const *__restrict__ const matrix_name,
 			#endif
 			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
 {
 
-	#if ! NMFGPU_CPU_RANDOM
+	#if (! NMFGPU_CPU_RANDOM)
 
 		#if NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX
+			print_message( verb_shown_by_all, "Setting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX
 					", padding=%" PRI_IDX ", transpose=%i)\n", matrix_name, height, width, padding, transpose );
-		#endif
-
-		#if NMFGPU_DEBUG
-			curandStatus_t curand_status = CURAND_STATUS_SUCCESS;
 		#endif
 
 		// ----------------------------------
 
 		// Sets the stream
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				curandStatus_t const curand_status =
+			#endif
 
-		#if NMFGPU_DEBUG
-			curand_status =
-		#endif
+				curandSetStream( curand_generator, stream_A );
 
-			curandSetStream( curand_generator, stream_A );
-
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( curand_status != CURAND_STATUS_SUCCESS )
-				print_error( sys_error_shown_by_all, "Error setting stream for CURAND kernel launches (matrix %s): %s\n",
-						matrix_name, getCurandErrorString( curand_status ) );
-		#endif
-		///////////////////////////////
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( curand_status != CURAND_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "Error setting stream for CURAND kernel on matrix %s: %s\n",
+							matrix_name, getCurandErrorString( curand_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 		// ----------------------------------
 
 		// Generates random values.
-
-		size_t const size = (size_t) height * (size_t) padding;
-
-		#if NMFGPU_DEBUG
-			curand_status =
-		#endif
-
-			CURAND_GENERATE_UNIFORM_REAL( curand_generator, d_A, size );
-
-
-		///////////////////////////////
-		#if NMFGPU_DEBUG
 		{
-			if ( curand_status != CURAND_STATUS_SUCCESS )
-				print_error( sys_error_shown_by_all, "Error generating random values for matrix %s: ", matrix_name,
-						getCurandErrorString( curand_status ) );
-			print_message( dbg_shown_by_all, "--- Random values on matrix %s (height=%" PRI_IDX ", width=%" PRI_IDX ", padding=%"
-					PRI_IDX ", transpose=%i): ---\n", matrix_name, height, width, padding, transpose );
-			check_cuda_status();
-			bool const real_data = true;
-			struct matrix_tags_t const *mt = NULL;
-			show_device_matrix( d_A, height, width, padding, real_data, transpose, dbg_shown_by_all, mt );
+			size_t const size = (size_t) height * (size_t) padding;
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				curandStatus_t const curand_status =
+			#endif
+
+				CURAND_GENERATE_UNIFORM_REAL( curand_generator, d_A, size );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( curand_status != CURAND_STATUS_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "Error generating random values for matrix %s: %s\n",
+							matrix_name, getCurandErrorString( curand_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+
+			///////////////////////////////
+			#if NMFGPU_DEBUG
+			{
+				print_message( dbg_shown_by_all, "--- Random values on matrix %s (height=%" PRI_IDX ", width=%" PRI_IDX
+						", padding=%" PRI_IDX ", transpose=%i): ---\n", matrix_name, height, width, padding, transpose );
+				int const status1 = check_cuda_status();
+				bool const real_data = true;
+				struct matrix_tags_t const *mt = NULL;
+				int const status2 = show_device_matrix( d_A, height, width, padding, real_data, transpose, dbg_shown_by_all, mt );
+				if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+					return EXIT_FAILURE;
+			}
+			#endif
+			/////////////////////////////
 		}
-		#endif
-		/////////////////////////////
 
 		// ----------------------------------
 
 		// Records the previous operation on stream_A as 'event_A'
 		if ( event_A ) {
 
-			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 				cudaError_t const cuda_status =
 			#endif
 
 				cudaEventRecord( *event_A, stream_A );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-				if ( cuda_status != cudaSuccess )
-					print_error( sys_error_shown_by_all, "Error recording CUDA event: %s\nError in matrix_random(%s, height=%"
-						PRI_IDX ", width=%" PRI_IDX ", padding=%" PRI_IDX ", transpose=%i).\n",
-						cudaGetErrorString(cuda_status), matrix_name, height, width, padding, transpose );
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cuda_status != cudaSuccess ) {
+					print_error( sys_error_shown_by_all, "matrix_random( %s ): cudaEventRecord(): %s\n", matrix_name,
+						cudaGetErrorString( cuda_status ) );
+					return EXIT_FAILURE;
+				}
 			#endif
-			///////////////////////////////
+
 		}
 
 		// ----------------------------------
 
 		#if NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "\nSetting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX
+			print_message( verb_shown_by_all, "Setting random values to matrix '%s' (height=%" PRI_IDX ", width=%" PRI_IDX
 					", padding=%" PRI_IDX ", transpose=%i)... Done.\n", matrix_name, height, width, padding, transpose );
 		#endif
 
-	#endif /* NMFGPU_CPU_RANDOM */
+	#endif /* ! NMFGPU_CPU_RANDOM */
+
+	return EXIT_SUCCESS;
 
 } //matrix_random
 
@@ -742,17 +756,22 @@ void matrix_random( real *__restrict__ d_A, index_t height, index_t width, index
  *
  * WARNING:
  *	(height / (prev_power_2(maxBlockHeight_pitch) * REDUCE_TO_ROW__ITEMS_PER_THREAD)) <= UINT_MAX
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
+int matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-				index_t width, char const *__restrict__ const matrix_name,
+				index_t width,
+			#endif
+			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				char const *__restrict__ const matrix_name,
 			#endif
 			real *__restrict__ d_Tmp, real *__restrict__ d_accum_A, cudaStream_t stream_AccA )
 {
 
 	///////////////////////////////
 	#if NMFGPU_DEBUG_REDUCT
-		print_message( verb_shown_by_all, "\n--- Begin of matrix_to_row(computeCapability=%" PRI_IDX ".%" PRI_IDX ", width=%" PRI_IDX
+		print_message( verb_shown_by_all, "--- Begin of matrix_to_row(computeCapability=%" PRI_IDX ".%" PRI_IDX ", width=%" PRI_IDX
 				", pitch=%" PRI_IDX ", height=%" PRI_IDX ") on %s: ---\n", computeCapability, computeCapability_minor, width,
 				pitch, height, matrix_name);
 	#endif
@@ -826,7 +845,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG_REDUCT
-			print_message( verb_shown_by_all, "reduce_to_row(height=%" PRI_IDX "pitch=%" PRI_IDX ",block_height=%" PRI_IDX
+			print_message( verb_shown_by_all, "matrix_to_row(height=%" PRI_IDX "pitch=%" PRI_IDX ",block_height=%" PRI_IDX
 					",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX ", abh=%" PRI_IDX ")...\n",
 					height, pitch, block_height, dimGrid.y, dimGrid.x, matrix_to_row_kparams.abm );
 		#endif
@@ -844,11 +863,16 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			 */
 			reduce_to_row( d_A, height, pitch, d_Tmp, block_height, dimGrid, stream_AccA, d_accum_A );
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG_REDUCT
-				check_cuda_status();
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_REDUCT || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+			{
+				cudaError_t const cuda_status = cudaGetLastError();
+				if ( cuda_status != cudaSuccess ) {
+					print_error( sys_error_shown_by_all, "CUDA error detected in reduce_to_row( %s ): %s\n",
+							matrix_name, cudaGetErrorString( cuda_status ) );
+					return EXIT_FAILURE;
+				}
+			}
 			#endif
-			///////////////////////////////
 
 		#if NMFGPU_PROFILING_KERNELS
 			stop_cuda_timer_cnt( &reduce_timing[ timing_index ], (size_t) height * (size_t) pitch, 1 );
@@ -866,14 +890,17 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG_REDUCT
 			{
 				// Resulting d_Tmp from previous stage:
-				print_message( verb_shown_by_all, "\n---Resulting d_Tmp (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+				print_message( verb_shown_by_all, "---Resulting d_Tmp (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 						",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX "):---\n",
 						height, width, pitch, block_height, dimGrid.y, dimGrid.x );
-				check_cuda_status();
+				int const status1 = check_cuda_status();
 				bool const real_data = true;
 				bool const transpose = false;
 				struct matrix_tags_t const *mt = NULL;
-				show_device_matrix( d_Tmp, (dimGrid.y * dimGrid.x), width, pitch, real_data, transpose, verb_shown_by_all, mt );
+				int const status2  = show_device_matrix( d_Tmp, (dimGrid.y * dimGrid.x), width, pitch, real_data, transpose,
+									verb_shown_by_all, mt );
+				if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+					return EXIT_FAILURE;
 			}
 			#endif
 			///////////////////////////////
@@ -894,11 +921,16 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 				 */
 				reduce_to_row( d_Tmp, d_Tmp_height, pitch, NULL, block_height, dimGrid, stream_AccA, d_accum_A );
 
-				///////////////////////////////
-				#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-					check_cuda_status();
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_REDUCT || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+				{
+					cudaError_t const cuda_status = cudaGetLastError();
+					if ( cuda_status != cudaSuccess ) {
+						print_error( sys_error_shown_by_all, "CUDA error detected in reduce_to_row( d_Tmp, %s ): %s\n",
+								matrix_name, cudaGetErrorString( cuda_status ) );
+						return EXIT_FAILURE;
+					}
+				}
 				#endif
-				///////////////////////////////
 
 			#if NMFGPU_PROFILING_KERNELS
 				stop_cuda_timer_cnt( &reduce_timing[2], (size_t) d_Tmp_height * (size_t) pitch, 1 );
@@ -914,7 +946,7 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			start_cuda_timer();
 		#endif
 
-			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_REDUCT || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
 				cudaError_t const cuda_status =
 			#endif
 
@@ -925,11 +957,13 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 			 *	cublas_status = CUBLAS_R_COPY( cublas_handle, pitch, d_A, 1, d_accum_A, 1 );
 			 */
 
-			///////////////////////////////
-			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-				check_cuda_status_st( cuda_status );
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_REDUCT || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+				if ( cuda_status != cudaSuccess ) {
+					print_error( sys_error_shown_by_all, "matrix_to_row( %s ): cudaMemcpyAsync(): %s\n", matrix_name,
+							cudaGetErrorString( cuda_status ) );
+					return EXIT_FAILURE;
+				}
 			#endif
-			///////////////////////////////
 
 		#if NMFGPU_PROFILING_KERNELS
 			stop_cuda_timer_cnt( &reduce_timing[3], pitch, 1 );
@@ -941,12 +975,14 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 	///////////////////////////////
 	#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
 	{
-		print_message( verb_shown_by_all, "--- Resulting accumulator (length=%" PRI_IDX ",pitch=%" PRI_IDX ") for matrix %s: ---\n",
-				width, pitch, matrix_name );
-		check_cuda_status();
+		print_message( verb_shown_by_all, "--- Resulting accumulator (length=%" PRI_IDX ",pitch=%" PRI_IDX
+				") for matrix %s: ---\n", width, pitch, matrix_name );
+		int const status1 = check_cuda_status();
 		bool const real_data = true;
 		struct matrix_tags_t const *mt = NULL;
-		show_device_matrix( d_accum_A, 1, width, pitch, real_data, false, verb_shown_by_all, mt );
+		int const status2 = show_device_matrix( d_accum_A, 1, width, pitch, real_data, false, verb_shown_by_all, mt );
+		if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+			return EXIT_FAILURE;
 	}
 	#endif
 	///////////////////////////////
@@ -955,21 +991,22 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 	// Records the previous operation on stream_AccA as 'event_AccA'
 	{
-		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_REDUCT || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaEventRecord( event_AccA, stream_AccA );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error recording CUDA event: %s\nError in matrix2row(%s, width=%"
-						PRI_IDX ", pitch=%" PRI_IDX ").\n", cudaGetErrorString(cuda_status),
-						matrix_name, width, pitch );
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_REDUCT || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "matrix_to_row( %s ): cudaEventRecord(): %s\n", matrix_name,
+						cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
+
+	return EXIT_SUCCESS;
 
 } // matrix_to_row
 
@@ -987,11 +1024,15 @@ void matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
  * Then, the operation is registered using the same event object.
  *
  * 'pitch' must be a multiple of 'memory_alignment'.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index_t height, index_t pitch,
+int matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
-				index_t width, char const *__restrict__ const matrix_name_A,
-				char const *__restrict__ const matrix_name_B,
+				index_t width,
+			#endif
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				char const *__restrict__ const matrix_name_A, char const *__restrict__ const matrix_name_B,
 			#endif
 			bool div_operator,
 			#if NMFGPU_PROFILING_KERNELS
@@ -999,6 +1040,12 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 			#endif
 			cudaStream_t stream_A, cudaEvent_t event_B )
 {
+
+	#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+		char const *__restrict__ const operator_str = ( div_operator ? "./" : "-" );
+	#endif
+
+	// ------------------------------------------
 
 	/* Kernel setup:
 	 *
@@ -1039,20 +1086,20 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 
 	if ( ! mappedHostMemory ) {
 
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaStreamWaitEvent( stream_A, event_B, 0 );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "cudaStreamWaitEvent: %s\nError in matrix_div_sub(%s %s %s, height=%" PRI_IDX
-						", pitch=%" PRI_IDX ").\n", cudaGetErrorString(cuda_status), matrix_name_A,
-						( div_operator ? "./" : "-" ), matrix_name_B, height, pitch );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "matrix_div_sub( %s = %s %s %s ): cudaStreamWaitEvent( "
+						"stream_%s, event_%s ): %s\n", matrix_name_A, matrix_name_B, operator_str,
+						matrix_name_A, matrix_name_A, matrix_name_B, cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// ------------------------------------------
@@ -1065,18 +1112,31 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 
 		div_sub( d_A, d_B, matrix_size, block_size, dimGrid, div_operator, stream_A );
 
+		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+		{
+			cudaError_t const cuda_status = cudaGetLastError();
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "CUDA error detected in div_sub(%s = %s %s %s): %s\n", matrix_name_A,
+						matrix_name_B, operator_str, matrix_name_A,  cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
+		}
+		#endif
+
 		///////////////////////////////
 		#if NMFGPU_DEBUG
 		{
-			print_message( dbg_shown_by_all, "--- Resulting %s = %s %s %s (height=%" PRI_IDX ", width=%" PRI_IDX ", pitch=%" PRI_IDX
-					",block_size=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX "): ---\n", matrix_name_A,
-					matrix_name_B, ( div_operator ? "./" : "-" ), matrix_name_A, height, width, pitch, block_size,
-					dimGrid.y, dimGrid.x );
-			check_cuda_status();
+			print_message( dbg_shown_by_all, "--- Resulting %s = %s %s %s (height=%" PRI_IDX ", width=%" PRI_IDX
+					", pitch=%" PRI_IDX ",block_size=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%"
+					PRI_IDX "): ---\n", matrix_name_A, matrix_name_B, operator_str, matrix_name_A, height,
+					width, pitch, block_size, dimGrid.y, dimGrid.x );
+			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			bool const transpose = false;
 			struct matrix_tags_t const *mt = NULL;
-			show_device_matrix( d_A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+			int const status2 = show_device_matrix( d_A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
 		}
 		#endif
 		///////////////////////////////
@@ -1090,22 +1150,23 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
 	// Records the operations as an event (reuses the event object; skipped if host memory was mapped).
 	if ( ! mappedHostMemory ) {
 
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaEventRecord( event_B, stream_A );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error recording CUDA event: %s\nError in matrix_div(%s %s %s, height=%"
-						PRI_IDX ", pitch=%" PRI_IDX ").\n", cudaGetErrorString(cuda_status), matrix_name_A,
-						( div_operator ? "./" : "-" ), matrix_name_B, height, pitch );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "matrix_div_sub( %s = %s %s %s ): cudaEventRecord("
+						"event_%s, stream_%s ): %s\n", matrix_name_A, matrix_name_B, operator_str,
+						matrix_name_A, matrix_name_B, matrix_name_A, cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
-
 	}
+
+	return EXIT_SUCCESS;
 
 } // matrix_div_sub
 
@@ -1120,10 +1181,17 @@ void matrix_div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, index
  * Then, the operation is registered using the same event object.
  *
  * 'pitch' must be a multiple of 'memory_alignment', and <= maxThreadsPerBlock.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, real const *__restrict__ d_accum_B, index_t height, index_t pitch,
+int matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, real const *__restrict__ d_accum_B, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
-				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+				index_t width, bool transpose,
+			#endif
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				char const *__restrict__ const matrix_name_A,
+			#endif
+			#if NMFGPU_DEBUG
 				char const *__restrict__ const matrix_name_Aux, char const *__restrict__ const matrix_name_accB,
 			#endif
 			cudaStream_t stream_A )
@@ -1173,23 +1241,19 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
 
 	// Delays kernel launch until d_accum_B[] is ready.
 	{
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaStreamWaitEvent( stream_A, event_reduction, 0 );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error: could not delay operations until %s is ready: %s\n"
-						"Error in matrix_mul_div(%s, %s, %s, height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%"
-						PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-						", transpose=%i\n", matrix_name_accB, cudaGetErrorString(cuda_status), matrix_name_A,
-						matrix_name_Aux, matrix_name_accB, height, width, pitch, block_height, dimGrid.y,
-						dimGrid.x, transpose );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "matrix_mul_div(%s): cudaStreamWaitEvent(): %s\n", matrix_name_A,
+						cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// ------------------------------------------
@@ -1200,17 +1264,30 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
 
 		mul_div( d_A, d_Aux, d_accum_B, height, pitch, block_height, dimGrid, stream_A );
 
+		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+		{
+			cudaError_t const cuda_status = cudaGetLastError();
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "CUDA error detected in mul_div(%s): %s\n", matrix_name_A,
+						cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
+		}
+		#endif
+
 		///////////////////////////////
 		#if NMFGPU_DEBUG
 		{
-			print_message( dbg_shown_by_all, "--- Resulting %s = %s .* %s ./ %s (height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%"
-					PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-					", transpose=%i ): ---\n", matrix_name_A, matrix_name_A, matrix_name_Aux, matrix_name_accB,
-					height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
-			check_cuda_status();
+			print_message( dbg_shown_by_all, "--- Resulting %s = %s .* %s ./ %s (height=%" PRI_IDX ",width=%" PRI_IDX
+					", pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%"
+					PRI_IDX ", transpose=%i ): ---\n", matrix_name_A, matrix_name_A, matrix_name_Aux,
+					matrix_name_accB, height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
+			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			struct matrix_tags_t const *mt = NULL;
-			show_device_matrix( d_A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+			int const status2 = show_device_matrix( d_A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
 		}
 		#endif
 		///////////////////////////////
@@ -1218,6 +1295,8 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
 	#if NMFGPU_PROFILING_KERNELS
 		stop_cuda_timer_cnt( &mul_div_timing[ timing_index ], (size_t) height * (size_t) pitch, 1 );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // matrix_mul_div
 
@@ -1230,10 +1309,15 @@ void matrix_mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, rea
  *
  * If 'event_A' is non-NULL, delays the kernel launch until such event completes.
  * Then, the operation is recorded using the same event object.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
+int matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
-				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+				index_t width, bool transpose,
+			#endif
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				char const *__restrict__ const matrix_name_A,
 			#endif
 			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
 {
@@ -1275,22 +1359,19 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 	// Delays kernel launch until d_A[] is ready.
 	if ( event_A ) {
 
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaStreamWaitEvent( stream_A, *event_A, 0 );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error: could not delay operations until %s is ready: %s\n"
-						"Error in matrix_adjust(height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
-						",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-						", transpose=%i ): ---\n", matrix_name_A, cudaGetErrorString(cuda_status),
-						height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "matrix_adjust(%s): cudaStreamWaitEvent(): %s\n", matrix_name_A,
+						cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
 
 	// ---------------------------
@@ -1301,18 +1382,31 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 
 		adjust( d_A, height, pitch, block_height, dimGrid, stream_A );
 
+		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+		{
+			cudaError_t const cuda_status = cudaGetLastError();
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "CUDA error detected in adjust(%s): %s\n", matrix_name_A,
+						cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
+		}
+		#endif
+
 		///////////////////////////////
 		#if NMFGPU_DEBUG
 		{
-			print_message( dbg_shown_by_all, "--- Resulting %s = MAX( %s, R_MIN ), (height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%"
-					PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-					", transpose=%i ): ---\n", matrix_name_A, matrix_name_A, height, width, pitch,
-					block_height, dimGrid.y, dimGrid.x, transpose );
-			check_cuda_status();
+			print_message( dbg_shown_by_all, "--- Resulting %s = MAX( %s, R_MIN ), (height=%" PRI_IDX ",width=%"
+					PRI_IDX ", pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX
+					",grid_length=%" PRI_IDX ", transpose=%i ): ---\n", matrix_name_A, matrix_name_A,
+					height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
+			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			bool const transpose = false;
 			struct matrix_tags_t const *mt = NULL;
-			show_device_matrix( d_A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+			int const status2 = show_device_matrix( d_A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
 		}
 		#endif
 		///////////////////////////////
@@ -1326,23 +1420,22 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
 	// Delays kernel launch until d_A[] is ready.
 	if ( event_A ) {
 
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaEventRecord( *event_A, stream_A );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error recording CUDA event: %s\n"
-						"Error in matrix_adjust(%s, height=%" PRI_IDX ",width=%" PRI_IDX ", pitch=%" PRI_IDX
-						",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX
-						", transpose=%i ): ---\n", cudaGetErrorString(cuda_status), matrix_name_A,
-						height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "matrix_adjust(%s): cudaEventRecord(): %s\n", matrix_name_A,
+						cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 	}
+
+	return EXIT_SUCCESS;
 
 } // matrix_adjust
 
@@ -1356,10 +1449,17 @@ void matrix_adjust( real *__restrict__ d_A, index_t height, index_t pitch,
  * size_of( d_Idx ) >= height
  * width <= pitch <= maxThreadsPerBlock
  * In addition, "pitch" must be a multiple of 'memory_alignment'.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch, index_t height,
+int matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch, index_t height,
 			#if NMFGPU_DEBUG
-				bool transpose, char const *__restrict__ const matrix_name_A,
+				bool transpose,
+			#endif
+			#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+				char const *__restrict__ const matrix_name_A,
+			#endif
+			#if NMFGPU_DEBUG
 				char const *__restrict__ const matrix_name_Idx,
 			#endif
 			cudaStream_t stream_A, index_t *__restrict__ d_Idx )
@@ -1419,6 +1519,17 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
 
 		idx_max( d_A, height, width, pitch, dimBlock, dimGrid, stream_A, d_Idx );
 
+		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+		{
+			cudaError_t const cuda_status = cudaGetLastError();
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "CUDA error detected in idx_max( %s ): %s\n", matrix_name_A,
+						cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
+		}
+		#endif
+
 		///////////////////////////////
 		#if NMFGPU_DEBUG
 		{
@@ -1426,10 +1537,12 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
 					", pitch=%" PRI_IDX ",block_width=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX
 					",grid_length=%" PRI_IDX ",transpose=%i): ---\n", matrix_name_Idx, matrix_name_A, height,
 					width, pitch, block_width, block_height, dimGrid.y, dimGrid.x, transpose );
-			check_cuda_status();
+			int const status1 = check_cuda_status();
 			bool const real_data = false;
 			struct matrix_tags_t const *mt = NULL;
-			show_device_matrix( d_Idx, 1, height, height, real_data, transpose, dbg_shown_by_all, mt );
+			int const status2 = show_device_matrix( d_Idx, 1, height, height, real_data, transpose, dbg_shown_by_all, mt );
+			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+				return EXIT_FAILURE;
 		}
 		#endif
 		///////////////////////////////
@@ -1437,6 +1550,8 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
 	#if NMFGPU_PROFILING_KERNELS
 		stop_cuda_timer_cnt( &idx_max_timing[ timing_index ], (size_t) height * (size_t) pitch, 1 );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // matrix_idx_max
 
@@ -1450,10 +1565,17 @@ void matrix_idx_max( real const *__restrict__ d_A, index_t width, index_t pitch,
  * If 'event_A' is non-NULL, the operation is recorded as an event.
  *
  * NOTE: If host memory was mapped, the transfer operation is SKIPPED, but NOT the event record (if provided).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A,
+int upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, real *__restrict__ d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				index_t width, bool transpose, char const *__restrict__ const matrix_name_A,
+				index_t width, bool transpose,
+			#endif
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+				char const *__restrict__ const matrix_name_A,
+			#endif
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 				char const *__restrict__ const matrix_name_dA,
 			#endif
 			#if NMFGPU_PROFILING_TRANSF
@@ -1463,7 +1585,7 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 {
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+		print_message( verb_shown_by_all, "Uploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i, event %s, mapped memory: %i)\n", matrix_name_A, matrix_name_dA, height, width,
 				pitch, transpose, ( event_A ? "provided" : "NOT provided"), mappedHostMemory );
 	#endif
@@ -1472,7 +1594,8 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 
 	#if NMFGPU_SYNC_TRANSF
 		// Synchronous data transfer: Waits until all previous operations have finished.
-		check_cuda_status();
+		if ( check_cuda_status() != EXIT_SUCCESS )
+			return EXIT_FAILURE;
 	#endif
 
 	///////////////////////////////
@@ -1494,25 +1617,37 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 		#if NMFGPU_PROFILING_TRANSF
 			start_cuda_timer();
 		#endif
-		{
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF \
+				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
 				cudaError_t const cuda_status =
 			#endif
 
 				cudaMemcpyAsync( d_A, A, nitems * sizeof(real), cudaMemcpyHostToDevice, stream_A );
 
-			/* Same code using cuBLAS:
-			 *	cublasStatus cublas_status =
-			 *		cublasSetVectorAsync( nitems, sizeof(real), A, 1, d_A, 1, stream_A );
-			 */
+				/* Same code using cuBLAS:
+				 *	cublasStatus cublas_status =
+				 *		cublasSetVectorAsync( nitems, sizeof(real), A, 1, d_A, 1, stream_A );
+				 */
+
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF \
+				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
+				if ( cuda_status != cudaSuccess ) {
+					print_error( sys_error_shown_by_all, "Could not upload matrix %s: %s\n", matrix_name_A,
+							cudaGetErrorString( cuda_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-				if ( check_cuda_status_st( cuda_status ) != EXIT_SUCCESS )
+				if ( check_cuda_status() != EXIT_SUCCESS ) {
 					print_error( sys_error_shown_by_all, "Error uploading matrix %s\n", matrix_name_A );
+					return EXIT_FAILURE;
+				}
 			#endif
 			/////////////////////////////
-		}
+
 		#if NMFGPU_PROFILING_TRANSF
 			stop_cuda_timer_cnt( upload_timing, nitems, 1 );
 		#endif
@@ -1526,7 +1661,9 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 	{
 		bool const real_data = true;
 		struct matrix_tags_t const *mt = NULL;
-		show_device_matrix( d_A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+		int const status2 = show_device_matrix( d_A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+		if ( status2 != EXIT_SUCCESS )
+			return EXIT_FAILURE;
 	}
 	#endif
 	/////////////////////////////
@@ -1536,30 +1673,31 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
 	// If 'event_A' is non-NULL, the operation is recorded as an event.
 	if ( event_A ) {
 
-		#if NMFGPU_DEBUG
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || (! NMFGPU_PROFILING_GLOBAL)
 			cudaError_t const cuda_status =
 		#endif
 
 			cudaEventRecord( *event_A, stream_A );
 
-		///////////////////////////////
-		#if NMFGPU_DEBUG
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error recording CUDA event: %s\nError in upload_matrix_event(%s to "
-						"%s, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX ",transpose: %i).\n",
-						cudaGetErrorString(cuda_status), matrix_name_A, matrix_name_dA, height, width, pitch, transpose );
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || (! NMFGPU_PROFILING_GLOBAL)
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "upload_matrix(%s): cudaEventRecord(): %s\n", matrix_name_A,
+						cudaGetErrorString( cuda_status ) );
+				return EXIT_FAILURE;
+			}
 		#endif
-		///////////////////////////////
 
 	} // Records the operation as an event.
 
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+		print_message( verb_shown_by_all, "Uploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i, event %s).. Done\n", matrix_name_A, matrix_name_dA, height, width, pitch,
 				transpose, ( event_A ? "provided" : "NOT provided") );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // upload_matrix
 
@@ -1587,34 +1725,38 @@ void upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, r
  * and adjusts the width of the block to be transferred, if necessary.
  *
  * NOTE: If host memory was mapped, SKIPS the transfer operation and ALL event actions.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t pitch, index_t strow, index_t stcol,
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					index_t block_width, char const *__restrict__ const matrix_name_A,
-					char const *__restrict__ const matrix_name_dA,
-				#endif
-				index_t block_pitch, real *__restrict__ d_A, cudaStream_t stream_A, cudaEvent_t event_A
-				#if NMFGPU_PROFILING_TRANSF
-					, timing_data_t *__restrict__ const upload_timing
-				#endif
+int upload_matrix_partial( real const *__restrict__ A, index_t height, index_t pitch, index_t strow, index_t stcol,
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+				index_t block_width,
+			#endif
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
+				char const *__restrict__ const matrix_name_A,
+			#endif
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+				char const *__restrict__ const matrix_name_dA,
+			#endif
+			index_t block_pitch, real *__restrict__ d_A, cudaStream_t stream_A, cudaEvent_t event_A
+			#if NMFGPU_PROFILING_TRANSF
+				, timing_data_t *__restrict__ const upload_timing
+			#endif
 			)
 {
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",stcol=%" PRI_IDX
+		print_message( verb_shown_by_all, "Uploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",stcol=%" PRI_IDX
 				",strow=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ")\n", matrix_name_A, matrix_name_dA,
 				height, pitch, strow, stcol, block_width, block_pitch );
-	#endif
-
-	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-		cudaError_t cuda_status = cudaSuccess;
 	#endif
 
 	// ----------------------------------
 
 	#if NMFGPU_SYNC_TRANSF
 		// Synchronous data transfer: Waits until all previous operations have finished.
-		check_cuda_status();
+		if ( check_cuda_status() != EXIT_SUCCESS )
+			return EXIT_FAILURE;
 	#endif
 
 	///////////////////////////////
@@ -1630,24 +1772,21 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 	if ( ! mappedHostMemory ) {	// If host memory was NOT mapped.
 
 		// Delays the transfer until the event has completed all previous operations.
+		{
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || (! NMFGPU_PROFILING_GLOBAL)
+				cudaError_t const cuda_status =
+			#endif
 
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-			cuda_status =
-		#endif
+				cudaStreamWaitEvent( stream_A, event_A, 0 );
 
-		cudaStreamWaitEvent( stream_A, event_A, 0 );
-
-		///////////////////////////////
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error setting CUDA event to wait for (cudaStreamWaitEvent): %s\nError "
-						"in upload_matrix_partial(%s to %s, partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%"
-						PRI_IDX ",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX
-						", mappedHostMemory=%i).\n", cudaGetErrorString(cuda_status), matrix_name_A, matrix_name_dA,
-						height, pitch, strow, stcol, block_width, block_pitch, mappedHostMemory );
-		#endif
-		///////////////////////////////
-
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cuda_status != cudaSuccess ) {
+					print_error( sys_error_shown_by_all, "upload_matrix_partial(%s): cudaStreamWaitEvent(): %s\n",
+							matrix_name_A, cudaGetErrorString( cuda_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 		// ----------------------------------
 
 		// Starts the transfer...
@@ -1657,6 +1796,12 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 		#if NMFGPU_PROFILING_TRANSF
 			start_cuda_timer();
 		#endif
+		{
+
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF \
+				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
+				cudaError_t cuda_status = cudaSuccess;
+			#endif
 
 			if ( (block_pitch < pitch) + (stcol > 0) ) {
 
@@ -1669,7 +1814,8 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 				 */
 				index_t const width = MIN( block_pitch, (pitch-stcol) );
 
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF \
+					|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
 					cuda_status =
 				#endif
 
@@ -1690,7 +1836,8 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 				 * It can be transferred as a row vector.
 				 */
 
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF \
+					|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
 					cuda_status =
 				#endif
 
@@ -1705,13 +1852,24 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 
 			} // if ( ( block_pitch < pitch ) || ( stcol > 0 ) )
 
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF \
+				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
+				if ( cuda_status != cudaSuccess ) {
+					print_error( sys_error_shown_by_all, "Could not upload (partial) matrix %s: %s\n", matrix_name_A,
+							cudaGetErrorString( cuda_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+
 			///////////////////////////////
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-				if ( check_cuda_status_st( cuda_status ) != EXIT_SUCCESS )
-					print_error( sys_error_shown_by_all, "Error uploading matrix %s\n", matrix_name_A );
+				if ( check_cuda_status() != EXIT_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "Error uploading (partial) matrix %s\n", matrix_name_A );
+					return EXIT_FAILURE;
+				}
 			#endif
-			/////////////////////////////
-
+			///////////////////////////////
+		}
 		#if NMFGPU_PROFILING_TRANSF
 			stop_cuda_timer_cnt( upload_timing, nitems, 1 );
 		#endif
@@ -1719,24 +1877,21 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 		// ----------------------------------
 
 		// Records this operation using the same event object.
+		{
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || (! NMFGPU_PROFILING_GLOBAL)
+				cudaError_t const cuda_status =
+			#endif
 
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			cuda_status =
-		#endif
+				cudaEventRecord( event_A, stream_A );
 
-			cudaEventRecord( event_A, stream_A );
-
-		///////////////////////////////
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
-			if ( cuda_status != cudaSuccess )
-				print_error( sys_error_shown_by_all, "Error recording CUDA: %s\nError in upload_matrix_partial(%s to %s, partial,"
-						"height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX ",stcol=%" PRI_IDX ",block_width=%"
-						PRI_IDX ", block_pitch=%" PRI_IDX ", mappedHostMemory=%i).\n", cudaGetErrorString(cuda_status),
-						matrix_name_A, matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch,
-						mappedHostMemory );
-		#endif
-		///////////////////////////////
-
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || (! NMFGPU_PROFILING_GLOBAL)
+				if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "upload_matrix_partial(%s): cudaEventRecord(): %s\n",
+						matrix_name_A, cudaGetErrorString( cuda_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+		}
 
 	} // If host memory was NOT mapped.
 
@@ -1748,7 +1903,9 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 		bool const real_data = true;
 		bool const transpose = false;
 		struct matrix_tags_t const *mt = NULL;
-		show_device_matrix( d_A, height, block_width, block_pitch, real_data, transpose, dbg_shown_by_all, mt );
+		int const status2 = show_device_matrix( d_A, height, block_width, block_pitch, real_data, transpose, dbg_shown_by_all, mt );
+		if ( status2 != EXIT_SUCCESS )
+			return EXIT_FAILURE;
 	}
 	#endif
 	///////////////////////////////
@@ -1756,10 +1913,12 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\nUploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX
+		print_message( verb_shown_by_all, "Uploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX
 				",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ", mappedHostMemory=%i)...Done.\n",
 				matrix_name_A, matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch, mappedHostMemory );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // upload_matrix_partial
 
@@ -1771,10 +1930,15 @@ void upload_matrix_partial( real const *__restrict__ A, index_t height, index_t 
  * A[1..height][1..pitch] <--- d_A[1..height][1..pitch]
  *
  * NOTE: If host memory was mapped, the transfer operation is SKIPPED.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-void download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_t data_size, void const *__restrict__ d_A,
+int download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_t data_size, void const *__restrict__ d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 				index_t width, bool real_data, bool transpose, char const *__restrict__ const matrix_name_A,
+			#endif
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
 				char const *__restrict__ const matrix_name_dA,
 			#endif
 			#if NMFGPU_PROFILING_TRANSF
@@ -1784,7 +1948,7 @@ void download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_
 {
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\nDownloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%"
+		print_message( verb_shown_by_all, "Downloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%"
 				PRI_IDX ",transpose: %i, mappedHostMemory: %i)\n", matrix_name_dA, matrix_name_A, height, width,
 				pitch, transpose, mappedHostMemory );
 	#endif
@@ -1793,7 +1957,8 @@ void download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_
 
 	#if NMFGPU_SYNC_TRANSF
 		// Synchronous data transfer: Waits until all previous operations have finished.
-		check_cuda_status();
+		if ( check_cuda_status() != EXIT_SUCCESS )
+			return EXIT_FAILURE;
 	#endif
 
 	///////////////////////////////
@@ -1815,8 +1980,9 @@ void download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_
 		#if NMFGPU_PROFILING_TRANSF
 			start_cuda_timer();
 		#endif
-		{
-			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
+
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF \
+				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
 				cudaError_t const cuda_status =
 			#endif
 
@@ -1827,13 +1993,25 @@ void download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_
 			 *		cublasSetVectorAsync( nitems, data_size, d_A, 1, A, 1, stream_A );
 			 */
 
+			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF \
+				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
+				if ( cuda_status != cudaSuccess ) {
+					print_error( sys_error_shown_by_all, "Could not download matrix %s: %s\n", matrix_name_dA,
+							cudaGetErrorString( cuda_status ) );
+					return EXIT_FAILURE;
+				}
+			#endif
+
 			///////////////////////////////
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_SYNC_TRANSF
-				if ( check_cuda_status_st( cuda_status ) != EXIT_SUCCESS )
-					print_error( sys_error_shown_by_all, "Error downloading matrix %s\n", matrix_name_A );
+				if ( check_cuda_status() != EXIT_SUCCESS ) {
+					print_error( sys_error_shown_by_all, "Error downloading matrix %s\n", matrix_name_dA );
+					return EXIT_FAILURE;
+				}
 			#endif
-			/////////////////////////////
-		}
+			///////////////////////////////
+
+
 		#if NMFGPU_PROFILING_TRANSF
 			stop_cuda_timer_cnt( download_timing, nitems, 1 );
 		#endif
@@ -1846,7 +2024,9 @@ void download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_
 	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 	{
 		struct matrix_tags_t const *mt = NULL;
-		matrix_show( A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+		int const status2 = matrix_show( A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
+		if ( status2 != EXIT_SUCCESS )
+			return EXIT_FAILURE;
 	}
 	#endif
 	/////////////////////////////
@@ -1854,10 +2034,12 @@ void download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_
 	// ----------------------------------
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "\nDownloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX
+		print_message( verb_shown_by_all, "Downloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX
 				",pitch=%" PRI_IDX ",transpose: %i, mappedHostMemory: %i)...Done.\n", matrix_name_dA, matrix_name_A,
 				height, width, pitch, transpose, mappedHostMemory );
 	#endif
+
+	return EXIT_SUCCESS;
 
 } // download_matrix
 

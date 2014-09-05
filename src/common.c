@@ -229,12 +229,12 @@ index_t K = 0;		// Factorization rank.
 index_t NpP = 0;	// Number of rows of V assigned to this process (NpP <= N).
 index_t MpP = 0;	// Number of columns of V assigned to this process (MpP <= M).
 index_t bN = 0;		// Starting row ((bN + NpP) <= N).
-index_t bM = 0;		// Starting column ((bM + MpP) <= M).
+index_t bM = 0;		// Starting column ((bM + MpPp) <= Mp).
 
 // Padded dimensions:
-index_t Mp = 0;		// 'M' rounded up to the next multiple of <memory_alignment>.
-index_t Kp = 0;		// 'K' rounded up to the next multiple of <memory_alignment>.
-index_t MpPp = 0;	// 'MpP' rounded up to the next multiple of <memory_alignment> (MpPp <= Mp).
+index_t Mp = 0;		// <M> rounded up to the next multiple of <memory_alignment>.
+index_t Kp = 0;		// <K> rounded up to the next multiple of <memory_alignment>.
+index_t MpPp = 0;	// <MpP> rounded up to the next multiple of <memory_alignment> (MpPp <= Mp).
 
 // Classification vectors.
 index_t *restrict classification = NULL;
@@ -265,14 +265,13 @@ static bool const error_shown_by_all = false;		// Error messages on invalid argu
  * Prints the given message composed by the format string "fmt" and the
  * arguments list "args", if any.
  *
- * Multi-process mode (all_processes == true  &&  num_processes > 1):
- *	- The message is printed by all existing processes.
- *	- If "show_prefix" is 'true', the message is prefixed with a newline
- *	  character ('\n') and the process ID.
+ * "New-message" mode (append == false):
+ *	- The string is prefixed by a newline ('\n') character.
+ *	- If "show_id" is 'true', such newline is followed by the process ID.
  *
- * Single-process mode (all_processes == false  ||  num_processes == 1):
- *	- The message is printed  by process '0' only.
- *	- "show_prefix" is IGNORED and no prefix is printed.
+ * "Append" mode (append == true):
+ *	- No prefix at all is printed.
+ *	- "show_id" is IGNORED and defaulted to 'false'.
  *
  * Output mode (err_mode == false):
  *	- The string is printed to the standard output stream ('stdout').
@@ -283,14 +282,15 @@ static bool const error_shown_by_all = false;		// Error messages on invalid argu
  *	- The message is printed to the standard error stream ('stderr').
  *	- If "errnum" is non-zero, this function behaves similar to perror(3).
  *	  That is, it appends to the message a colon, the string given by
- *	  strerror(errnum) and a newline character.
+ *	  strerror(errnum), and a newline character. In contrast, if "errnum"
+ *	  is zero, just prints the newline.
  *
  * Note that error messages from this function (i.e., if it fails) are always
  * prefixed and suffixed with a newline character, regardless the arguments.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static int print_string( bool all_processes, bool show_prefix, bool err_mode, int errnum, char const *restrict const fmt, va_list args )
+static int print_string( bool all_processes, bool append, bool show_id, bool err_mode, int errnum, char const *restrict const fmt, va_list args )
 {
 
 	if ( ! fmt ) {
@@ -328,13 +328,21 @@ static int print_string( bool all_processes, bool show_prefix, bool err_mode, in
 
 	if ( all_processes + ( ! process_id ) ) {
 
-		if ( (all_processes * num_processes * show_prefix ) > 1 )
-			error += ( fprintf( file, "\n[P%" PRI_IDX "] ", process_id ) <= 0 );
+		if ( ! append ) {	// "New-message" mode
+
+			error += ( fprintf( file, "\n" ) <= 0 );
+
+			if ( show_id )
+				error += ( fprintf( file, "[P%" PRI_IDX "] ", process_id ) <= 0 );
+		}
 
 		error += ( vfprintf( file, fmt, args ) <= 0 );
 
-		if ( err_mode * errnum )
-			error += ( fprintf( file, ": %s\n", strerror(errnum) ) <= 0 );
+		if ( err_mode ) {
+			if ( errnum )
+				error += ( fprintf( file, ": %s", strerror(errnum) ) <= 0 );
+			error += ( fprintf( file, "\n" ) <= 0 );
+		}
 	}
 
 	if ( error ) {
@@ -360,10 +368,10 @@ static int print_string( bool all_processes, bool show_prefix, bool err_mode, in
  * Prints the given message composed by the format string "fmt" and the subsequent
  * arguments, if any.
  *
+ * The message is ALWAYS prefixed by a newline character ('\n').
+ *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * In addition, if (num_processes > 1), the message is prefixed with a newline
- * character ('\n') and the process ID.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ * In addition, if (num_processes > 1), the process ID is also printed.
  *
  * The string is always printed to the standard output stream ('stdout').
  *
@@ -372,7 +380,8 @@ static int print_string( bool all_processes, bool show_prefix, bool err_mode, in
 int print_message( bool all_processes, char const *restrict const fmt, ... )
 {
 
-	bool const show_prefix = (all_processes * num_processes > 1);
+	bool const append = false;
+	bool const show_id = all_processes * (num_processes > 1);
 	bool const error_mode = false;
 	int const error_num = 0;
 
@@ -382,7 +391,7 @@ int print_message( bool all_processes, char const *restrict const fmt, ... )
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, show_prefix, error_mode, error_num, fmt, args );
+	int const status = print_string( all_processes, append, show_id, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -396,12 +405,10 @@ int print_message( bool all_processes, char const *restrict const fmt, ... )
  * Prints the given message, composed by the format string "fmt" and the subsequent
  * arguments, if any.
  *
- * This method is intended for successive portions of a previously printed message,
- * so it will never be prefixed, regardless of the arguments and the existing number
- * of processes.
+ * This method is intended for successive portions of a message that was previously
+ * printed, so it will never be prefixed by a newline nor the process ID.
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
  *
  * The string is always printed to the standard output stream ('stdout').
  *
@@ -410,7 +417,8 @@ int print_message( bool all_processes, char const *restrict const fmt, ... )
 int append_printed_message( bool all_processes, char const *restrict const fmt, ... )
 {
 
-	bool const show_prefix = false;
+	bool const append = true;
+	bool const show_id = false;
 	bool const error_mode = false;
 	int const error_num = 0;
 
@@ -420,7 +428,7 @@ int append_printed_message( bool all_processes, char const *restrict const fmt, 
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, show_prefix, error_mode, error_num, fmt, args );
+	int const status = print_string( all_processes, append, show_id, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -432,13 +440,13 @@ int append_printed_message( bool all_processes, char const *restrict const fmt, 
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent
- * arguments, if any.
+ * Prints the given error message, composed by the format string "fmt" and the
+ * subsequent arguments, if any.
+ *
+ * The message is ALWAYS prefixed by a newline character ('\n').
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * In addition, if (num_processes > 1), the message is prefixed with a newline
- * character ('\n') and the process ID.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ * In addition, if (num_processes > 1), the process ID is also printed.
  *
  * The string is always printed to the standard error stream ('stderr'). The
  * standard output stream ('stdout') is previously flushed for all processes.
@@ -448,7 +456,8 @@ int append_printed_message( bool all_processes, char const *restrict const fmt, 
 int print_error( bool all_processes, char const *restrict const fmt, ... )
 {
 
-	bool const show_prefix = (all_processes * num_processes > 1);
+	bool const append = false;
+	bool const show_id = all_processes * (num_processes > 1);
 	bool const error_mode = true;
 	int const error_num = 0;
 
@@ -458,7 +467,7 @@ int print_error( bool all_processes, char const *restrict const fmt, ... )
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, show_prefix, error_mode, error_num, fmt, args );
+	int const status = print_string( all_processes, append, show_id, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -469,15 +478,13 @@ int print_error( bool all_processes, char const *restrict const fmt, ... )
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent
- * arguments, if any.
+ * Prints the given error message, composed by the format string "fmt" and the
+ * subsequent arguments, if any.
  *
- * This method is intended for successive portions of a previously printed message,
- * so it will never be prefixed, regardless of the arguments and the existing number
- * of processes.
+ * This method is intended for successive portions of a message that was previously
+ * printed, so it will never be prefixed by a newline nor the process ID.
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
  *
  * The string is always printed to the standard error stream ('stderr'). The
  * standard output stream ('stdout') is previously flushed for all processes.
@@ -487,7 +494,8 @@ int print_error( bool all_processes, char const *restrict const fmt, ... )
 int append_printed_error( bool all_processes, char const *restrict const fmt, ... )
 {
 
-	bool const show_prefix = false;
+	bool const append = true;
+	bool const show_id = false;
 	bool const error_mode = true;
 	int const error_num = 0;
 
@@ -497,7 +505,7 @@ int append_printed_error( bool all_processes, char const *restrict const fmt, ..
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, show_prefix, error_mode, error_num, fmt, args );
+	int const status = print_string( all_processes, append, show_id, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -508,26 +516,28 @@ int append_printed_error( bool all_processes, char const *restrict const fmt, ..
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent
- * arguments, if any.
+ * Prints the given error message, composed by the format string "fmt" and the
+ * subsequent arguments, if any.
+ *
+ * The message is ALWAYS prefixed by a newline character ('\n').
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * In addition, if (num_processes > 1), the message is prefixed with a newline
- * character ('\n') and the process ID.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
+ * In addition, if (num_processes > 1), the process ID is also printed.
  *
  * The string is always printed to the standard error stream ('stderr'). The
  * standard output stream ('stdout') is previously flushed for all processes.
+ *
  * Finally, if errnum is non-zero, this function behaves similar to perror(3).
  * That is, it appends to the message a colon, the string given by strerror(errnum)
- * and a newline character.
+ * and a newline character. Otherwise, it just prints a newline.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int print_errnum( bool all_processes, int errnum, char const *restrict const fmt, ... )
 {
 
-	bool const show_prefix = (all_processes * num_processes > 1);
+	bool const append = false;
+	bool const show_id = all_processes * (num_processes > 1);
 	bool const error_mode = true;
 
 	va_list args;
@@ -536,7 +546,7 @@ int print_errnum( bool all_processes, int errnum, char const *restrict const fmt
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, show_prefix, error_mode, errnum, fmt, args );
+	int const status = print_string( all_processes, append, show_id, error_mode, errnum, fmt, args );
 
 	va_end( args );
 
@@ -547,28 +557,28 @@ int print_errnum( bool all_processes, int errnum, char const *restrict const fmt
 ////////////////////////////////////////////////
 
 /*
- * Prints the given message composed by the format string "fmt" and the subsequent
- * arguments, if any.
+ * Prints the given error message, composed by the format string "fmt" and the
+ * subsequent arguments, if any.
  *
- * This method is intended for successive portions of a previously printed message,
- * so it will never be prefixed, regardless of the arguments and the existing number
- * of processes.
+ * This method is intended for successive portions of a message that was previously
+ * printed, so it will never be prefixed by a newline nor the process ID.
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
- * Otherwise, the message is printed by process 0 only, with no prefix at all.
  *
  * The string is always printed to the standard error stream ('stderr'). The
  * standard output stream ('stdout') is previously flushed for all processes.
+ *
  * Finally, if errnum is non-zero, this function behaves similar to perror(3).
  * That is, it appends to the message a colon, the string given by strerror(errnum)
- * and a newline character.
+ * and a newline character. Otherwise, it just prints a newline.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
 int append_printed_errnum( bool all_processes, int errnum, char const *restrict const fmt, ... )
 {
 
-	bool const show_prefix = false;
+	bool const append = true;
+	bool const show_id = false;
 	bool const error_mode = true;
 
 	va_list args;
@@ -577,7 +587,7 @@ int append_printed_errnum( bool all_processes, int errnum, char const *restrict 
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, show_prefix, error_mode, errnum, fmt, args );
+	int const status = print_string( all_processes, append, show_id, error_mode, errnum, fmt, args );
 
 	va_end( args );
 
@@ -701,7 +711,7 @@ int print_nmf_gpu_help( char const *restrict const execname )
 
 	// Checks for NULL parameters
 	if ( ! execname ) {
-		print_errnum( error_shown_by_all, EFAULT, "\nprint_nmf_gpu_help( execname )" );
+		print_errnum( error_shown_by_all, EFAULT, "print_nmf_gpu_help( execname )" );
 		return EXIT_FAILURE;
 	}
 
@@ -787,9 +797,9 @@ int set_matrix_limits( index_t data_alignment, index_t max_dimension, size_t max
 	if ( (data_alignment < 0) + (max_dimension < 0) ) {
 		int const errnum = EINVAL;
 		if (data_alignment < 0)
-			print_errnum( error_shown_by_all, errnum, "\nset_matrix_limits(data_alignment=%" PRI_IDX ")", data_alignment );
+			print_errnum( error_shown_by_all, errnum, "set_matrix_limits(data_alignment=%" PRI_IDX ")", data_alignment );
 		if (max_dimension < 0)
-			print_errnum( error_shown_by_all, errnum, "\nset_matrix_limits(max_dimension=%" PRI_IDX ")", max_dimension);
+			print_errnum( error_shown_by_all, errnum, "set_matrix_limits(max_dimension=%" PRI_IDX ")", max_dimension);
 		return EXIT_FAILURE;
 	}
 
@@ -899,10 +909,10 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 	// Checks for invalid parameters
 	if ( ! ( (argc > 0) * (uintptr_t) argv * (uintptr_t) help * (uintptr_t) arguments ) ) {
 		int const errnum = EFAULT;
-		if ( argc <= 0 ) print_errnum( error_shown_by_all, errnum, "\ncheck_arguments( argc=%i )", argc );
-		if ( ! argv )	print_errnum( error_shown_by_all, errnum, "\ncheck_arguments( argv )" );
-		if ( ! help )	print_errnum( error_shown_by_all, errnum, "\ncheck_arguments( help )" );
-		if ( ! arguments ) print_errnum( error_shown_by_all, errnum, "\ncheck_arguments( arguments )" );
+		if ( argc <= 0 ) print_errnum( error_shown_by_all, errnum, "check_arguments( argc=%i )", argc );
+		if ( ! argv )	print_errnum( error_shown_by_all, errnum, "check_arguments( argv )" );
+		if ( ! help )	print_errnum( error_shown_by_all, errnum, "check_arguments( help )" );
+		if ( ! arguments ) print_errnum( error_shown_by_all, errnum, "check_arguments( arguments )" );
 		return EXIT_FAILURE;
 	}
 
@@ -967,8 +977,8 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val < INTMAX_C(0)) ) {
-					print_errnum( error_shown_by_all, errno, "\nError: Invalid binary mode for input file: '%s'. "
-							"It must be a non-negative integer value.\n", optarg );
+					print_errnum( error_shown_by_all, errno, "Error: Invalid binary mode for input file: '%s'", optarg );
+					append_printed_error( error_shown_by_all, "It must be a non-negative integer value.\n");
 					return EXIT_FAILURE;
 				}
 				l_is_bin = (index_t) ( val ? 2 : 1 );
@@ -989,8 +999,8 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val < INTMAX_C(0)) ) {
-					print_errnum( error_shown_by_all, errno, "\nError: Invalid binary mode for output file(s): '%s'. "
-							"It must be a non-negative integer value.\n", optarg );
+					print_errnum( error_shown_by_all, errno, "Error: Invalid binary mode for output file(s): '%s'", optarg );
+					append_printed_error( error_shown_by_all, "It must be a non-negative integer value.\n" );
 					return EXIT_FAILURE;
 				}
 				l_save_bin = (index_t) ( val ? 2 : 1 );
@@ -1012,9 +1022,9 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
-					print_errnum( error_shown_by_all, errno, "\nError: Invalid number of iterations: '%s'. "
-							"It must be a positive integer value less than or equal to %" PRI_IDX ".\n",
-							optarg, IDX_MAX );
+					print_errnum( error_shown_by_all, errno, "Error: Invalid number of iterations: '%s'", optarg);
+					append_printed_error( error_shown_by_all, "It must be a positive integer value less than or equal to %"
+								PRI_IDX ".\n", IDX_MAX );
 					return EXIT_FAILURE;
 				}
 				l_nIters = (index_t) val;
@@ -1028,9 +1038,10 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
-					print_errnum( error_shown_by_all, errno, "\nError: Invalid number of iterations for "
-							"convergence test: '%s'. It must be a positive integer value less than or equal to %"
-							PRI_IDX ".\n", optarg, IDX_MAX );
+					print_errnum( error_shown_by_all, errno, "Error: Invalid number of iterations for convergence test: '%s'",
+							optarg );
+					append_printed_error( error_shown_by_all, "It must be a positive integer value less than or equal to %"
+								PRI_IDX ".\n", IDX_MAX );
 					return EXIT_FAILURE;
 				}
 				l_niter_test_conv = (index_t) val;
@@ -1044,9 +1055,9 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val < INTMAX_C(2)) + (val > (intmax_t) max_pitch) ) {
-					print_errnum( error_shown_by_all, errno, "\nError: invalid factorization rank: '%s'. "
-							"It must be an integer value in the range [2 .. %" PRI_IDX "].\n",
-							optarg, max_pitch );
+					print_errnum( error_shown_by_all, errno, "Error: invalid factorization rank: '%s'", optarg );
+					append_printed_error( error_shown_by_all, "It must be an integer value in the range [2 .. %"
+								PRI_IDX "].\n", max_pitch );
 					return EXIT_FAILURE;
 				}
 				l_k = (index_t) val;
@@ -1068,9 +1079,9 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val <= INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
-					print_errnum( error_shown_by_all, errno, "\nError: invalid stopping threshold '%s'. "
-							"It must be a positive integer value less than or equal to %" PRI_IDX ".\n",
-							optarg, IDX_MAX );
+					print_errnum( error_shown_by_all, errno, "Error: invalid stopping threshold '%s'", optarg );
+					append_printed_error( error_shown_by_all, "It must be a positive integer value less than or equal to %"
+								PRI_IDX ".\n", IDX_MAX );
 					return EXIT_FAILURE;
 				}
 				l_stop_threshold = (index_t) val;
@@ -1084,9 +1095,9 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				char *endptr = NULL;
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val < INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
-					print_errnum( error_shown_by_all, errno, "\nError: invalid basis device ID number '%s'. "
-							"It must be a non-negative integer value less than or equal to %" PRI_IDX ".\n",
-							optarg, IDX_MAX );
+					print_errnum( error_shown_by_all, errno, "Error: invalid basis device ID number '%s'", optarg );
+					append_printed_error( error_shown_by_all, "It must be a non-negative integer value less than or equal to %"
+							PRI_IDX ".\n", IDX_MAX );
 					return EXIT_FAILURE;
 				}
 				l_gpu_device = (index_t) val;
@@ -1096,7 +1107,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 
 			// Missing argument
 			case ':': {
-				print_error( error_shown_by_all, "\nError: option -%c requires an argument.\nSee help (option '-h').\n",
+				print_error( error_shown_by_all, "Error: option -%c requires an argument.\nSee help (option '-h').\n",
 						optopt );
 				return EXIT_FAILURE;
 			} // break;	// Unreachable statement
@@ -1117,7 +1128,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 
 	// Filename
 	if ( optind >= argc ) {
-		print_error( error_shown_by_all, "\nError: No filename. Not enough arguments.\nSee help (option '-h').\n" );
+		print_error( error_shown_by_all, "Error: No filename. Not enough arguments.\nSee help (option '-h').\n" );
 		return EXIT_FAILURE;
 	}
 	l_filename = argv[optind];
@@ -1258,7 +1269,7 @@ size_t get_difference( index_t const *restrict classification, index_t const *re
 /*
  * Retrieves a "random" value that can be used as seed.
  *
- * If NMFGPU_FIXED_INIT is non-zero, returns FIXED_SEED.
+ * If NMFGPU_FIXED_INIT is non-zero, returns <FIXED_SEED>.
  */
 index_t get_seed( void )
 {
@@ -1268,14 +1279,19 @@ index_t get_seed( void )
 	#if ! NMFGPU_FIXED_INIT
 
 		// Reads the seed from /dev/urandom
+
 		FILE *restrict file = fopen("/dev/urandom", "r");
 
 		if ( ( ! file ) || ( ! fread( &seed, sizeof(index_t), 1, file ) ) ) {
 
-			// Failed to read: Sets the seed from the clock.
+			/* Failed to read the file (do not care about the reason):
+			 *	Sets the seed from the clock.
+			 */
 
 			if ( file )
 				fclose(file);
+
+			errno = 0;
 
 			struct timeval tv;
 			gettimeofday(&tv, NULL);

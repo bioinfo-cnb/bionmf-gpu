@@ -243,6 +243,8 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 	NpP = N = nrows;
 	MpP = M = ncols;
 	MpPp = Mp = pitch;
+	bN = 0;
+	bM = 0;
 
 	// --------------------------------
 
@@ -267,7 +269,7 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 
 	// Copies input matrix to the new memory.
 	if ( ! memcpy( V, matrix, nitems * sizeof(real) ) )  {
-		print_errnum( sys_error_shown_by_all, errno, "Error initializing input matrix on HOST memory.\n" );
+		print_errnum( sys_error_shown_by_all, errno, "Error initializing input matrix on HOST memory" );
 		freeHostMemory( V, "V" );
 		matrix_clean( matrix, *mt );
 		return EXIT_FAILURE;
@@ -294,8 +296,6 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold )
 {
 
-	int status = EXIT_SUCCESS;
-
 	#if NMFGPU_PROFILING_GLOBAL
 		// GPU time
 		struct timeval gpu_tv;
@@ -307,33 +307,93 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	// Initializes matrices W and H with random values.
 	{
 
-		index_t const seed = get_seed();
+		// Initializes the random-number generator.
+		{
+			index_t const seed = get_seed();
 
-		status = init_random( seed );
-		if ( status != EXIT_SUCCESS )
-			return EXIT_FAILURE;
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
 
-		// H
-		set_random_values( H, d_H, M, K, Kp,
-					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-						true, "H", "d_H",	// Matrix transposing
-					#endif
-					#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
-						&upload_H_timing,
-					#endif
-					streams_NMF[ psNMF_N ], NULL );
+			init_random( seed );
 
-		// W
-		set_random_values( W, d_W, N, K, Kp,
-					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-						false, "W", "d_W",	// NO matrix transposing
-					#endif
-					#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
-						&upload_W_timing,
-					#endif
-					stream_W, &event_W );
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
-		destroy_random();
+		// Initializes matrix H
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			set_random_values( H, d_H, M, K, Kp,
+						#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF)
+							true,		// Matrix transposing
+						#endif
+						#if NMFGPU_CPU_RANDOM && (NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+							|| (! NMFGPU_PROFILING_GLOBAL))
+							"H",
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF) \
+							|| ((! NMFGPU_CPU_RANDOM) && (! NMFGPU_PROFILING_GLOBAL))
+							"d_H",
+						#endif
+						#if ( NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF )
+							&upload_H_timing,
+						#endif
+						streams_NMF[ psNMF_N ], NULL );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
+
+		// Initializes matrix W
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			set_random_values( W, d_W, N, K, Kp,
+						#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
+							false,		// NO matrix transposing
+						#endif
+						#if NMFGPU_CPU_RANDOM && (NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+							|| (! NMFGPU_PROFILING_GLOBAL))
+							"W",
+						#endif
+						#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF) \
+							|| ((! NMFGPU_CPU_RANDOM) && (! NMFGPU_PROFILING_GLOBAL))
+							"d_W",
+						#endif
+						#if ( NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF )
+							&upload_W_timing,
+						#endif
+						stream_W, &event_W );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
+
+		// Finalizes the random-number generator.
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+				destroy_random();
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 	}
 
 	// ----------------------------
@@ -348,27 +408,63 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 		index_t const BLN  = block_N.BL[ pBLN ];		// Number of rows.
 
 		// d_Vcol
-		if ( d_Vcol != d_Vrow )
-			upload_matrix_partial( Vcol, N, MpPp, 0, colIdx,	// Starting row: 0
-						#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-							BLM, "Vcol", "d_Vcol",
-						#endif
-						BLMp, d_Vcol, stream_Vcol, event_Vcol
-						#if NMFGPU_PROFILING_TRANSF
-							, &upload_Vcol_timing
-						#endif
-						);
+		if ( d_Vcol != d_Vrow ) {
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+				upload_matrix_partial( Vcol, N, MpPp, 0, colIdx,	// Starting row: 0
+							#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+								BLM,
+							#endif
+							#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+								|| (! NMFGPU_PROFILING_GLOBAL)
+								"Vcol",
+							#endif
+							#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+								"d_Vcol",
+							#endif
+							BLMp, d_Vcol, stream_Vcol, event_Vcol
+							#if NMFGPU_PROFILING_TRANSF
+								, &upload_Vcol_timing
+							#endif
+							);
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// d_Vrow
-		upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
-					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						M, "Vrow", "d_Vrow",
-					#endif
-					Mp, d_Vrow, stream_Vrow, event_Vrow
-					#if NMFGPU_PROFILING_TRANSF
-						, &upload_Vrow_timing
-					#endif
-					);
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+				upload_matrix_partial( Vrow, BLN, Mp, rowIdx, 0,	// Starting column: 0
+							#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+								M,
+							#endif
+							#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+								|| (! NMFGPU_PROFILING_GLOBAL)
+								"Vrow",
+							#endif
+							#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+								"d_Vrow",
+							#endif
+							Mp, d_Vrow, stream_Vrow, event_Vrow
+							#if NMFGPU_PROFILING_TRANSF
+								, &upload_Vrow_timing
+							#endif
+							);
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 	}
 
 	// ----------------------------
@@ -381,7 +477,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	bool converged = false;
 
 	#if NMFGPU_VERBOSE
-		print_message( verb_shown_by_all, "\nniter_test_conv=%" PRI_IDX ", niter_conv=%" PRI_IDX ", niter_rem=%" PRI_IDX ".\n",
+		print_message( verb_shown_by_all, "niter_test_conv=%" PRI_IDX ", niter_conv=%" PRI_IDX ", niter_rem=%" PRI_IDX ".\n",
 				niter_test_conv, niter_div.quot, niter_div.rem );
 	#endif
 
@@ -406,7 +502,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 			#if NMFGPU_DEBUG
 			///////////////////////////////
-				print_message( verb_shown_by_all, "\n============ iter=%" PRI_IDX ", Loop %" PRI_IDX
+				print_message( verb_shown_by_all, "============ iter=%" PRI_IDX ", Loop %" PRI_IDX
 						" (niter_test_conv): ============\n------------ Matrix H: ------------\n", iter,i);
 			/////////////////////////////
 			#endif
@@ -417,7 +513,19 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			 * Haux(BLM,Kp) = W' * WH(N,BLMp)
 			 * H(BLM,Kp) = H(BLM,Kp) .* Haux(BLM,Kp) ./ accum_W
 			 */
-			update_H();
+			{
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					int const status =
+				#endif
+
+				update_H();
+
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					if ( status != EXIT_SUCCESS )
+						return EXIT_FAILURE;
+				#endif
+			}
+
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
@@ -432,39 +540,91 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			 * Waux(BLN,Kp) = WH(BLN,Mp) * H'
 			 * W(BLN,Kp) = W(BLN,Kp) .* Waux(BLN,Kp) ./ accum_h
 			 */
-			update_W();
+			{
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					int const status =
+				#endif
+
+				update_W();
+
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					if ( status != EXIT_SUCCESS )
+						return EXIT_FAILURE;
+				#endif
+			}
+
 
 		} // for niter_test_conv times.
 
 		// -------------------------------------
 
 		// Adjusts matrices W and H.
-
-		matrix_adjust( d_H, block_M.BL[ pBLM ], Kp,
-				#if NMFGPU_DEBUG
-					K, true, "d_H",		// Matrix transposing
+		{
+			{
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					int const status =
 				#endif
-				stream_H, NULL );
 
-		matrix_adjust( d_W, block_N.BL[ pBLN ], Kp,
-				#if NMFGPU_DEBUG
-					K, false, "d_W",	// No matrix transposing
+				matrix_adjust( d_H, block_M.BL[ pBLM ], Kp,
+						#if NMFGPU_DEBUG
+							K, true, 	// Matrix transposing
+						#endif
+						#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+							"d_H",
+						#endif
+						stream_H, NULL );
+
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					if ( status != EXIT_SUCCESS )
+						return EXIT_FAILURE;
 				#endif
-				stream_W, &event_W );
+			}
+
+			{
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					int const status =
+				#endif
+
+				matrix_adjust( d_W, block_N.BL[ pBLN ], Kp,
+						#if NMFGPU_DEBUG
+							K, false,	// No matrix transposing
+						#endif
+						#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+							"d_W",
+						#endif
+						stream_W, &event_W );
+
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					if ( status != EXIT_SUCCESS )
+						return EXIT_FAILURE;
+				#endif
+			}
+		}
 
 		// -------------------------------------
 
 		// Test of convergence
 
 		// Computes classification vector
-		get_classification( d_classification, classification );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			get_classification( d_classification, classification );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// Computes differences
 		size_t const diff = get_difference( classification, last_classification, M );
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
-				print_message( dbg_shown_by_all, "\nReturned difference between classification vectors: %zu\n", diff );
+				print_message( dbg_shown_by_all, "Returned difference between classification vectors: %zu\n", diff );
 			/////////////////////////////
 			#endif
 
@@ -514,7 +674,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	if ( (!converged) * niter_rem ) { // (converged == false) && (niter_rem > 0)
 
 		#if NMFGPU_VERBOSE
-			print_message( verb_shown_by_all, "\nPerforming remaining iterations (%" PRI_IDX ")...\n", niter_rem);
+			print_message( verb_shown_by_all, "Performing remaining iterations (%" PRI_IDX ")...\n", niter_rem);
 		#endif
 
 		// Runs NMF for niter_rem iterations...
@@ -522,7 +682,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
-				print_message( verb_shown_by_all, "\n============ Loop %" PRI_IDX " (remaining) ============\n"
+				print_message( verb_shown_by_all, "============ Loop %" PRI_IDX " (remaining) ============\n"
 						"------------ Matrix H: ------------\n",i);
 			/////////////////////////////
 			#endif
@@ -533,11 +693,23 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			 * Haux(BLM,Kp) = W' * WH(N,BLMp)
 			 * H(BLM,Kp) = H(BLM,Kp) .* Haux(BLM,Kp) ./ accum_W
 			 */
-			update_H();
+			{
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					int const status =
+				#endif
+
+				update_H();
+
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					if ( status != EXIT_SUCCESS )
+						return EXIT_FAILURE;
+				#endif
+			}
+
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
-				print_message(verb_shown_by_all, "\n------------ Matrix W (loop=%" PRI_IDX ",remaining): ------------\n",i);
+				print_message(verb_shown_by_all, "------------ Matrix W (loop=%" PRI_IDX ",remaining): ------------\n",i);
 			/////////////////////////////
 			#endif
 
@@ -547,7 +719,18 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			 * Waux(BLN,Kp) = WH(BLN,Mp) * H'
 			 * W(BLN,Kp) = W(BLN,Kp) .* Waux(BLN,Kp) ./ accum_h
 			 */
-			update_W();
+			{
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					int const status =
+				#endif
+
+				update_W();
+
+				#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+					if ( status != EXIT_SUCCESS )
+						return EXIT_FAILURE;
+				#endif
+			}
 
 		} // for niter_rem times.
 
@@ -577,24 +760,55 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 		size_t const data_size = sizeof(real);
 
 		// d_H
-		download_matrix( H, M, Kp, data_size, d_H,
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					K, real_data, true, "H", "d_H",		// Matrix transposing
-				#endif
-				#if NMFGPU_PROFILING_TRANSF
-					&download_H_timing,
-				#endif
-				stream_H );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			download_matrix( H, M, Kp, data_size, d_H,
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+						K, real_data, true, "H",		// Matrix transposing
+					#endif
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+						|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
+						"d_H",
+					#endif
+					#if NMFGPU_PROFILING_TRANSF
+						&download_H_timing,
+					#endif
+					stream_H );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
 
 		// d_W
-		download_matrix( W, N, Kp, data_size, d_W,
-				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					K, real_data, false, "W", "d_W",	// NO matrix transposing
-				#endif
-				#if NMFGPU_PROFILING_TRANSF
-					&download_W_timing,
-				#endif
-				stream_W );
+		{
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				int const status =
+			#endif
+
+			download_matrix( W, N, Kp, data_size, d_W,
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+						K, real_data, false, "W",	// NO matrix transposing
+					#endif
+					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+						|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
+						"d_W",
+					#endif
+					#if NMFGPU_PROFILING_TRANSF
+						&download_W_timing,
+					#endif
+					stream_W );
+
+			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+				if ( status != EXIT_SUCCESS )
+					return EXIT_FAILURE;
+			#endif
+		}
+
 	}
 	// --------------------------------
 
@@ -610,10 +824,18 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	 */
 
 	real dot_V = REAL_C( 0.0 ), dot_VWH = REAL_C( 0.0 );
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
 
-	status = dot_product_VWH( &dot_V, &dot_VWH );
-	if ( status != EXIT_SUCCESS )
-		return EXIT_FAILURE;
+		dot_product_VWH( &dot_V, &dot_VWH );
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
 
 	#if NMFGPU_DEBUG || NMFGPU_VERBOSE
 	///////////////////////////////
@@ -621,11 +843,24 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	///////////////////////////////
 	#endif
 
-	print_message( shown_by_all, "\nDistance between V and W*H: %g\n", SQRTR( dot_VWH ) / SQRTR( dot_V ) );
+	print_message( shown_by_all, "Distance between V and W*H: %g\n", SQRTR( dot_VWH ) / SQRTR( dot_V ) );
 
 	// --------------------------------
 
-	status = check_cuda_status();
+	{
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			int const status =
+		#endif
+
+		check_cuda_status();
+
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			if ( status != EXIT_SUCCESS )
+				return EXIT_FAILURE;
+		#endif
+	}
+
+	// --------------------------------
 
 	#if NMFGPU_PROFILING_GLOBAL
 	// GPU time
@@ -634,11 +869,11 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 		gettimeofday( &gpu_ftv, NULL );
 		timersub( &gpu_ftv, &gpu_tv, &gpu_etv );	// etv = ftv - tv
 		float const total_gpu_time = gpu_etv.tv_sec + ( gpu_etv.tv_usec * 1e-06f );
-		print_message( shown_by_all, "\nGPU + classification + check_result time: %g seconds.\n", total_gpu_time );
+		print_message( shown_by_all, "GPU + classification + check_result time: %g seconds.\n", total_gpu_time );
 	}
 	#endif
 
-	return status;
+	return EXIT_SUCCESS;
 
 } // nmf
 
@@ -844,7 +1079,7 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// Fails if the factorization rank is too large.
 	if ( K > MIN( N, M ) ) {
-		print_error( error_shown_by_all, "\nError: invalid factorization rank: K=%" PRI_IDX ".\nIt cannot be greater "
+		print_error( error_shown_by_all, "Error: invalid factorization rank: K=%" PRI_IDX ".\nIt cannot be greater "
 				"than any of matrix dimensions.\n", K );
 		freeHostMemory( Vrow, "V" ); clean_matrix_tags( mt );
 		shutdown_GPU();
@@ -956,12 +1191,12 @@ int main( int argc, char const *restrict *restrict argv )
 			gettimeofday( &t_ftv, NULL );
 			timersub( &t_ftv, &t_tv, &t_etv );	// etv = ftv - tv
 			float const total_nmf_time = t_etv.tv_sec + ( t_etv.tv_usec * 1e-06f );
-			print_message( shown_by_all, "\nTotal elapsed time: %g seconds.\n", total_nmf_time );
+			print_message( shown_by_all, "Total elapsed time: %g seconds.\n", total_nmf_time );
 		}
 	#endif
 
 	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-		print_message( shown_by_all, "\nTime elapsed on GPU operations:\n" );
+		print_message( shown_by_all, "Time elapsed on GPU operations:\n" );
 
 		show_kernel_times();
 

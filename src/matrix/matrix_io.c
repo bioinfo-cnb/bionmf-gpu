@@ -192,7 +192,7 @@ int matrix_check_dimensions( char const *restrict const function_name, index_t n
 
 	if ( (nrows <= 0) + (ncols <= 0) + (pitch < min_cols) + (pitch > max_pitch) + (max_dim > max_non_padded_dim) +
 		(nitems > (uintmax_t) max_num_items) ) {
-		print_error( error_shown_by_all, "\nError in %s( rows=%" PRI_IDX ", columns=%" PRI_IDX ", pitch=%" PRI_IDX ", transpose=%i ): ",
+		print_error( error_shown_by_all, "Error in %s( rows=%" PRI_IDX ", columns=%" PRI_IDX ", pitch=%" PRI_IDX ", transpose=%i ): ",
 				function_name, nrows, ncols, pitch, transpose );
 		if ( (nrows <= 0) + (ncols <= 0) )
 			append_printed_error( error_shown_by_all, "Invalid matrix dimensions.\n" );
@@ -274,7 +274,7 @@ static int matrix_read_line( FILE *restrict file, index_t current_line, char con
 			if ( len_data )
 				print_error( error_shown_by_all, "Error in matrix_read_line()\n" );
 			else
-				print_error( error_shown_by_all, "\nError reading input file:\nPremature end-of-file detected at line %"
+				print_error( error_shown_by_all, "Error reading input file:\nPremature end-of-file detected at line %"
 						PRI_IDX ". Invalid file format.\n", current_line );
 			return EXIT_FAILURE;
 		}
@@ -295,7 +295,7 @@ static int matrix_read_line( FILE *restrict file, index_t current_line, char con
 		#endif
 
 		if ( last_char != delimiter ) {	// Blank line.
-			print_error( error_shown_by_all, "\nError reading input file: No matrix data at line %" PRI_IDX
+			print_error( error_shown_by_all, "Error reading input file: No matrix data at line %" PRI_IDX
 					". Invalid file format.\n", current_line );
 			free(data);
 			return EXIT_FAILURE;
@@ -324,7 +324,7 @@ static int matrix_read_line( FILE *restrict file, index_t current_line, char con
 				char *restrict const tmp = (char *restrict) realloc( labels_str, max_len_labels * sizeof(char) );
 				if ( ! tmp ) {
 					print_errnum( sys_error_shown_by_all, errno, "Error in matrix_read_line(): realloc( labels, "
-							"max_labels_length=%zu ) ", max_len_labels );
+							"max_labels_length=%zu )", max_len_labels );
 					free(data);
 					return EXIT_FAILURE;
 				}
@@ -415,17 +415,17 @@ static int matrix_read_line( FILE *restrict file, index_t current_line, char con
 				print_errnum( sys_error_shown_by_all, errno, "Error in matrix_read_line() reading line %" PRI_IDX
 						", column %" PRI_IDX ": fscanf()", current_line, col + haslabels + 1 );
 			else if ( feof(file) )
-				print_error( error_shown_by_all, "\nError reading input file:\nPremature end of file detected in line %"
+				print_error( error_shown_by_all, "Error reading input file:\nPremature end of file detected in line %"
 						PRI_IDX " (%" PRI_IDX " columns found, %" PRI_IDX " expected).\nInvalid file format.\n",
 						current_line, col + haslabels, ncols + haslabels );
 			else {	// Invalid data or premature EOL.
 				int const chr = ( c[0] ? c[0] : fgetc( file ) );	// (First) Illegal character.
 				if ( (chr == (int) '\n') + (chr == (int) '\r') )	// Premature EOL.
-					print_error( error_shown_by_all, "\nError reading input file:\nPremature end of line detected at line %"
+					print_error( error_shown_by_all, "Error reading input file:\nPremature end of line detected at line %"
 							PRI_IDX " (%" PRI_IDX " columns found, %" PRI_IDX " expected).\nInvalid file format.\n",
 							current_line, col + haslabels, ncols + haslabels );
 				else {
-					print_error( error_shown_by_all, "\nError reading input file at line %" PRI_IDX ", column %" PRI_IDX
+					print_error( error_shown_by_all, "Error reading input file at line %" PRI_IDX ", column %" PRI_IDX
 							". Unexpected character: ", current_line, col + haslabels + 1 );
 					append_printed_error( error_shown_by_all, (isgraph(chr) ? "'%c'\n" : "'\\0x%X'\n"), chr );
 					if ( chr == (int) ',' )
@@ -502,7 +502,7 @@ static int matrix_read_line( FILE *restrict file, index_t current_line, char con
 						", column %" PRI_IDX ": fscanf()", current_line, col + haslabels + 1 );
 
 			else if ((c[0] == '\r') + (c[1] == '\r')) {  // (c[0] == '\r' && c[1] != '\n') || (c[1] == '\r')
-				print_error( error_shown_by_all, "\nError in input file at line %" PRI_IDX ", column %" PRI_IDX
+				print_error( error_shown_by_all, "Error in input file at line %" PRI_IDX ", column %" PRI_IDX
 						". Invalid character sequence for end-of-line:", current_line, col + haslabels + 1 );
 				for ( size_t i = 0 ; i < 2 ; i++ )
 					switch( c[i] ) {
@@ -520,10 +520,10 @@ static int matrix_read_line( FILE *restrict file, index_t current_line, char con
 			} else { // Invalid datum: (!c[0] && !EOF)
 				int const chr = fgetc( file );		// (First) Illegal character.
 				if ( chr == delimiter )			// There are more than <ncols> columns.
-					print_error( error_shown_by_all, "\nError in input file at line %" PRI_IDX ": Invalid file format.\n"
+					print_error( error_shown_by_all, "Error in input file at line %" PRI_IDX ": Invalid file format.\n"
 							"There are more than %" PRI_IDX " columns.\n", current_line, ncols + haslabels );
 				else {
-					print_error( error_shown_by_all, "\nError in input file at line %" PRI_IDX ", column %" PRI_IDX
+					print_error( error_shown_by_all, "Error in input file at line %" PRI_IDX ", column %" PRI_IDX
 							". Unexpected character: ", current_line, col + haslabels + 1 );
 					append_printed_error( error_shown_by_all, ( isgraph(chr) ? ("'%c'\n") : ("'\\0x%X'\n") ), chr );
 					if ( chr == (int) ',' )
@@ -664,14 +664,14 @@ static int check_blank_lines( FILE *restrict file, index_t current_line )
 			print_errnum( sys_error_shown_by_all, errno, "Error in check_blank_lines() at line %" PRI_IDX
 					": fscanf( blank_lines=%zu )", current_line, num_bl );
 		else if ( bad_eol )
-			print_error( error_shown_by_all, "\nError in input file at line %" PRI_IDX ": invalid end-of-line.\n"
+			print_error( error_shown_by_all, "Error in input file at line %" PRI_IDX ": invalid end-of-line.\n"
 					"Only UNIX (LF, '\\n') and MS-DOS/Windows (CR+LF, '\\r\\n') styles are accepted.\n",
 					current_line + num_bl );
 		else if ( num_bl >= MAX_NUM_BLANK_LINES )
-			print_error( error_shown_by_all, "\nWarning: There are more than %d blank lines starting at file line %" PRI_IDX
+			print_error( error_shown_by_all, "Warning: There are more than %d blank lines starting at file line %" PRI_IDX
 					". It does NOT seem to be a valid file. Aborting...\n", MAX_NUM_BLANK_LINES, current_line+1);
 		else
-			print_error( error_shown_by_all, "\nError in input file: No matrix data at line %" PRI_IDX "\n"
+			print_error( error_shown_by_all, "Error in input file: No matrix data at line %" PRI_IDX "\n"
 					"Invalid file format.\n\n", current_line + 1 );
 		return EXIT_FAILURE;
 	}
@@ -750,12 +750,12 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 	// Checks for NULL parameters
 	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) pitch * (uintptr_t) mt ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_ascii_verb( filename )" );
-		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_ascii_verb( matrix )" );
-		if ( ! nrows )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_ascii_verb( nrows )" );
-		if ( ! ncols )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_ascii_verb( ncols )" );
-		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_ascii_verb( pitch )" );
-		if ( ! mt )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_ascii_verb( mt )" );
+		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "matrix_load_ascii_verb( filename )" );
+		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "matrix_load_ascii_verb( matrix )" );
+		if ( ! nrows )	print_errnum( error_shown_by_all, errnum, "matrix_load_ascii_verb( nrows )" );
+		if ( ! ncols )	print_errnum( error_shown_by_all, errnum, "matrix_load_ascii_verb( ncols )" );
+		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "matrix_load_ascii_verb( pitch )" );
+		if ( ! mt )	print_errnum( error_shown_by_all, errnum, "matrix_load_ascii_verb( mt )" );
 		return EXIT_FAILURE;
 	}
 
@@ -778,7 +778,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 	status = read_tag( file, delimiter, &tokensL1, &len_tokensL1, &num_tokensL1 );
 	if ( status ) {	// EOF, error, or invalid format
 		if ( status == 1 )	// EOF
-			print_error( error_shown_by_all, "\nError reading input file: file is empty?\n" );
+			print_error( error_shown_by_all, "Error reading input file: file is empty?\n" );
 		else if ( status == 2 )	// Internal error.
 			print_error( error_shown_by_all, "Error in matrix_load_ascii_verb( line 1 ).\n" );
 		else	// 3: Maximum line length
@@ -799,7 +799,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 	// Checks for overflow (compares with <max_pitch> to make sure that padding will not overflow).
 	if ( (num_tokensL1-1) > (size_t) max_pitch ) {	// - 1, because the file may have a "name" field.
-		print_message( error_shown_by_all, "\n\t\tNumber of items read on line 1: %zu.\n", num_tokensL1 );
+		print_message( error_shown_by_all, "\t\tNumber of items read on line 1: %zu.\n", num_tokensL1 );
 		append_printed_error( error_shown_by_all, "\nSorry, but your matrix exceeds the limits for matrix dimensions.\n"
 				"On this system and with the given input arguments, data matrices are limited to:\n"
 				"\t* %" PRI_IDX " rows.\n\t*%" PRI_IDX " columns.\n\t*%zu items.\n\nPlease check also for any "
@@ -851,7 +851,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 				print_error( error_shown_by_all, "Error in matrix_load_ascii_verb( line 2 ).\n" );
 			else {	// EOF or maximum line length
 				if ( status == 1 )	// EOF
-					print_error( error_shown_by_all, "\nError reading input file: premature end of file.\n" );
+					print_error( error_shown_by_all, "Error reading input file: premature end of file.\n" );
 				append_printed_error( error_shown_by_all, "Is your data matrix stored in a single text line?\n"
 						"Please check also for any invalid line terminator; only LF ('\\n') and CR+LF ('\\r\\n') "
 						"are accepted.\n" );
@@ -899,7 +899,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 			// Checks for overflow.
 			if ( (num_tokensL1-1) > (size_t) max_pitch ) {	// '-1' because the file may have a "name" field.
-				print_message( error_shown_by_all, "\n\t\tNumber of items read on line 1: %zu.\n", num_tokensL1 );
+				print_message( error_shown_by_all, "\t\tNumber of items read on line 1: %zu.\n", num_tokensL1 );
 				append_printed_error( error_shown_by_all, "\nSorry, but your matrix exceeds the limits used for matrix "
 							"dimensions.\nOn this system and with the given input arguments, data matrices "
 							"are limited to:\n\t* %" PRI_IDX " rows.\n\t*%" PRI_IDX " columns.\n\t*%zu items.\n\n"
@@ -1022,13 +1022,13 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 	// Checks for invalid number of columns.
 	if ( ( numcols <= 1 ) + ( (num_tokensL2 - haslabels) > (size_t) max_pitch ) ) {
 		if ( numcols <= 1 )
-			print_error( error_shown_by_all, "\nError reading input file:\nInvalid file format or the number of "
+			print_error( error_shown_by_all, "Error reading input file:\nInvalid file format or the number of "
 					"columns is less than 2.\n"
 					"Please remember that columns must be separated by TAB characters (or by single space "
 					"characters under certain conditions).\nFinally, please check for any invalid decimal "
 					"symbol (e.g., ',' instead of '.').\n\n" );
 		else
-			print_error( error_shown_by_all, "\n\nSorry, but your matrix exceeds the limits used for matrix dimensions.\n"
+			print_error( error_shown_by_all, "Sorry, but your matrix exceeds the limits used for matrix dimensions.\n"
 					"On this system and with the given input arguments, data matrices are limited to:\n\t* %" PRI_IDX
 					" rows\n\t*%" PRI_IDX " columns.\n\t* %zu items.\n\n", max_non_padded_dim, max_pitch, max_num_items );
 		clean_tag(tokensL2);
@@ -1127,7 +1127,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 		} else {	// Error.
 
-			print_error( error_shown_by_all, "\nError reading input file: length of lines 1 (%zu) and 2 (%" PRI_IDX ") mismatch.\n"
+			print_error( error_shown_by_all, "Error reading input file: length of lines 1 (%zu) and 2 (%" PRI_IDX ") mismatch.\n"
 					"Invalid file format or data are not separated.\nFinally, please check for any invalid "
 					"decimal symbol.\n", num_tokensL1, numcols );
 			clean_tag(tokensL2);
@@ -1205,7 +1205,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 			// No numeric characters <OR> NaN, inf, underflow/overflow, etc
 			if ( errno + (! is_valid(value)) + (*endptr) ) {	// (errno != 0) || (*endptr != '\0') || (! is_valid(value))
-				print_errnum( error_shown_by_all, errno, "\nError reading line %" PRI_IDX ", column %" PRI_IDX
+				print_errnum( error_shown_by_all, errno, "Error reading line %" PRI_IDX ", column %" PRI_IDX
 						". Invalid numeric value: '%s'", nlines, (j + haslabels + 1), val_str );
 				if ( ! errno )
 					append_printed_error( error_shown_by_all, "Please, check also for invalid decimal symbols (if any).\n" );
@@ -1226,7 +1226,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 		// Fails on "empty" row or there is a negative value.
 		if ( (sum_row < R_MIN) + (min_value < REAL_C(0.0)) ) {
-			print_error( error_shown_by_all, "\nError in input file at line %" PRI_IDX ": ", nlines );
+			print_error( error_shown_by_all, "Error in input file at line %" PRI_IDX ": ", nlines );
 			if ( min_value < REAL_C( 0.0 ) )
 				append_printed_error( error_shown_by_all, "negative value(s) detected (e.g., %g).\n", min_value );
 			else
@@ -1285,7 +1285,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 		nlines++;	// A new line is going to be read.
 
 		#if NMFGPU_DEBUG_READ_MATRIX2
-			print_message( dbg_shown_by_all, "\n==============\nReading line %" PRI_IDX "...\n", nlines );
+			print_message( dbg_shown_by_all, "==============\nReading line %" PRI_IDX "...\n", nlines );
 		#endif
 
 		/////////////////////////////////////////
@@ -1316,7 +1316,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 			max_numrows *= 2;
 
 			#if NMFGPU_DEBUG_READ_MATRIX
-				print_message( dbg_shown_by_all, "\tExpanding memory for a total of %" PRI_IDX " rows: ", max_numrows );
+				print_message( dbg_shown_by_all, "\tExpanding memory for a total of %" PRI_IDX " rows...\n", max_numrows );
 			#endif
 
 			// data_matrix
@@ -1346,7 +1346,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 							skip_labels, (char *restrict *restrict) &(labels.tokens), &len_labels, &max_len_labels );
 
 			if ( status != EXIT_SUCCESS ) {
-				print_error( error_shown_by_all, "\nError reading input file.\n" );
+				print_error( error_shown_by_all, "Error reading input file.\n" );
 				free(sum_cols);
 				struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
 				matrix_clean( data_matrix, l_mt );
@@ -1366,8 +1366,8 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 				// Checks for NaN, inf, underflow/overflow, etc.
 				if ( ! is_valid( value ) ) {
-					print_error( error_shown_by_all, "\nError at line %" PRI_IDX ", column %" PRI_IDX
-							". Invalid numeric value: '%s'", nlines, (j + haslabels + 1) );
+					print_error( error_shown_by_all, "Error at line %" PRI_IDX ", column %" PRI_IDX
+							". Invalid numeric value: '%s'\n", nlines, (j + haslabels + 1) );
 					free(sum_cols);
 					struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
 					matrix_clean( data_matrix, l_mt );
@@ -1385,7 +1385,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 			} // for
 
 			if ( (sum_row < R_MIN) + (min_value < REAL_C(0.0)) ) {
-				print_error( error_shown_by_all, "\nError in input file at line: %" PRI_IDX ": ", nlines );
+				print_error( error_shown_by_all, "Error in input file at line: %" PRI_IDX ": ", nlines );
 				if ( min_value < REAL_C(0.0) )
 					append_printed_error( error_shown_by_all, "negative value(s) detected (e.g., %g).\n", min_value );
 				else	// sum_row < R_MIN
@@ -1429,7 +1429,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 	// NOTE: There are faster alternatives, but we want to tell the user which column is "empty".
 	for ( index_t i = 0 ; i < numcols ; i++ )
 		if ( sum_cols[ i ] < R_MIN ) {
-			print_error( error_shown_by_all, "\nError in input file: column %" PRI_IDX " is \"empty\".\nAll rows and columns must "
+			print_error( error_shown_by_all, "Error in input file: column %" PRI_IDX " is \"empty\".\nAll rows and columns must "
 					"have at least one value greater than or equal to %" PRI_IDX "\n", i + hasheaders + 1, R_MIN );
 			free(sum_cols);
 			struct matrix_tags_t l_mt = new_matrix_tags( name, headers, labels );
@@ -1571,8 +1571,8 @@ int matrix_load_ascii( char const *restrict filename, index_t nrows, index_t nco
 	// Checks for NULL pointers
 	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_ascii( filename )" );
-		if ( ! matrix ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_ascii( matrix )" );
+		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "matrix_load_ascii( filename )" );
+		if ( ! matrix ) print_errnum( error_shown_by_all, errnum, "matrix_load_ascii( matrix )" );
 		return EXIT_FAILURE;
 	}
 
@@ -1611,7 +1611,7 @@ int matrix_load_ascii( char const *restrict filename, index_t nrows, index_t nco
 
 		if ( status ) {	// EOF, error, or invalid format
 			if ( status == 1 )	// EOF
-				print_error( error_shown_by_all, "\nError reading input file: file is empty?\n" );
+				print_error( error_shown_by_all, "Error reading input file: file is empty?\n" );
 			else if ( status == 2 )	// Internal error.
 				print_error( error_shown_by_all, "Error in matrix_load_ascii( line 1 ).\n" );
 			else	// 3: Maximum line length
@@ -1662,7 +1662,7 @@ int matrix_load_ascii( char const *restrict filename, index_t nrows, index_t nco
 			} // If only one token
 
 			if ( ntokens != (size_t) ((hasheaders * minor_dim) + hasname) ) {
-				print_error( error_shown_by_all, "\nError reading input file: Invalid number of items in line 1: %zu read, %"
+				print_error( error_shown_by_all, "Error reading input file: Invalid number of items in line 1: %zu read, %"
 						PRI_IDX " expected.\nInvalid file format.\n", ntokens, (hasheaders * minor_dim) + hasname );
 				clean_tag(tags);
 				fclose(file);
@@ -1906,10 +1906,10 @@ static int read_signature( FILE *restrict file, bool real_data )
 	errno = 0;
 	if ( ! fread( &file_signature, sizeof(uint32_t), 1, file ) ) {
 		if ( feof(file) )
-			print_error( error_shown_by_all, "\nError reading input file:\nPremature end-of-file detected.\n"
+			print_error( error_shown_by_all, "Error reading input file:\nPremature end-of-file detected.\n"
 					"Invalid file format.\n\n" );
 		else if ( ferror(file) )
-			print_errnum( sys_error_shown_by_all, errno, "Error in read_signature(): fread().\n" );
+			print_errnum( sys_error_shown_by_all, errno, "Error in read_signature(): fread()" );
 		return EXIT_FAILURE;
 	}
 
@@ -1923,7 +1923,7 @@ static int read_signature( FILE *restrict file, bool real_data )
 	// -----------------------------
 
 	if ( file_signature != valid_signature ) {
-		print_error( error_shown_by_all, "\nError reading input file:\nInvalid signature: %" PRIX32 "\nInvalid file format.\n\n",
+		print_error( error_shown_by_all, "Error reading input file:\nInvalid signature: %" PRIX32 "\nInvalid file format.\n\n",
 				file_signature );
 		return EXIT_FAILURE;
 	}
@@ -2034,14 +2034,14 @@ static int matrix_read_binary( FILE *restrict file, bool check_errors, index_t n
 			// Checks data.
 			if ( ! ( nread * is_valid(num) ) ) {
 				if ( feof(file) )
-					print_error( error_shown_by_all, "\nError reading input file:\nPremature end-of-file detected.\n"
+					print_error( error_shown_by_all, "Error reading input file:\nPremature end-of-file detected.\n"
 							"Invalid file format.\n\n");
 				else if ( ferror(file) )
 					print_errnum( sys_error_shown_by_all, errno, "Error in matrix_load_binary_verb( transpose=%i ): "
-							"fread( major dim %" PRI_IDX "/%" PRI_IDX ", minor_dim %" PRI_IDX "/%" PRI_IDX ")\n",
+							"fread( major dim %" PRI_IDX "/%" PRI_IDX ", minor_dim %" PRI_IDX "/%" PRI_IDX ")",
 							transpose, i, major_dim, j, minor_dim );
 				else	// ! is_valid(num)
-					print_error( error_shown_by_all, "\nError reading input file (transpose=%i, major dim %" PRI_IDX "/%"
+					print_error( error_shown_by_all, "Error reading input file (transpose=%i, major dim %" PRI_IDX "/%"
 							PRI_IDX ", minor_dim %" PRI_IDX "/%" PRI_IDX "): '%g'.\n"
 							"Invalid numeric or file format.\n\n", transpose, i, major_dim, j, minor_dim );
 				if ( check_errors ) free( sum_inner_loop );
@@ -2066,7 +2066,7 @@ static int matrix_read_binary( FILE *restrict file, bool check_errors, index_t n
 
 		// Fails on "empty" major dimension, or negative value(s).
 		if ( check_errors * ((sum_outer_loop < R_MIN) + (min_value < REAL_C(0.0))) ) {
-			print_error( error_shown_by_all, "\nError in input file at major dim %" PRI_IDX "/% " PRI_IDX " (transpose=%i): ",
+			print_error( error_shown_by_all, "Error in input file at major dim %" PRI_IDX "/% " PRI_IDX " (transpose=%i): ",
 					i, major_dim, transpose );
 			if ( min_value < REAL_C(0.0) )
 				print_error( error_shown_by_all, "negative value(s) detected (e.g., %g).\n", min_value );
@@ -2089,7 +2089,7 @@ static int matrix_read_binary( FILE *restrict file, bool check_errors, index_t n
 		// NOTE: There are faster alternatives, but we want to tell the user which item from the minor dimension is "emtpy".
 		for ( index_t j=0 ; j < minor_dim ; j++ )
 			if ( sum_inner_loop[ j ] < R_MIN ) {
-				print_error( error_shown_by_all, "\nError in input file at minor dim %" PRI_IDX "/%" PRI_IDX
+				print_error( error_shown_by_all, "Error in input file at minor dim %" PRI_IDX "/%" PRI_IDX
 						" (transpose=%i): the item is \"empty\".\nAll rows and columns must have "
 						"at least one value greater than or equal to %" PRI_IDX "\n", j, minor_dim,
 						transpose, R_MIN );
@@ -2161,7 +2161,7 @@ static int matrix_read_binary_native( FILE *restrict file, index_t nrows, index_
 				print_errnum( sys_error_shown_by_all, errno, "Error in matrix_read_binary_native(): fread( row %" PRI_IDX
 						"/%" PRI_IDX ", %" PRI_IDX " columns)", i, nrows, ncols );
 			else	// EOF
-				print_error( error_shown_by_all, "\nError reading input file:\nPremature end-of-file detected. "
+				print_error( error_shown_by_all, "Error reading input file:\nPremature end-of-file detected. "
 						"Invalid file format.\n\n");
 			if ( memory_allocated )
 				free( (void *) data_matrix );
@@ -2269,7 +2269,7 @@ static int matrix_read_tags( FILE *restrict file, index_t nrows, index_t ncols, 
 			} // If it must "retokenize" the string
 
 			if ( ntokens != (size_t) major_dim ) {
-				print_error( error_shown_by_all, "\nError reading input file: %zu row labels found, %" PRI_IDX " expected.\n",
+				print_error( error_shown_by_all, "Error reading input file: %zu row labels found, %" PRI_IDX " expected.\n",
 						ntokens, major_dim );
 				clean_tag( tags );
 				return EXIT_FAILURE;
@@ -2353,7 +2353,7 @@ static int matrix_read_tags( FILE *restrict file, index_t nrows, index_t ncols, 
 			} // If it must "retokenize" the string
 
 			if ( ntokens != (size_t) minor_dim ) {
-				print_error( error_shown_by_all, "\nError reading input file: %zu row labels found, %" PRI_IDX " expected.\n",
+				print_error( error_shown_by_all, "Error reading input file: %zu row labels found, %" PRI_IDX " expected.\n",
 						ntokens, minor_dim );
 				clean_tag( tags );
 				clean_matrix_tags( l_mt );
@@ -2451,12 +2451,12 @@ int matrix_load_binary_verb( char const *restrict filename, real *restrict *rest
 	// Checks for NULL parameters
 	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) pitch * (uintptr_t) mt ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_verb( filename )" );
-		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_verb( matrix )" );
-		if ( ! nrows )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_verb( nrows )" );
-		if ( ! ncols )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_verb( ncols )" );
-		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_verb( pitch )" );
-		if ( ! mt )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_verb( mt )" );
+		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary_verb( filename )" );
+		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "matrix_load_binary_verb( matrix )" );
+		if ( ! nrows )	print_errnum( error_shown_by_all, errnum, "matrix_load_binary_verb( nrows )" );
+		if ( ! ncols )	print_errnum( error_shown_by_all, errnum, "matrix_load_binary_verb( ncols )" );
+		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "matrix_load_binary_verb( pitch )" );
+		if ( ! mt )	print_errnum( error_shown_by_all, errnum, "matrix_load_binary_verb( mt )" );
 		return EXIT_FAILURE;
 	}
 
@@ -2484,10 +2484,10 @@ int matrix_load_binary_verb( char const *restrict filename, real *restrict *rest
 		size_t const nread = fread( dim, sizeof(uint32_t), 2, file );
 		if ( nread != 2 ) {
 			if ( feof(file) )
-				print_error( error_shown_by_all, "\nError reading input file:\nPremature end-of-file detected. "
+				print_error( error_shown_by_all, "Error reading input file:\nPremature end-of-file detected. "
 						"Invalid file format.\n\n");
 			else // error
-				print_errnum( sys_error_shown_by_all, errno, "Error in matrix_load_binary_verb(): fread( dim[2] ).\n" );
+				print_errnum( sys_error_shown_by_all, errno, "Error in matrix_load_binary_verb(): fread( dim[2] )" );
 			fclose(file);
 			return EXIT_FAILURE;
 		}
@@ -2598,8 +2598,8 @@ int matrix_load_binary( char const *restrict filename, index_t nrows, index_t nc
 	// Checks for NULL parameters
 	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary( filename )" );
-		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary( matrix )" );
+		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary( filename )" );
+		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "matrix_load_binary( matrix )" );
 		return EXIT_FAILURE;
 	}
 
@@ -2611,7 +2611,7 @@ int matrix_load_binary( char const *restrict filename, index_t nrows, index_t nc
 	// ------------------------------------
 
 	#if NMFGPU_DEBUG_READ_MATRIX
-		print_message( dbg_shown_by_all, "\nReading '%s'...\n", filename );
+		print_message( dbg_shown_by_all, "Reading '%s'...\n", filename );
 	#endif
 
 	FILE *restrict const file = fopen( filename, "rb" );
@@ -2636,10 +2636,10 @@ int matrix_load_binary( char const *restrict filename, index_t nrows, index_t nc
 		size_t const nread = fread( dim, sizeof(uint32_t), 2, file );
 		if ( nread != 2 ) {
 			if ( feof(file) )
-				print_error( error_shown_by_all, "\nError reading input file:\nPremature end-of-file detected. "
+				print_error( error_shown_by_all, "Error reading input file:\nPremature end-of-file detected. "
 						"Invalid file format.\n\n");
 			else // error
-				print_errnum( sys_error_shown_by_all, errno, "\nError in matrix_load_binary(): fread( dim[2] ).\n" );
+				print_errnum( sys_error_shown_by_all, errno, "Error in matrix_load_binary(): fread( dim[2] )" );
 			fclose(file);
 			return EXIT_FAILURE;
 		}
@@ -2664,7 +2664,7 @@ int matrix_load_binary( char const *restrict filename, index_t nrows, index_t nc
 
 		// Checks file dimensions.
 		if ( (major_dim != (index_t) dim[0]) + (minor_dim != (index_t) dim[1]) ) {
-			print_error( error_shown_by_all, "\nError in matrix_load_binary( transpose=%i ): matrix dimensions mismatch: %"
+			print_error( error_shown_by_all, "Error in matrix_load_binary( transpose=%i ): matrix dimensions mismatch: %"
 					PRIu32 " x %" PRIu32 " read, %" PRI_IDX " x %" PRI_IDX " expected.\n",
 					transpose, dim[0], dim[1], major_dim, minor_dim );
 			fclose(file);
@@ -2758,28 +2758,28 @@ int matrix_load_binary_native( char const *restrict filename, void *restrict *re
 	// Checks for NULL parameters.
 	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) pitch ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_native( filename )" );
-		if ( ! matrix ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_native( matrix )" );
-		if ( ! nrows ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_native( nrows )" );
-		if ( ! ncols ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_native( ncols )" );
-		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_native( pitch )" );
+		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary_native( filename )" );
+		if ( ! matrix ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary_native( matrix )" );
+		if ( ! nrows ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary_native( nrows )" );
+		if ( ! ncols ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary_native( ncols )" );
+		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "matrix_load_binary_native( pitch )" );
 		return EXIT_FAILURE;
 	}
 
 	// Checks for invalid parameters
 	if ( (! data_size) + (*nrows < 0) + (*ncols < 0) + (*pitch < 0) ) {
 		int const errnum = EINVAL;
-		if ( ! data_size ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_native( data_size=%zu )", data_size );
-		if ( *nrows < 0 ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_native( nrows=%" PRI_IDX " )", *nrows );
-		if ( *ncols < 0 ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_native( ncols=%" PRI_IDX " )", *ncols );
-		if ( *pitch < 0 ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load_binary_native( pitch=%" PRI_IDX " )", *pitch );
+		if ( ! data_size ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary_native( data_size=%zu )", data_size );
+		if ( *nrows < 0 ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary_native( nrows=%" PRI_IDX " )", *nrows );
+		if ( *ncols < 0 ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary_native( ncols=%" PRI_IDX " )", *ncols );
+		if ( *pitch < 0 ) print_errnum( error_shown_by_all, errnum, "matrix_load_binary_native( pitch=%" PRI_IDX " )", *pitch );
 		return EXIT_FAILURE;
 	}
 
 	// ------------------------------------
 
 	#if NMFGPU_DEBUG_READ_MATRIX
-		print_message( dbg_shown_by_all, "\nReading '%s'...\n", filename );
+		print_message( dbg_shown_by_all, "Reading '%s'...\n", filename );
 	#endif
 
 	FILE *restrict const file = fopen( filename, "rb" );
@@ -2798,10 +2798,10 @@ int matrix_load_binary_native( char const *restrict filename, void *restrict *re
 		size_t const nread = fread( dim, sizeof(index_t), 2, file );
 		if ( nread != 2 ) {
 			if ( feof(file) )
-				print_error( error_shown_by_all, "\nError reading input file:\nPremature end-of-file detected. "
+				print_error( error_shown_by_all, "Error reading input file:\nPremature end-of-file detected. "
 						"Invalid file format.\n\n");
 			else // error
-				print_errnum( sys_error_shown_by_all, errno, "\nError in matrix_load_binary_native(): fread( dim[2] ).\n" );
+				print_errnum( sys_error_shown_by_all, errno, "Error in matrix_load_binary_native(): fread( dim[2] )" );
 			fclose(file);
 			return EXIT_FAILURE;
 		}
@@ -2823,7 +2823,7 @@ int matrix_load_binary_native( char const *restrict filename, void *restrict *re
 		// Checks matrix dimensions, if provided.
 
 		if ( (*nrows * (*nrows != numrows)) + (*ncols * (*ncols != numcols)) ) {
-			print_error( error_shown_by_all, "\nError in matrix_load_binary_native(): matrix dimensions mismatch:\n" );
+			print_error( error_shown_by_all, "Error in matrix_load_binary_native(): matrix dimensions mismatch:\n" );
 			if ( *nrows * (*nrows != numrows) )
 				append_printed_error ( error_shown_by_all, "\t*nrows(argument)=%" PRI_IDX ", nrows(file)=%" PRI_IDX "\n",
 						*nrows, numrows );
@@ -2899,17 +2899,17 @@ int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_
 	// Checks for NULL parameters
 	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) pitch * (uintptr_t) mt ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "\nmatrix_load( filename )" );
-		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load( matrix )" );
-		if ( ! nrows )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load( nrows )" );
-		if ( ! ncols )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load( ncols )" );
-		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load( pitch )" );
-		if ( ! mt )	print_errnum( error_shown_by_all, errnum, "\nmatrix_load( mt )" );
+		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "matrix_load( filename )" );
+		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "matrix_load( matrix )" );
+		if ( ! nrows )	print_errnum( error_shown_by_all, errnum, "matrix_load( nrows )" );
+		if ( ! ncols )	print_errnum( error_shown_by_all, errnum, "matrix_load( ncols )" );
+		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "matrix_load( pitch )" );
+		if ( ! mt )	print_errnum( error_shown_by_all, errnum, "matrix_load( mt )" );
 		return EXIT_FAILURE;
 	}
 
 	if ( is_bin < 0 ) {
-		print_errnum( error_shown_by_all, EINVAL, "\nError in matrix_load( is_bin=%" PRI_IDX " )", is_bin );
+		print_errnum( error_shown_by_all, EINVAL, "Error in matrix_load( is_bin=%" PRI_IDX " )", is_bin );
 		return EXIT_FAILURE;
 	}
 
@@ -2922,7 +2922,7 @@ int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_
 
 	// Loads the file.
 
-	print_message( shown_by_all, "\nLoading input file...\n" );
+	print_message( shown_by_all, "Loading input file...\n" );
 
 	if ( is_bin > 1 ) { // Input file is "native" binary.
 
@@ -3004,8 +3004,8 @@ int matrix_save_ascii( char const *restrict filename, void const *restrict matri
 	// Checks for NULL parameters
 	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "\nmatrix_save_ascii( filename )" );
-		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "\nmatrix_save_ascii( matrix )" );
+		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "matrix_save_ascii( filename )" );
+		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "matrix_save_ascii( matrix )" );
 		return EXIT_FAILURE;
 	}
 
@@ -3233,9 +3233,9 @@ int matrix_save_combined_ascii( char const *restrict filename, char const *restr
 	// Checks for NULL parameters
 	if ( ! ( (uintptr_t) filename * (uintptr_t) input_pattern * (uintptr_t) output_pattern ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename )	print_errnum( error_shown_by_all, errnum, "\nmatrix_save_combined_ascii( filename )" );
-		if ( ! input_pattern )	print_errnum( error_shown_by_all, errnum, "\nmatrix_save_combined_ascii( input_pattern )" );
-		if ( ! output_pattern )	print_errnum( error_shown_by_all, errnum, "\nmatrix_save_combined_ascii( output_pattern )" );
+		if ( ! filename )	print_errnum( error_shown_by_all, errnum, "matrix_save_combined_ascii( filename )" );
+		if ( ! input_pattern )	print_errnum( error_shown_by_all, errnum, "matrix_save_combined_ascii( input_pattern )" );
+		if ( ! output_pattern )	print_errnum( error_shown_by_all, errnum, "matrix_save_combined_ascii( output_pattern )" );
 		return EXIT_FAILURE;
 	}
 
@@ -3247,10 +3247,10 @@ int matrix_save_combined_ascii( char const *restrict filename, char const *restr
 		if ( (nmatrices <= 1) + (nrows <= 0) + (ncols <= 0) + (width > (uintmax_t) max_pitch) + (nrows > max_non_padded_dim) +
 			(nitems > (uintmax_t) max_num_items) ) {
 			if ( (nmatrices <= 1) + (nrows <= 0) + (ncols <= 0) )
-				print_error( error_shown_by_all, "\nError in matrix_save_combined_ascii( nmatrices=%" PRI_IDX ", rows=%" PRI_IDX
+				print_error( error_shown_by_all, "Error in matrix_save_combined_ascii( nmatrices=%" PRI_IDX ", rows=%" PRI_IDX
 						", columns=%" PRI_IDX " ): Invalid parameters.\n", nmatrices, nrows, ncols );
 			else
-				print_error( error_shown_by_all, "\nSorry, but the output matrix exceeds the limits for matrix dimensions.\n"
+				print_error( error_shown_by_all, "Sorry, but the output matrix exceeds the limits for matrix dimensions.\n"
 						"On this system and with the given input arguments, all data matrices are limited to:\n"
 						"\t* %" PRI_IDX " rows.\n\t*%" PRI_IDX " columns.\n\t*%zu items.\n",
 						max_non_padded_dim, max_pitch, max_num_items );
@@ -3342,10 +3342,10 @@ int matrix_save_combined_ascii( char const *restrict filename, char const *restr
 				print_errnum( sys_error_shown_by_all, errno, "Error in matrix_save_combined_ascii(): fread( dim[2], ncols=%"
 						PRI_IDX ", mt=%" PRI_IDX ", nmatrices=%" PRI_IDX " )" );
 			else if ( feof( input_files[mt] ) )
-				print_error( error_shown_by_all, "\nError in matrix_save_combined_ascii() reading dimensions in file %" PRI_IDX
+				print_error( error_shown_by_all, "Error in matrix_save_combined_ascii() reading dimensions in file %" PRI_IDX
 						" of " PRI_IDX ": Premature end of file detected.\nInvalid file format.\n", mt, nmatrices );
 			else	// (dim[0] != nrows) || (dim[1] != ncols)
-				print_error( error_shown_by_all, "\nError in matrix_save_combined_ascii() reading dimensions in file %" PRI_IDX
+				print_error( error_shown_by_all, "Error in matrix_save_combined_ascii() reading dimensions in file %" PRI_IDX
 						" of " PRI_IDX ": Invalid input matrix dimensions.\n%" PRI_IDX " x %" PRI_IDX " read, %" PRI_IDX
 						" x %" PRI_IDX "expected.\n", mt, nmatrices, dim[0], dim[1], nrows, ncols );
 			for ( index_t i = 0 ; i < mt ; i++ ) fclose(input_files[i]);
@@ -3603,7 +3603,7 @@ static int write_signature( FILE *restrict file, bool real_data )
 
 	errno = 0;
 	if ( ! fwrite( &file_signature, sizeof(uint32_t), 1, file ) ) {
-		print_errnum( sys_error_shown_by_all, errno, "Error in write_signature(): fwrite().\n" );
+		print_errnum( sys_error_shown_by_all, errno, "Error in write_signature(): fwrite()" );
 		return EXIT_FAILURE;
 	}
 
@@ -3717,8 +3717,8 @@ int matrix_save_binary( char const *restrict filename, real const *restrict matr
 	// Checks for NULL parameters
 	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "\nmatrix_save_binary( filename )" );
-		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "\nmatrix_save_binary( matrix )" );
+		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "matrix_save_binary( filename )" );
+		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "matrix_save_binary( matrix )" );
 		return EXIT_FAILURE;
 	}
 
@@ -3761,7 +3761,7 @@ int matrix_save_binary( char const *restrict filename, real const *restrict matr
 		errno = 0;
 		size_t const nwritten = fwrite( dim, sizeof(uint32_t), 2, file );
 		if ( nwritten != 2 ) {
-			print_errnum( sys_error_shown_by_all, errno, "\nError in matrix_save_binary(): fwrite( dim[2] ).\n" );
+			print_errnum( sys_error_shown_by_all, errno, "Error in matrix_save_binary(): fwrite( dim[2] )" );
 			fclose(file);
 			return EXIT_FAILURE;
 		}
@@ -3852,9 +3852,9 @@ int matrix_save_binary_native( char const *restrict filename, void const *restri
 	// Checks for NULL parameters
 	if ( ! ( (uintptr_t) filename * (uintptr_t) matrix * (uintptr_t) data_size ) ) {
 		int const errnum = EFAULT;
-		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "\nmatrix_save_binary_native( filename )" );
-		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "\nmatrix_save_binary_native( matrix )" );
-		if ( ! data_size ) print_errnum( error_shown_by_all, EINVAL, "\nmatrix_save_binary_native( data_size )" );
+		if ( ! filename ) print_errnum( error_shown_by_all, errnum, "matrix_save_binary_native( filename )" );
+		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "matrix_save_binary_native( matrix )" );
+		if ( ! data_size ) print_errnum( error_shown_by_all, EINVAL, "matrix_save_binary_native( data_size )" );
 		return EXIT_FAILURE;
 	}
 
@@ -3878,7 +3878,7 @@ int matrix_save_binary_native( char const *restrict filename, void const *restri
 		index_t const dims[2] = { nrows, ncols };
 		size_t const nwritten = fwrite( dims, sizeof(index_t), 2, file );
 		if ( nwritten != 2 ) {
-			print_errnum( sys_error_shown_by_all, errno, "\nError in matrix_save_binary_native(): fwrite( dim, size=2 ).\n" );
+			print_errnum( sys_error_shown_by_all, errno, "Error in matrix_save_binary_native(): fwrite( dim, size=2 )" );
 			fclose(file);
 			return EXIT_FAILURE;
 		}
@@ -3966,7 +3966,7 @@ int matrix_save( char const *restrict filename, index_t save_bin, real const *re
 {
 
 	if ( save_bin < 0 ) {
-		print_errnum( error_shown_by_all, EINVAL, "\nError in matrix_save( save_bin=%" PRI_IDX " )", save_bin );
+		print_errnum( error_shown_by_all, EINVAL, "Error in matrix_save( save_bin=%" PRI_IDX " )", save_bin );
 		return EXIT_FAILURE;
 	}
 
@@ -3975,7 +3975,7 @@ int matrix_save( char const *restrict filename, index_t save_bin, real const *re
 	// -------------------------------
 
 	if ( verbose )
-		print_message( shown_by_all, "\nSaving output file...\n" );
+		print_message( shown_by_all, "Saving output file...\n" );
 
 	// Saves output as "native" binary.
 	if ( save_bin > 1 ) {
@@ -4067,7 +4067,7 @@ int matrix_show( void const *restrict matrix, index_t nrows, index_t ncols, inde
 
 	// Checks for NULL parameters
 	if ( ! matrix ) {
-		print_errnum( error_shown_by_all, EFAULT, "\nmatrix_show( matrix )" );
+		print_errnum( error_shown_by_all, EFAULT, "matrix_show( matrix )" );
 		return EXIT_FAILURE;
 	}
 
@@ -4281,11 +4281,11 @@ int matrix_transpose_file( void *restrict matrix, index_t *restrict nrows, index
 	// Checks for NULL parameters
 	if ( ! ( (uintptr_t) matrix * (uintptr_t) nrows * (uintptr_t) ncols * (uintptr_t) pitch * (uintptr_t) data_size ) ) {
 		int const errnum = EFAULT;
-		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "\nmatrix_transpose_file( matrix )" );
-		if ( ! nrows )	print_errnum( error_shown_by_all, errnum, "\nmatrix_transpose_file( nrows )" );
-		if ( ! ncols )	print_errnum( error_shown_by_all, errnum, "\nmatrix_transpose_file( ncols )" );
-		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "\nmatrix_transpose_file( pitch )" );
-		if ( ! data_size ) print_errnum( error_shown_by_all, EINVAL, "\nmatrix_transpose_file( data_size )" );
+		if ( ! matrix )	print_errnum( error_shown_by_all, errnum, "matrix_transpose_file( matrix )" );
+		if ( ! nrows )	print_errnum( error_shown_by_all, errnum, "matrix_transpose_file( nrows )" );
+		if ( ! ncols )	print_errnum( error_shown_by_all, errnum, "matrix_transpose_file( ncols )" );
+		if ( ! pitch )	print_errnum( error_shown_by_all, errnum, "matrix_transpose_file( pitch )" );
+		if ( ! data_size ) print_errnum( error_shown_by_all, EINVAL, "matrix_transpose_file( data_size )" );
 		return EXIT_FAILURE;
 	}
 
@@ -4315,7 +4315,7 @@ int matrix_transpose_file( void *restrict matrix, index_t *restrict nrows, index
 		custom_file = true;
 
 		if ( ! base_filename ) {
-			print_errnum( error_shown_by_all, EFAULT, "\nmatrix_transpose_file( base_filename )" );
+			print_errnum( error_shown_by_all, EFAULT, "matrix_transpose_file( base_filename )" );
 			return EXIT_FAILURE;
 		}
 

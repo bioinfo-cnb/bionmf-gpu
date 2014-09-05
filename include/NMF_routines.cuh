@@ -41,6 +41,9 @@
  *	Data type:
  *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
  *
+ *	CPU timing:
+ *		NMFGPU_PROFILING_GLOBAL: Compute total elapsed time.
+ *
  *	GPU timing (WARNING: They PREVENT asynchronous operations. The CPU thread is blocked on synchronization):
  *		NMFGPU_PROFILING_TRANSF: Compute timing of data transfers. Shows additional information.
  *		NMFGPU_PROFILING_KERNELS: Compute timing of CUDA kernels. Shows additional information.
@@ -52,6 +55,7 @@
  *	Debug:
  *		NMFGPU_CPU_RANDOM: Uses the CPU (host) random generator (not the CURAND library).
  *		NMFGPU_DEBUG: Shows the result of each matrix operation and data transfer.
+ *		NMFGPU_DEBUG_REDUCT: Shows partial results of the reduction operation.
  *		NMFGPU_DEBUG_TRANSF: Shows the result of each data transfer.
  *		NMFGPU_SYNC_TRANSF: Performs synchronous data transfers.
  *
@@ -207,8 +211,10 @@ int init_random( index_t seed );
 
 /*
  * Finalizes the selected random generator.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void destroy_random( void );
+int destroy_random( void );
 
 ////////////////////////////////////////////////
 
@@ -221,13 +227,21 @@ void destroy_random( void );
  * If 'event_A' is non-NULL, the operation is recorded as an event.
  *
  * WARNING: Requires the random generator properly initialized, with a seed set.
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void set_random_values( real *RESTRICT A, real *RESTRICT d_A, index_t height, index_t width, index_t padding,
-			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
-				bool transpose, char const *RESTRICT const matrix_name_A,
+int set_random_values( real *RESTRICT A, real *RESTRICT d_A, index_t height, index_t width, index_t padding,
+			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF)
+				bool transpose,
+			#endif
+			#if NMFGPU_CPU_RANDOM && (NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL))
+				char const *RESTRICT const matrix_name_A,
+			#endif
+			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF) \
+				|| ((! NMFGPU_CPU_RANDOM) && (! NMFGPU_PROFILING_GLOBAL))
 				char const *RESTRICT const matrix_name_dA,
 			#endif
-			#if NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF
+			#if ( NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF )
 				timing_data_t *RESTRICT const upload_timing,
 			#endif
 			cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
@@ -244,8 +258,10 @@ void set_random_values( real *RESTRICT A, real *RESTRICT d_A, index_t height, in
  * Once all these blocks are processed, it updates 'pBLM' to process any
  * remaining block(s).
  * It also updates 'stepM' according to the processing direction (forward or backward).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void update_H( void );
+int update_H( void );
 
 ////////////////////////////////////////////////
 
@@ -259,16 +275,20 @@ void update_H( void );
  * Once all these blocks are processed, it updates 'pBLN' to process any
  * remaining block(s).
  * It also updates 'stepN' according to the processing direction (forward or backward).
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void update_W( void );
+int update_W( void );
 
 ////////////////////////////////////////////////
 
 /*
  * Computes classification vector from matrix d_H (full size), and stores it in "ld_classification[]".
  * Then it is downloaded from the GPU and stored in "lh_classification[]".
+ *
+ * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-void get_classification( index_t *RESTRICT ld_classification, index_t *RESTRICT lh_classification );
+int get_classification( index_t *RESTRICT ld_classification, index_t *RESTRICT lh_classification );
 
 ////////////////////////////////////////////////
 

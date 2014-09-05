@@ -443,8 +443,10 @@ int finalize_randomGenerator( void );
 
 /*
  * Blocks until GPU has completed all operations associated to 'stream'.
+ *
+ * return EXIT_SUCCESS or EXIT_FAILURE.
  */
-void sync_GPU( cudaStream_t stream );
+int sync_GPU( cudaStream_t stream );
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
