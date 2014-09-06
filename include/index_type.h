@@ -60,11 +60,11 @@
  *
  * NOTE: UNSIGNED integers may produce faster code.
  */
+typedef
 #if NMFGPU_UINDEX	/* Unsigned indexes */
-	typedef unsigned int index_t;
-#else
-	typedef int index_t;
+	unsigned
 #endif
+		int index_t;
 
 // ---------------------------------------------
 // ---------------------------------------------

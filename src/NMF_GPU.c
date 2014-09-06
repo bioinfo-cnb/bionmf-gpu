@@ -239,15 +239,6 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 
 	// --------------------------------
 
-	// Sets global variables.
-	NpP = N = nrows;
-	MpP = M = ncols;
-	MpPp = Mp = pitch;
-	bN = 0;
-	bM = 0;
-
-	// --------------------------------
-
 	/* Changes matrix to a PINNED HOST memory.
 	 * NOTE:
 	 *	As of CUDA 6.0, it is possible to register (i.e., to page-lock)
@@ -256,7 +247,7 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 	 *	copying the input matrix.
 	 */
 
-	size_t const nitems = (size_t) N * (size_t) Mp;
+	size_t const nitems = (size_t) nrows * (size_t) pitch;
 	bool const wc = true;				// Write-Combined mode
 	bool const clear_memory = false;		// Do NOT initialize the allocated memory
 
@@ -281,6 +272,13 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 
 	// In single-process mode, Vrow and Vcol are just aliases.
 	Vcol = Vrow = V;
+
+	// Sets global variables.
+	NpP = N = nrows;
+	MpP = M = ncols;
+	MpPp = Mp = pitch;
+	bN = 0;
+	bM = 0;
 
 	return EXIT_SUCCESS;
 

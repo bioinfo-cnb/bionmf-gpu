@@ -59,12 +59,13 @@
 /* Data-type definitions */
 
 // 'Real' data type.
-#if NMFGPU_SINGLE_PREC		/* Single precision */
-	typedef float real;
-
+typedef
+#if NMFGPU_SINGLE_PREC	/* Single precision */
+	float
 #else	/* Double precision */
-	typedef double real;
+	double
 #endif
+		real;
 
 // ---------------------------------------------
 // ---------------------------------------------

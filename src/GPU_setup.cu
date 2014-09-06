@@ -1319,6 +1319,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			if ( cuda_status != cudaSuccess ) {
 				print_error( sys_error_shown_by_all, "Host-memory mapping error (Vcol -> d_Vcol): %s\n",
 						cudaGetErrorString(cuda_status) );
+				d_Vrow = NULL;
 				return EXIT_FAILURE;
 			}
 		}
@@ -1328,6 +1329,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 		h_WH = (real *) getHostMemory( sizeWH * sizeof(real), write_combined, clear_memory );
 		if ( ! h_WH ) {
 			print_error( sys_error_shown_by_all, "Error allocating memory for HOST matrix h_WH (mapped-memory mode).\n" );
+			d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 		cuda_status = cudaHostGetDevicePointer( (void **)&d_WH, (void *)h_WH, 0 );
@@ -1335,6 +1337,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			print_error( sys_error_shown_by_all, "Host-memory mapping error (h_WH -> d_WH): %s\n",
 					cudaGetErrorString(cuda_status) );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+			h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1346,6 +1349,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			print_error( sys_error_shown_by_all, "Host-memory mapping error (W -> d_W): %s\n",
 					cudaGetErrorString(cuda_status) );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+			d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1356,6 +1360,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			print_error( sys_error_shown_by_all, "Host-memory mapping error (H -> d_H): %s\n",
 					cudaGetErrorString(cuda_status) );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+			d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1368,6 +1373,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 		if ( ! h_Aux ) {
 			print_error( sys_error_shown_by_all, "Error allocating memory for HOST matrix h_Aux (mapped-memory mode).\n" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+			d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 		cuda_status = cudaHostGetDevicePointer( (void **)&d_Aux, (void *)h_Aux, 0 );
@@ -1376,6 +1382,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 					cudaGetErrorString(cuda_status) );
 			freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+			h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1389,6 +1396,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 						cudaGetErrorString(cuda_status) );
 				freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 				freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+				d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 				return EXIT_FAILURE;
 			}
 			cuda_status = cudaHostGetDevicePointer( (void **)&d_last_classification, (void *)last_classification, 0 );
@@ -1397,6 +1405,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 						"d_last_classification): %s\n", cudaGetErrorString(cuda_status) );
 				freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 				freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+				d_classification = d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 				return EXIT_FAILURE;
 			}
 		}
@@ -1406,10 +1415,12 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 		// d_accum (Kp-length vector): Allocates and maps host memory
 		h_accum = (real *) getHostMemory( Kp * sizeof(real), write_combined, clear_memory );
 		if ( ! h_accum ) {
-			print_error( sys_error_shown_by_all, "Error allocating memory for HOST matrix h_accum[ Kp = %" PRI_IDX
-					"] (mapped-memory mode).\n", Kp );
+			print_error( sys_error_shown_by_all, "Error allocating memory for HOST matrix h_accum[ Kp = %"
+					PRI_IDX "] (mapped-memory mode).\n", Kp );
 			freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+			d_last_classification = d_classification = d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol =
+			d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 		cuda_status = cudaHostGetDevicePointer( (void **)&d_accum, (void *)h_accum, 0 );
@@ -1419,6 +1430,8 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			freeHostMemory( (void *)h_accum, "h_accum, mapped-memory mode" );
 			freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+			h_accum = d_last_classification = d_classification = d_Aux = h_Aux = d_H = d_W = d_WH = h_WH =
+			d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1431,6 +1444,8 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			freeHostMemory( (void *)h_accum, "h_accum, mapped-memory mode" );
 			freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+			d_accum = h_accum = d_last_classification = d_classification = d_Aux = h_Aux = d_H = d_W = d_WH =
+			h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 		cuda_status = cudaHostGetDevicePointer( (void **)&d_scalar, (void *)h_scalar, 0 );
@@ -1441,8 +1456,12 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			freeHostMemory( (void *)h_accum, "h_accum, mapped-memory mode" );
 			freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
+			h_scalar = d_accum = h_accum = d_last_classification = d_classification = d_Aux = h_Aux = d_H = d_W =
+			d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
+
+	// -------------------------------
 
 	} else {	// Allocates DEVICE memory
 
@@ -1464,6 +1483,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 				print_error( sys_error_shown_by_all, "Device memory allocation error (d_Vcol): %s\n",
 						cudaGetErrorString(cuda_status) );
 				cudaFree(d_Vrow);
+				d_Vrow = NULL;
 				return EXIT_FAILURE;
 			}
 		}
@@ -1475,6 +1495,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			print_error( sys_error_shown_by_all, "Device memory allocation error (d_WH): %s\n",
 					cudaGetErrorString(cuda_status) );
 			if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
+			d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1486,6 +1507,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			print_error( sys_error_shown_by_all, "Device memory allocation error (d_W): %s\n",
 					cudaGetErrorString(cuda_status) );
 			cudaFree(d_WH); if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
+			d_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1495,6 +1517,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			print_error( sys_error_shown_by_all, "Device memory allocation error (d_H): %s\n",
 					cudaGetErrorString(cuda_status) );
 			cudaFree(d_W); cudaFree(d_WH); if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
+			d_W = d_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1506,6 +1529,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			print_error( sys_error_shown_by_all, "Device memory allocation error (d_Aux): %s\n",
 					cudaGetErrorString(cuda_status) );
 			cudaFree(d_H); cudaFree(d_W); cudaFree(d_WH); if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
+			d_H = d_W = d_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1519,6 +1543,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 						cudaGetErrorString(cuda_status) );
 				cudaFree(d_Aux); cudaFree(d_H); cudaFree(d_W); cudaFree(d_WH);
 				if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
+				d_Aux = d_H = d_W = d_WH = d_Vcol = d_Vrow = NULL;
 				return EXIT_FAILURE;
 			}
 		}
@@ -1533,6 +1558,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			if ( do_classf ){ cudaFree(d_classification); }
 			cudaFree(d_Aux); cudaFree(d_H); cudaFree(d_W); cudaFree(d_WH);
 			if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
+			d_classification = d_Aux = d_H = d_W = d_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1547,6 +1573,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			if ( do_classf ){ cudaFree(d_classification); }
 			cudaFree(d_Aux); cudaFree(d_H); cudaFree(d_W); cudaFree(d_WH);
 			if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
+			d_accum = d_classification = d_Aux = d_H = d_W = d_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
