@@ -143,7 +143,7 @@
 #include "NMF_routines.cuh"
 #include "matrix/matrix_operations.cuh"
 #include "GPU_setup.cuh"
-#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_CONV
+#if NMFGPU_PROFILING_TRANSF
 	#include "timing.cuh"
 #endif
 #include "common.h"
@@ -199,12 +199,13 @@ int stepM = 1;		// Loop directions: +1 (forward) || -1 (backward).
 index_t psNMF_N = 0;	// Current index in streams_NMF[].
 index_t psNMF_M = 0;	// Current index in streams_NMF[].
 
-index_t colIdx = 0;	// Current column index in Vcol. For H and d_H, it is <bM + colIdx>
-index_t rowIdx = 0;	// Current row index in Vrow. For W and d_W, it is <bN + rowIdx>
+index_t colIdx = 0;	// Current column index in Vcol. It corresponds to <bM + colIdx> in H and d_H.
+index_t rowIdx = 0;	// Current row index in Vrow. It corresponds to <bN + rowIdx> in W and d_W.
 
 // ---------------------------------------------
 
-// "Private" Global variables
+/* "Private" Global variables */
+
 #if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE || NMFGPU_VERBOSE_2
 	static bool const dbg_shown_by_all = true;		// Information messages in debug mode.
 	static bool const verb_shown_by_all = false;		// Information messages in verbose mode.
@@ -307,6 +308,8 @@ int set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t hei
 
 	int status = EXIT_SUCCESS;
 
+	// ---------------------------------
+
 	#if NMFGPU_CPU_RANDOM
 
 		// CPU Random generator
@@ -330,7 +333,11 @@ int set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t hei
 		/////////////////////////////
 
 		// Uploads the new values.
-		status = upload_matrix( A, height, padding, d_A,
+		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || (! NMFGPU_PROFILING_GLOBAL)
+			status =
+		#endif
+
+			upload_matrix( A, height, padding, d_A,
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 						width, transpose,
 					#endif
@@ -351,7 +358,11 @@ int set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t hei
 
 		// Device random generator
 
-		status = matrix_random( d_A, height, width, padding,
+		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
+			status =
+		#endif
+
+			matrix_random( d_A, height, width, padding,
 					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
 						transpose,
 					#endif
@@ -361,6 +372,8 @@ int set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t hei
 					stream_A, event_A );
 
 	#endif
+
+	// ---------------------------------
 
 	return status;
 
@@ -1664,7 +1677,7 @@ int get_classification( index_t *__restrict__ ld_classification, index_t *__rest
 
 	// Computes the classification vector: Column index of highest values.
 	{
-		#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
+		#if NMFGPU_DEBUG
 			bool transpose = true;		// Matrix transposing
 		#endif
 
@@ -1676,7 +1689,7 @@ int get_classification( index_t *__restrict__ ld_classification, index_t *__rest
 				#if NMFGPU_DEBUG
 					transpose,
 				#endif
-				#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
+				#if NMFGPU_DEBUG || (! (NMFGPU_PROFILING_GLOBAL || NMFGPU_PROFILING_KERNELS) )
 					"d_H",
 				#endif
 				#if NMFGPU_DEBUG
@@ -1703,9 +1716,9 @@ int get_classification( index_t *__restrict__ ld_classification, index_t *__rest
 			int const status =
 		#endif
 
-			download_matrix( (void *) lh_classification, 1, Mp, sizeof(index_t), (void const *) ld_classification,
+			download_matrix( (void *) lh_classification, Mp, sizeof(index_t), (void const *) ld_classification,
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						M, real_data, transpose, "classification",
+						1, M, Mp, real_data, transpose, "classification",
 					#endif
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
 						|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
@@ -2748,9 +2761,9 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 			int const status =
 		#endif
 
-			download_matrix( (void *) h_scalars_VWH, 1, 2, sizeof(real), (void const *) d_scalars_VWH,
+			download_matrix( (void *) h_scalars_VWH, 2, sizeof(real), (void const *) d_scalars_VWH,
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-						2, real_data, transpose, "h_dot_VWH",
+						1, 2, 2, real_data, transpose, "h_dot_VWH",
 					#endif
 					#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
 						|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))

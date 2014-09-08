@@ -209,8 +209,9 @@ struct input_arguments {
 
 /* Global vaiables */
 
-extern index_t process_id;	 // Current process ID.
-extern index_t num_processes;	 // Number of processes.
+extern index_t process_id;		// Current process ID.
+extern index_t num_processes;		// (Maximum) Number of processes on the system.
+extern index_t num_act_processes;	// Number of "active" (i.e., not-idle) processes (<= num_processes).
 
 // Matrix dimension limits (NOTE: they may be modified if the program is executed in a GPU device).
 extern index_t memory_alignment;		// Data alignment on memory.

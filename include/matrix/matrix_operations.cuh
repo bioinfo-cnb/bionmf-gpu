@@ -396,13 +396,16 @@ int upload_matrix_partial( real const *RESTRICT pA, index_t height, index_t pitc
  *
  * A[1..height][1..pitch] <--- d_A[1..height][1..pitch],
  *
+ * nitems == (height * pitch)
+ *
  * NOTE: If host memory was mapped, the transfer operation is SKIPPED.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int download_matrix( void *RESTRICT A, index_t height, index_t pitch, size_t data_size, void const *RESTRICT d_A,
+int download_matrix( void *__restrict__ A, size_t nitems, size_t data_size, void const *RESTRICT d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				index_t width, bool real_data, bool transpose, char const *RESTRICT const matrix_name_A,
+				index_t height, index_t width, index_t pitch, bool real_data, bool transpose,
+				char const *RESTRICT const matrix_name_A,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
 				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))

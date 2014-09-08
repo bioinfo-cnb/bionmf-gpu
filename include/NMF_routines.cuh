@@ -184,17 +184,8 @@ extern int stepM;		// Loop directions: +1 (forward) || -1 (backward).
 extern index_t psNMF_N;		// Current index in NMF_streams[].
 extern index_t psNMF_M;		// Current index in NMF_streams[].
 
-extern index_t colIdx;		// Current column index in Vcol, H and d_H (actually, row index, since H is transposed).
-extern index_t rowIdx;		// Current row index in Vrow and W.
-
-// ---------------------------------------------
-// ---------------------------------------------
-
-/* DEVICE-ONLY GLOBAL Variables */
-
-// Data matrices (device side)
-extern real *pd_W;	// Pointer to current row in d_W
-extern real *pd_H;	// Pointer to current column in d_H (actually, the current row, since it is transposed).
+extern index_t colIdx;		// Current column index in Vcol. It corresponds to <bM + colIdx> in H and d_H.
+extern index_t rowIdx;		// Current row index in Vrow. It corresponds to <bN + rowIdx> in W and d_W.
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

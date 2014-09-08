@@ -161,7 +161,7 @@
 #include <errno.h>
 #include <string.h>	/* memset() */
 #include <limits.h>	/* [U]INT_MAX */
-#include <inttypes.h>	/* uintptr_t, uint_fast64_t, PRIuFAST64 */
+#include <inttypes.h>	/* uintptr_t, [u]int_fast64_t, PRIuFAST64 */
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -881,7 +881,7 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
  * Assuming that:
  *	N, M: Total number of rows and columns of input matrix V,
  *	Mp: Total number of columns of V, including useless data for padding,
- *		If num_processes == 1, then NpP==N and MpP==M.
+ *		If num_act_processes == 1, then NpP==N and MpP==M.
  *	NpP, MpP: Dimensions of the block from V to be processed by this GPU,
  *	Kp: Factorization rank with data for padding.
  *
@@ -909,14 +909,14 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 {
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "get_BLs( num_processes=%" PRI_IDX ", mem_size=%zu, do_classf=%i, NpP=%" PRI_IDX ", MpP=%"
-				PRI_IDX ", MpPp=%" PRI_IDX ", mappedHostMemory=%i )\n", num_processes, mem_size, do_classf, NpP, MpP, MpPp,
+		print_message( verb_shown_by_all, "get_BLs( num_act_processes=%" PRI_IDX ", mem_size=%zu, do_classf=%i, NpP=%" PRI_IDX ", MpP=%"
+				PRI_IDX ", MpPp=%" PRI_IDX ", mappedHostMemory=%i )\n", num_act_processes, mem_size, do_classf, NpP, MpP, MpPp,
 				mappedHostMemory );
 	#endif
 
 
 	// Maximum size of d_Vr and d_Vc that can be processed by kernels, regardless of "mem_size".
-	size_t const max_nitems_dV = gpu_max_num_items;
+	size_t const max_nitems_dV = gpu_max_num_items;		// >> memory_alignment
 
 	// Initial output values (i.e., input matrix is small enough to be fully loaded into the GPU memory).
 	index_t lBLN = NpP;
@@ -953,18 +953,19 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 	// -----------------------------
 
 	/* Reduces BLN and BLM(p) if they are too large for kernels on this GPU.
-	 *	MAX( lBLN*Mp, N*lBLMp ) <= max_nitems_dV
+	 *	memory_alignment <= MAX( lBLN*Mp, N*lBLMp ) <= max_nitems_dV
 	 */
 	{
-		size_t const maxrows_Vr = max_nitems_dV / Mp;
+		size_t const maxrows_Vr = MAX( (max_nitems_dV / Mp), 1);	// Truncated but positive.
 		if ( (size_t) lBLN > maxrows_Vr ) {
 			lBLN = maxrows_Vr;
 			l_full_matrix = false;
 		}
 
-		size_t const maxcols_Vc = max_nitems_dV / N;
+		size_t maxcols_Vc = MAX( (max_nitems_dV / N), memory_alignment );	// Truncated but >= memory_alignment.
+		maxcols_Vc -= ( maxcols_Vc % memory_alignment );			// Previous multiple of <memory_alignment>.
 		if ( (size_t) lBLMp > maxcols_Vc ) {
-			lBLMp = maxcols_Vc - (maxcols_Vc % memory_alignment);	// Previous multiple of <memory_alignment>.
+			lBLMp = maxcols_Vc;
 			if ( lBLM > lBLMp ) {
 				lBLM = lBLMp;
 				l_full_matrix = false;
@@ -976,7 +977,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 
 	/* Required memory for matrices V and WH, expressed in number of real-type items:
 	 *
-	 *	IF (! l_full_matrix  ||  num_processes > 1): BLN*Mp + N*BLMp + MAX(BLN*Mp , N*BLMp). // Vrow, Vcol and WH
+	 *	IF (! l_full_matrix  ||  num_act_processes > 1): BLN*Mp + N*BLMp + MAX(BLN*Mp , N*BLMp). // Vrow, Vcol and WH
 	 *	ELSE (BLN==NpP==N && BLMp==MpPp==Mp): 2*BLN*BLMp // V and WH.
 	 */
 	uint_fast64_t required_mem;
@@ -986,7 +987,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 		size_t const nitems_WH = MAX( nitems_Vrow, nitems_Vcol );	// d_WH (if necessary)
 		required_mem = (uint_fast64_t) nitems_Vrow + (uint_fast64_t) nitems_Vcol;
 
-		if ( (! l_full_matrix) + (num_processes > 1) )	// (! l_full_matrix  ||  num_processes > 1)
+		if ( (! l_full_matrix) + (num_act_processes > 1) )	// (! l_full_matrix  ||  num_act_processes > 1)
 			required_mem += nitems_WH;			// d_Vcol != d_Vrow. Therefore, we need d_WH.
 	}
 
@@ -1018,21 +1019,24 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 		// full_matrix is set to 'false'.
 		l_full_matrix = false;
 
-		/* Memory for "data_matrices" is always required.
-		 * Therefore, subtracts its size from "mem_size".
-		 */
-
-		// Fails if data_matrices >= mem_size
-		if ( data_matrices >= mem_size ) {
+		// Fails if the minimum matrix size is still too large.
+		{
 			// Minimum required: (lBLN = 1) and (lBLMp = memory_alignment).
 			size_t const nitems_Vcol = (size_t) N * (size_t) memory_alignment;	// N * BLMp
 			size_t const nitems_Vrow = Mp;						// lBLN * Mp
-			required_mem = MAX( nitems_Vrow, nitems_Vcol ) + (uint_fast64_t) nitems_Vrow + (uint_fast64_t) nitems_Vcol;
-			print_error( error_shown_by_all, "Not enough memory. Minimum required: %g MiB.\n",
-					(float)(required_mem + data_matrices) * ((float)sizeof(real)/1048576.0f) );
-			return EXIT_FAILURE;
+			required_mem = (uint_fast64_t) MAX( nitems_Vrow, nitems_Vcol ) + (uint_fast64_t) nitems_Vrow +
+					(uint_fast64_t) nitems_Vcol;
+
+			if ( (required_mem + data_matrices) > (uint_fast64_t) mem_size ) {
+				print_error( error_shown_by_all, "Not enough DEVICE memory. Minimum required: %g MiB.\n",
+						(float)(required_mem + data_matrices) * (sizeof(real)/1048576.0f) );
+				return EXIT_FAILURE;
+			}
 		}
 
+		/* Memory for "data_matrices" is always required.
+		 * Therefore, subtracts its size from "mem_size".
+		 */
 		size_t const free_memory = mem_size - data_matrices;
 
 		#if NMFGPU_VERBOSE_2 || NMFGPU_FORCE_BLOCKS
@@ -1099,7 +1103,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 				step++;
 			#endif
 
-		} while ( (required_mem > (uint_fast64_t) free_memory) * (lBLMp > memory_alignment) * (lBLN > 0) );
+		} while ( (required_mem > (uint_fast64_t) free_memory) * (lBLMp > memory_alignment) * (bool) lBLN );
 
 		if ( required_mem > (uint_fast64_t) free_memory ) {
 
@@ -1120,15 +1124,20 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 				rows = (size_t) lBLN * (size_t) Mp;
 
 				// Maximum values for BLN
-				size_t max_dim = MIN( (max_nitems_dV / Mp), (size_t) NpP );
+				size_t max_dim = MAX( (max_nitems_dV / Mp), 1 );
+				max_dim = MIN( max_dim, (size_t) NpP );
 
-				if ( rows >= cols )		// required_memory == (2*rows + cols) == (2*BLN*Mp + N*lBLMp) <= free_memory
-					lBLN = (free_memory - cols) / (2 * Mp);
-				else				// required_memory == (rows + 2*cols) == (BLN*Mp + 2*N*lBLMp) <= free_memory
-					lBLN = (free_memory - (2*cols)) / Mp;
+				if ( rows >= cols ) {		// required_memory == (2*rows + cols) == (2*BLN*Mp + N*lBLMp) <= free_memory
+					ssize_t r = (ssize_t) free_memory - (ssize_t) cols;		// Might be negative
+					r = MAX( r, 0 );
+					lBLN = (size_t) r / (2 * (size_t) Mp);
+				} else {			// required_memory == (rows + 2*cols) == (BLN*Mp + 2*N*lBLMp) <= free_memory
+					ssize_t r = (ssize_t) free_memory - (2 * (ssize_t) cols);	// Might be negative
+					r = MAX( r, 0 );
+					lBLN = (size_t) r / (size_t) Mp;
+				}
 
-				if ( (size_t) lBLN > max_dim )
-					lBLN = max_dim;
+				lBLN = MIN( (size_t) lBLN, max_dim );
 
 			} else {	// (lBLMp > memory_alignment) && (lBLN == 0)
 
@@ -1144,15 +1153,22 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 
 				lBLN = 1;
 				rows = Mp;	// BLN * Mp
-				cols = N * lBLMp;
+				cols = (size_t) N * (size_t) lBLMp;
 
 				// Maximum values for BLMp
-				size_t const max_dim = MIN( (max_nitems_dV / N), (size_t) MpPp );
+				max_dim = MAX( (max_nitems_dV / N), 1 );
+				max_dim = MIN( max_dim, (size_t) MpPp );
 
-				if ( rows >= cols )	// required_memory == (2*rows + cols) == (2*Mp + N*BLMp) <= free_mem
-					lBLMp = (free_memory - (2*Mp)) / N;
-				else			// required_memory == (rows + 2*cols) == (Mp + 2*N*BLMp) <= free_mem
-					lBLMp = (free_memory - Mp) / (2*N);
+				if ( rows >= cols ) {	// required_memory == (2*rows + cols) == (2*Mp + N*BLMp) <= free_mem
+					ssize_t c = (ssize_t) free_memory - ( 2 * (ssize_t) Mp );	// Might be negative
+					c = MAX( c, 0 );
+					lBLMp = (size_t) c / (size_t) N;
+
+				} else {		// required_memory == (rows + 2*cols) == (Mp + 2*N*BLMp) <= free_mem
+					ssize_t c = (ssize_t) free_memory - (ssize_t) Mp;	// Might be negative
+					c = MAX( c, 0 );
+					lBLMp =  (size_t) c / (2 * (size_t) N);
+				}
 
 				lBLMp = MIN( (size_t) lBLMp, max_dim );
 
@@ -1164,25 +1180,17 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 			}
 
 			#if NMFGPU_VERBOSE_2
-			{
-				rows = (size_t) lBLN * (size_t) Mp;
-				cols = (size_t) N * (size_t) lBLMp;
-				size_t const nitems_WH = MAX( rows, cols );
-				required_mem = (uint_fast64_t)rows + (uint_fast64_t)cols + (uint_fast64_t)nitems_WH;
-
-				print_message( verb_shown_by_all, "Resulting values: BLN=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
-						", required_mem (approx.): %g MiB\n", lBLN, lBLM, lBLMp,
-						(float) (required_mem + data_matrices) * (sizeof(real) / 1048576.0f) );
-			}
+				print_message( verb_shown_by_all, "Resulting values: BLN=%" PRI_IDX ", BLM=%" PRI_IDX
+						", BLMp=%" PRI_IDX "\n", lBLN, lBLM, lBLMp );
 			#endif
 
 			if ( (lBLN < 1) + (lBLM < 1) ) {
-				// Minimum required: lBLN=1 && lBLMp=memory_alignment.
+				// Minimum required: lBLN=1  &&  lBLMp=memory_alignment.
 				cols = (size_t) N * (size_t) memory_alignment;	// N * BLMp
 				rows = Mp;			// lBLN * Mp
 				required_mem = (uint_fast64_t) MAX( rows, cols ) + (uint_fast64_t) rows + (uint_fast64_t) cols;
 				print_error( error_shown_by_all, "Not enough memory. Minimum required: %g MiB.\n",
-						(float) ((required_mem + data_matrices) * sizeof(real))/1048576.0f);
+						(float) (required_mem + data_matrices) * (sizeof(real)/1048576.0f) );
 				return EXIT_FAILURE;
 			}
 
@@ -2091,8 +2099,8 @@ int setup_GPU( size_t mem_size, bool do_classf )
 {
 
 	#if NMFGPU_VERBOSE_2
-		print_message( dbg_shown_by_all, "setup_GPU( num_processes=%" PRI_IDX ",mem_size=%zu,do_classf=%i)\n",
-				num_processes, mem_size, do_classf );
+		print_message( dbg_shown_by_all, "setup_GPU( num_act_processes=%" PRI_IDX ",mem_size=%zu,do_classf=%i)\n",
+				num_act_processes, mem_size, do_classf );
 	#endif
 
 	// -------------------------------------
@@ -2103,7 +2111,7 @@ int setup_GPU( size_t mem_size, bool do_classf )
 	 *	N, M: Total number of rows and columns of input matrix V,
 	 *	Mp: Total number of columns of V, including useless data for padding,
 	 *	NpP, MpP: Dimensions of the block from V to be processed by this GPU,
-	 *		If num_processes == 1, then NpP==N and MpP==M.
+	 *		If num_act_processes == 1, then NpP==N and MpP==M.
 	 *	Kp: Factorization rank with data for padding.
 	 *
 	 * this routine computes BLN <= NpP and BLM <= MpP so it can be loaded into the GPU:
@@ -2140,7 +2148,7 @@ int setup_GPU( size_t mem_size, bool do_classf )
 	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		append_printed_message( verb_shown_by_all, "\n" );
 		print_message( dbg_shown_by_all, "For dimension \"NpP\" = %" PRI_IDX " (N=%" PRI_IDX ", %" PRI_IDX " processes):\n",
-				NpP, N, num_processes);
+				NpP, N, num_act_processes);
 	#endif
 	init_block_conf( NpP, NpP, BLN, BLN, &block_N );
 
@@ -2148,7 +2156,7 @@ int setup_GPU( size_t mem_size, bool do_classf )
 	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
 		append_printed_message( verb_shown_by_all, "\n" );
 		print_message( dbg_shown_by_all, "For dimension \"MpP\" = %" PRI_IDX " (%" PRI_IDX " with padding ; M=%" PRI_IDX
-				", %" PRI_IDX " processes):\n", MpP, MpPp, M, num_processes );
+				", %" PRI_IDX " processes):\n", MpP, MpPp, M, num_act_processes );
 	#endif
 	init_block_conf( MpP, Mp, BLM, BLMp, &block_M );
 
@@ -2166,7 +2174,7 @@ int setup_GPU( size_t mem_size, bool do_classf )
 	// Allocates memory for data matrices.
 
 	// Matrix V can be fully loaded into the GPU memory (i.e., d_Vrow == d_Vcol)
-	bool const single_matrix_V = full_matrix * (num_processes == 1);
+	bool const single_matrix_V = full_matrix * (num_act_processes == 1);
 
 	/* If this is an integrated system <AND> it is possible to map host memory:
 	 *	Maps the host memory that was previously allocated for data matrices, into the address space of the device.
@@ -2218,8 +2226,8 @@ int setup_GPU( size_t mem_size, bool do_classf )
 	// --------------------------
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "setup_GPU( num_processes=%" PRI_IDX ",mem_size=%zu,do_classf=%i)... Done.\n",
-				num_processes, mem_size, do_classf );
+		print_message( verb_shown_by_all, "setup_GPU( num_act_processes=%" PRI_IDX ",mem_size=%zu,do_classf=%i)... Done.\n",
+				num_act_processes, mem_size, do_classf );
 	#endif
 
 	return EXIT_SUCCESS;

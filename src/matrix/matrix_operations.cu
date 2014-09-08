@@ -828,12 +828,12 @@ int matrix_to_row( real const *__restrict__ d_A, index_t height, index_t pitch,
 
 			// Tries to use a block height as large as possible.
 
-			index_t max_block_height1 = height / REDUCE_TO_ROW__ITEMS_PER_THREAD;
-			max_block_height1 = MIN( 1, max_block_height1 );
+			index_t max_block_height1 = height / REDUCE_TO_ROW__ITEMS_PER_THREAD;	// (max_block_height * ITEMS) <= height
+			max_block_height1 = MAX( max_block_height1, 1 );			// but greater than 0
 
-			index_t const max_block_height2 = maxThreadsPerBlock / pitch;
+			index_t const max_block_height2 = maxThreadsPerBlock / pitch;	// (max_block_height2 * pitch) <= maxThreadsPerBlock
 
-			block_height = prev_power_2( MIN( max_block_height1, max_block_height2 ) );	// A power of 2
+			block_height = prev_power_2( MIN( max_block_height1, max_block_height2 ) );	// A power of 2 > 0
 
 			dimGrid.x = 1;
 
@@ -1929,13 +1929,16 @@ int upload_matrix_partial( real const *__restrict__ A, index_t height, index_t p
  *
  * A[1..height][1..pitch] <--- d_A[1..height][1..pitch]
  *
+ * nitems == (height * pitch)
+ *
  * NOTE: If host memory was mapped, the transfer operation is SKIPPED.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_t data_size, void const *__restrict__ d_A,
+int download_matrix( void *__restrict__ A, size_t nitems, size_t data_size, void const *__restrict__ d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				index_t width, bool real_data, bool transpose, char const *__restrict__ const matrix_name_A,
+				index_t height, index_t width, index_t pitch, bool real_data, bool transpose,
+				char const *__restrict__ const matrix_name_A,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
 				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
@@ -1974,8 +1977,6 @@ int download_matrix( void *__restrict__ A, index_t height, index_t pitch, size_t
 	if ( ! mappedHostMemory ) {	// If host memory was NOT mapped.
 
 		// Starts the transfer...
-
-		size_t const nitems = (size_t) height * (size_t) pitch;
 
 		#if NMFGPU_PROFILING_TRANSF
 			start_cuda_timer();

@@ -310,7 +310,7 @@ int main( int argc, char const *restrict *restrict argv )
 	#endif
 
 	process_id = 0;		// Global variables.
-	num_processes = 1;
+	num_act_processes = num_processes = 1;
 
 	// Default limits for matrix dimensions.
 	set_default_matrix_limits();

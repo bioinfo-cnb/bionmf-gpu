@@ -212,7 +212,8 @@
 /* Global variables */
 
 index_t process_id = 0;		// Current process ID.
-index_t num_processes = 1;	// Number of processes.
+index_t num_processes = 1;	// (Maximum) Number of processes on the system.
+index_t num_act_processes = 1;	//  Number of "active" (i.e., not-idle) processes (<= num_processes).
 
 // Matrix dimension limits (NOTE: they may be modified if the program is executed in a GPU device).
 index_t memory_alignment = 1;									// Data alignment on memory.
@@ -286,7 +287,8 @@ static bool const error_shown_by_all = false;		// Error messages on invalid argu
  *	  is zero, just prints the newline.
  *
  * Note that error messages from this function (i.e., if it fails) are always
- * prefixed and suffixed with a newline character, regardless the arguments.
+ * prefixed and suffixed with a newline character (as well as the process ID
+ * on multi-processes system), REGARDLESS of the arguments.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
@@ -1284,8 +1286,9 @@ index_t get_seed( void )
 
 		if ( ( ! file ) || ( ! fread( &seed, sizeof(index_t), 1, file ) ) ) {
 
-			/* Failed to read the file (do not care about the reason):
-			 *	Sets the seed from the clock.
+			/* If for whatever reason (e.g., non-Linux system, file
+			 * not found, etc.) it failed to read the file, sets
+			 * the seed from the clock.
 			 */
 
 			if ( file )
