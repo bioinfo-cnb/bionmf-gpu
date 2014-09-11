@@ -254,8 +254,6 @@ extern real *Vrow;		// Block of MpP columns from input matrix V.
  * Prints the given message composed by the format string "fmt" and the subsequent
  * arguments, if any.
  *
- * The message is ALWAYS prefixed by a newline character ('\n').
- *
  * If "all_processes" is 'true', the message is printed by all existing processes.
  * In addition, if (num_processes > 1), the process ID is also printed.
  *
@@ -287,8 +285,6 @@ int append_printed_message( bool all_processes, char const *RESTRICT const fmt, 
 /*
  * Prints the given error message, composed by the format string "fmt" and the
  * subsequent arguments, if any.
- *
- * The message is ALWAYS prefixed by a newline character ('\n').
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
  * In addition, if (num_processes > 1), the process ID is also printed.
@@ -323,8 +319,6 @@ int append_printed_error( bool all_processes, char const *RESTRICT const fmt, ..
 /*
  * Prints the given error message, composed by the format string "fmt" and the
  * subsequent arguments, if any.
- *
- * The message is ALWAYS prefixed by a newline character ('\n').
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
  * In addition, if (num_processes > 1), the process ID is also printed.

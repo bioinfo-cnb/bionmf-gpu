@@ -266,13 +266,8 @@ static bool const error_shown_by_all = false;		// Error messages on invalid argu
  * Prints the given message composed by the format string "fmt" and the
  * arguments list "args", if any.
  *
- * "New-message" mode (append == false):
- *	- The string is prefixed by a newline ('\n') character.
- *	- If "show_id" is 'true', such newline is followed by the process ID.
- *
- * "Append" mode (append == true):
- *	- No prefix at all is printed.
- *	- "show_id" is IGNORED and defaulted to 'false'.
+ * If "show_id" is 'true', the string is prefixed by a newline ('\n') character
+ * and the process ID.
  *
  * Output mode (err_mode == false):
  *	- The string is printed to the standard output stream ('stdout').
@@ -292,7 +287,7 @@ static bool const error_shown_by_all = false;		// Error messages on invalid argu
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static int print_string( bool all_processes, bool append, bool show_id, bool err_mode, int errnum, char const *restrict const fmt, va_list args )
+static int print_string( bool all_processes, bool show_id, bool err_mode, int errnum, char const *restrict const fmt, va_list args )
 {
 
 	if ( ! fmt ) {
@@ -330,13 +325,8 @@ static int print_string( bool all_processes, bool append, bool show_id, bool err
 
 	if ( all_processes + ( ! process_id ) ) {
 
-		if ( ! append ) {	// "New-message" mode
-
-			error += ( fprintf( file, "\n" ) <= 0 );
-
-			if ( show_id )
-				error += ( fprintf( file, "[P%" PRI_IDX "] ", process_id ) <= 0 );
-		}
+		if ( show_id )
+			error += ( fprintf( file, "\n[P%" PRI_IDX "] ", process_id ) <= 0 );
 
 		error += ( vfprintf( file, fmt, args ) <= 0 );
 
@@ -370,8 +360,6 @@ static int print_string( bool all_processes, bool append, bool show_id, bool err
  * Prints the given message composed by the format string "fmt" and the subsequent
  * arguments, if any.
  *
- * The message is ALWAYS prefixed by a newline character ('\n').
- *
  * If "all_processes" is 'true', the message is printed by all existing processes.
  * In addition, if (num_processes > 1), the process ID is also printed.
  *
@@ -382,7 +370,6 @@ static int print_string( bool all_processes, bool append, bool show_id, bool err
 int print_message( bool all_processes, char const *restrict const fmt, ... )
 {
 
-	bool const append = false;
 	bool const show_id = all_processes * (num_processes > 1);
 	bool const error_mode = false;
 	int const error_num = 0;
@@ -393,7 +380,7 @@ int print_message( bool all_processes, char const *restrict const fmt, ... )
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, append, show_id, error_mode, error_num, fmt, args );
+	int const status = print_string( all_processes, show_id, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -419,7 +406,6 @@ int print_message( bool all_processes, char const *restrict const fmt, ... )
 int append_printed_message( bool all_processes, char const *restrict const fmt, ... )
 {
 
-	bool const append = true;
 	bool const show_id = false;
 	bool const error_mode = false;
 	int const error_num = 0;
@@ -430,7 +416,7 @@ int append_printed_message( bool all_processes, char const *restrict const fmt, 
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, append, show_id, error_mode, error_num, fmt, args );
+	int const status = print_string( all_processes, show_id, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -445,8 +431,6 @@ int append_printed_message( bool all_processes, char const *restrict const fmt, 
  * Prints the given error message, composed by the format string "fmt" and the
  * subsequent arguments, if any.
  *
- * The message is ALWAYS prefixed by a newline character ('\n').
- *
  * If "all_processes" is 'true', the message is printed by all existing processes.
  * In addition, if (num_processes > 1), the process ID is also printed.
  *
@@ -458,7 +442,6 @@ int append_printed_message( bool all_processes, char const *restrict const fmt, 
 int print_error( bool all_processes, char const *restrict const fmt, ... )
 {
 
-	bool const append = false;
 	bool const show_id = all_processes * (num_processes > 1);
 	bool const error_mode = true;
 	int const error_num = 0;
@@ -469,7 +452,7 @@ int print_error( bool all_processes, char const *restrict const fmt, ... )
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, append, show_id, error_mode, error_num, fmt, args );
+	int const status = print_string( all_processes, show_id, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -496,7 +479,6 @@ int print_error( bool all_processes, char const *restrict const fmt, ... )
 int append_printed_error( bool all_processes, char const *restrict const fmt, ... )
 {
 
-	bool const append = true;
 	bool const show_id = false;
 	bool const error_mode = true;
 	int const error_num = 0;
@@ -507,7 +489,7 @@ int append_printed_error( bool all_processes, char const *restrict const fmt, ..
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, append, show_id, error_mode, error_num, fmt, args );
+	int const status = print_string( all_processes, show_id, error_mode, error_num, fmt, args );
 
 	va_end( args );
 
@@ -520,8 +502,6 @@ int append_printed_error( bool all_processes, char const *restrict const fmt, ..
 /*
  * Prints the given error message, composed by the format string "fmt" and the
  * subsequent arguments, if any.
- *
- * The message is ALWAYS prefixed by a newline character ('\n').
  *
  * If "all_processes" is 'true', the message is printed by all existing processes.
  * In addition, if (num_processes > 1), the process ID is also printed.
@@ -538,7 +518,6 @@ int append_printed_error( bool all_processes, char const *restrict const fmt, ..
 int print_errnum( bool all_processes, int errnum, char const *restrict const fmt, ... )
 {
 
-	bool const append = false;
 	bool const show_id = all_processes * (num_processes > 1);
 	bool const error_mode = true;
 
@@ -548,7 +527,7 @@ int print_errnum( bool all_processes, int errnum, char const *restrict const fmt
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, append, show_id, error_mode, errnum, fmt, args );
+	int const status = print_string( all_processes, show_id, error_mode, errnum, fmt, args );
 
 	va_end( args );
 
@@ -579,7 +558,6 @@ int print_errnum( bool all_processes, int errnum, char const *restrict const fmt
 int append_printed_errnum( bool all_processes, int errnum, char const *restrict const fmt, ... )
 {
 
-	bool const append = true;
 	bool const show_id = false;
 	bool const error_mode = true;
 
@@ -589,7 +567,7 @@ int append_printed_errnum( bool all_processes, int errnum, char const *restrict 
 
 	va_start( args, fmt );
 
-	int const status = print_string( all_processes, append, show_id, error_mode, errnum, fmt, args );
+	int const status = print_string( all_processes, show_id, error_mode, errnum, fmt, args );
 
 	va_end( args );
 
@@ -837,7 +815,8 @@ int set_matrix_limits( index_t data_alignment, index_t max_dimension, size_t max
 	#if NMFGPU_VERBOSE_2
 		print_message( verb_shown_by_all, "set_matrix_limits( data_alignment=%" PRI_IDX ", max_dimension=%" PRI_IDX "):\n"
 				"\tResulting values: matrix_max_num_items=%zu, matrix_max_pitch=%" PRI_IDX ", matrix_max_non_padded_dim=%"
-				PRI_IDX ".\n", data_alignment, max_dimension, matrix_max_num_items, matrix_max_pitch, matrix_max_non_padded_dim );
+				PRI_IDX ".\n\n", data_alignment, max_dimension, matrix_max_num_items, matrix_max_pitch,
+				matrix_max_non_padded_dim );
 	#endif
 
 	return EXIT_SUCCESS;
@@ -1304,6 +1283,12 @@ index_t get_seed( void )
 		}
 
 	#endif /* NMFGPU_FIXED_INIT */
+
+	// ----------------------------
+
+	#if NMFGPU_VERBOSE_2
+		print_message( verb_shown_by_all, "\nReturned seed: %" PRI_IDX "\n", seed );
+	#endif
 
 	return seed;
 

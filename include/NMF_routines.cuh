@@ -221,7 +221,10 @@ int destroy_random( void );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int set_random_values( real *RESTRICT A, real *RESTRICT d_A, index_t height, index_t width, index_t padding,
+int set_random_values( real *RESTRICT d_A, index_t height, index_t width, index_t padding,
+			#if NMFGPU_CPU_RANDOM
+				real *RESTRICT A,
+			#endif
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF)
 				bool transpose,
 			#endif

@@ -232,7 +232,7 @@ int init_random( index_t seed )
 	#if NMFGPU_CPU_RANDOM
 
 		#if NMFGPU_DEBUG || NMFGPU_VERBOSE || NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "Initializing the HOST (i.e., CPU) random-numbers generator...\n" );
+			print_message( verb_shown_by_all, "\nInitializing the HOST (i.e., CPU) random-numbers generator...\n" );
 		#endif
 
 		// Initializes random generator on CPU.
@@ -241,7 +241,7 @@ int init_random( index_t seed )
 	#else
 
 		#if NMFGPU_DEBUG || NMFGPU_VERBOSE || NMFGPU_VERBOSE_2
-			print_message( verb_shown_by_all, "Initializing the DEVICE (i.e., GPU) random-numbers generator...\n" );
+			print_message( verb_shown_by_all, "\nInitializing the DEVICE (i.e., GPU) random-numbers generator...\n" );
 		#endif
 
 		// Initializes random generator on GPU.
@@ -289,7 +289,10 @@ int destroy_random( void )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t height, index_t width, index_t padding,
+int set_random_values( real *__restrict__ d_A, index_t height, index_t width, index_t padding,
+			#if NMFGPU_CPU_RANDOM
+				real *__restrict__ A,
+			#endif
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF)
 				bool transpose,
 			#endif
@@ -326,7 +329,7 @@ int set_random_values( real *__restrict__ A, real *__restrict__ d_A, index_t hei
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG
-			print_message( verb_shown_by_all, "--- Random values on matrix %s --> %s (height=%" PRI_IDX ", width=%" PRI_IDX
+			print_message( verb_shown_by_all, "\n--- Random values on matrix %s --> %s (height=%" PRI_IDX ", width=%" PRI_IDX
 					", padding=%" PRI_IDX ", transpose=%i): ---\n", matrix_name_A, matrix_name_dA,
 					height, width, padding, transpose );
 		#endif
@@ -1827,7 +1830,7 @@ static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, rea
 
 	// ---------------------------
 
-	// WH(BLN,Mp) = Vcol(BLN,Mp) - WH(BLN,Mp)
+	// WH(BLN,Mp) = Vrow(BLN,Mp) - WH(BLN,Mp)
 	{
 		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			int const status =
@@ -1881,7 +1884,7 @@ static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, rea
 
 		// Changes CUBLAS stream
 		stream_idx = psNMF_N + 1;
-		if ( stream_idx == num_streams_NMF )
+		if ( stream_idx >= num_streams_NMF )
 			stream_idx = 0;
 
 		pd_WH += Mp;
@@ -1950,7 +1953,7 @@ static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, rea
 
 		// Changes of CUBLAS stream
 		stream_idx++;
-		if ( stream_idx == num_streams_NMF )
+		if ( stream_idx >= num_streams_NMF )
 			stream_idx = 0;
 
 	} // for
@@ -2043,7 +2046,7 @@ static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, rea
 
 		// Changes of CUBLAS stream
 		stream_idx++;
-		if ( stream_idx == num_streams_NMF )
+		if ( stream_idx >= num_streams_NMF )
 			stream_idx = 0;
 
 	} // for
@@ -2522,7 +2525,7 @@ static int get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot
  * d_scalars_VWH[0] = SUM(dot_VWH[...])
  * d_scalars_VWH[1] = SUM(dot_V[...])
  *
- * Computes vectors d_dot_VWH[N] and d_dot_V[N], and reduces each to a single scalar.
+ * Computes vectors d_dot_VWH[NpP] and d_dot_V[NpP], and reduces each to a single scalar.
  * Resulting values are returned in d_scalars_VWH[0] and d_scalars_VWH[1], respectively.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
@@ -2565,7 +2568,7 @@ static int get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V
 			cublasStatus_t const cublas_status =
 		#endif
 
-			CUBLAS_R_ASUM( cublas_handle, N, d_dot_VWH, 1, d_scalars_VWH );	// streams_NMF[ psNMF_N ]
+			CUBLAS_R_ASUM( cublas_handle, NpP, d_dot_VWH, 1, d_scalars_VWH );	// streams_NMF[ psNMF_N ]
 
 		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
@@ -2581,7 +2584,7 @@ static int get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V
 	// Changes the CUBLAS stream
 	{
 		index_t stream_idx = psNMF_N + 1;
-		if ( stream_idx == num_streams_NMF )
+		if ( stream_idx >= num_streams_NMF )
 			stream_idx = 0;
 
 		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
@@ -2608,7 +2611,7 @@ static int get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V
 		#endif
 
 			// streams_NMF[ (psNMF_N + 1) % num_streams_NMF ]
-			CUBLAS_R_ASUM( cublas_handle, N, d_dot_V, 1, &d_scalars_VWH[1] );
+			CUBLAS_R_ASUM( cublas_handle, NpP, d_dot_V, 1, &d_scalars_VWH[1] );
 
 		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
 			if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
@@ -2617,22 +2620,22 @@ static int get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V
 				return EXIT_FAILURE;
 			}
 		#endif
-
-		#ifdef NMFGPU_DEBUG
-		///////////////////////////////
-		{
-			print_message( dbg_shown_by_all, "--- Resulting scalars in get_dot_VWH(): ---\n" );
-			int const status1 = check_cuda_status();
-			bool const real_data = true;
-			bool const transpose = false;
-			struct matrix_tags_t const *__restrict__ mt = NULL;
-			int const status2 = show_device_matrix( d_scalars_VWH, 1, 2, 2, real_data, transpose, dbg_shown_by_all, mt );
-			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
-				return EXIT_FAILURE;
-		}
-		/////////////////////////////
-		#endif
 	}
+
+	#ifdef NMFGPU_DEBUG
+	///////////////////////////////
+	{
+		print_message( dbg_shown_by_all, "--- Resulting scalars in get_dot_VWH(): ---\n" );
+		int const status1 = check_cuda_status();
+		bool const real_data = true;
+		bool const transpose = false;
+		struct matrix_tags_t const *__restrict__ mt = NULL;
+		int const status2 = show_device_matrix( d_scalars_VWH, 1, 2, 2, real_data, transpose, dbg_shown_by_all, mt );
+		if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
+			return EXIT_FAILURE;
+	}
+	/////////////////////////////
+	#endif
 
 	// -----------------------
 
@@ -2703,10 +2706,10 @@ int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
 	#endif
 
 	/* Sets pointers to be used as data matrix. We can use "d_Aux", since we need memory for two
-	 * N-length vectors, and size(d_Aux) == (MAX(N,M) * Kp), (with Kp >= memory_alignment).
+	 * NpP-length vectors, and size(d_Aux) == MAX(N,M) * Kp.
 	 */
 	real *d_dot_VWH = d_Aux;
-	real *d_dot_V = &d_Aux[ N ];
+	real *d_dot_V = &d_Aux[ NpP ];
 
 	/* Such vectors will be later reduced. Resulting scalars will be stored in d_scalars_VWH[2]
 	 * (we can reuse d_accum[Kp] for that). Then, the scalars will be downloaded to h_scalars_VWH[2].

@@ -45,6 +45,8 @@
 #
 #	single_gpu:	Compiles bioNMF-GPU (single-GPU version).
 #
+#	multi_gpu:	Compiles bioNMF-mGPU (multi-GPU version).
+#
 #	tools:		Compiles some utility programs.
 #			Currently, this target does NOT require any CUDA-related
 #			configuration or software. In particular, it is NOT
@@ -118,6 +120,8 @@
 #
 #	KERNEL_TIME:	Shows time elapsed on kernel code.
 #
+#	COMM_TIME:	Shows time elapsed on MPI communications.
+#
 #	SYNC_TRANSF:	Performs SYNCHRONOUS data transfers.
 #
 #	FIXED_INIT:	Makes use of "random" values from a fixed seed.
@@ -174,6 +178,11 @@
 #
 #	PTXAS_FLAGS:	Flags for PTX code compilation, which generates the
 #			actual GPU assembler.
+#
+#	MPICC:		Compiler for MPI code.
+#
+#	MPICC_FLAGS:	Options for MPI code. They are also included in the
+#			final linking stage.
 #
 ###################
 #
@@ -365,6 +374,7 @@ NVCCFLAGS	?=
 LDFLAGS		?=
 OPENCC_FLAGS	?=
 PTXAS_FLAGS 	?=
+MPICC_FLAGS	?=
 
 # Shell to be used for command executions.
 SHELL := /bin/sh
@@ -389,6 +399,7 @@ tools_dir := $(matrix_dir)/$(tools_dirname)
 # Source files
 # Note : "cuda_device_FILES" refers to CUDA files with device code.
 single_gpu_FILE	  := NMF_GPU.c
+multi_gpu_FILE	  := NMF_mGPU.c
 tools_FILES	  := $(tools_dir)/file_converter.c $(tools_dir)/generate_matrix.c
 cuda_device_FILES := GPU_kernels.cu
 cuda_FILES	  := timing.cu GPU_setup.cu $(matrix_dir)/matrix_operations.cu NMF_routines.cu
@@ -400,9 +411,13 @@ c_FILES		  := common.c $(matrix_dir)/matrix_io_routines.c $(matrix_dir)/matrix_i
 ########################################
 
 OS_SIZE := $(shell uname -m | sed -e "s/i.86/32/" -e "s/x86_64/64/" -e "s/armv7l/32/")
+
 default_CC := gcc
+default_MPICC := mpicc
 
 CC ?= $(default_CC)
+MPICC ?= $(default_MPICC)
+
 
 # Common C/C++ flags (i.e., common CC/NVCC flags)
 opt_level	   := 3
@@ -424,9 +439,6 @@ common_fast_CFLAGS := -march=native -ffast-math -fbranch-target-load-optimize -f
 c_only_CFLAGS := -std=c99 $(common_CFLAGS) \
 		-Wnested-externs -Wstrict-prototypes -Wmissing-prototypes -Wno-unsuffixed-float-constants -Wno-unused-result
 c_only_fast_CFLAGS := $(common_fast_CFLAGS)
-
-# Linkage program
-LINK	:= $(CC)
 
 
 ########################################
@@ -606,7 +618,7 @@ warning_unsupported_sm_versions := \n\
 # Preprocessor options
 CPPFLAGS :=
 
-# Use single-precision data.
+# Uses single-precision data.
 ifeq ($(SINGLE),1)
 	CPPFLAGS += -DNMFGPU_SINGLE_PREC=1
 else
@@ -614,7 +626,7 @@ else
 	SINGLE := 0
 endif
 
-# Use unsigned integers for matrix dimensions
+# Uses unsigned integers for matrix dimensions
 ifeq ($(UNSIGNED),1)
 	CPPFLAGS += -DNMFGPU_UINDEX=1
 else
@@ -622,7 +634,7 @@ else
 	UNSIGNED := 0
 endif
 
-# Use faster math functions
+# Uses faster math functions
 ifeq ($(FAST_MATH),1)
 	c_only_CFLAGS	:= $(subst -O$(opt_level),-O$(fast_opt_level),$(c_only_CFLAGS)) $(c_only_fast_CFLAGS)
 	nvcc_CFLAGS	:= $(subst -O$(opt_level),-O$(fast_opt_level),$(nvcc_CFLAGS)) $(nvcc_fast_CFLAGS)
@@ -642,7 +654,7 @@ else
 endif
 
 
-# Show time elapsed on data transfers
+# Shows time elapsed on data transfers
 ifeq ($(TRANSF_TIME),1)
 	CPPFLAGS += -DNMFGPU_PROFILING_TRANSF=1
 else
@@ -651,7 +663,7 @@ else
 endif
 
 
-# Show time elapsed on kernel code.
+# Shows time elapsed on kernel code.
 ifeq ($(KERNEL_TIME),1)
 	CPPFLAGS += -DNMFGPU_PROFILING_KERNELS=1
 else
@@ -659,6 +671,13 @@ else
 	KERNEL_TIME := 0
 endif
 
+# Shows time elapsed on MPI communications.
+ifeq ($(COMM_TIME),1)
+	CPPFLAGS += -DNMFGPU_PROFILING_COMM=1
+else
+	# Just in case it was not defined.
+	COMM_TIME := 0
+endif
 
 # Performs SYNCHRONOUS data transfers.
 ifeq ($(SYNC_TRANSF),1)
@@ -811,6 +830,16 @@ single_gpu_INCLUDES	:= $(c_INCLUDES) -I$(nvcc_incdir)
 single_gpu_LDFLAGS	:= -L$(nvcc_libdir) $(common_LDFLAGS)
 single_gpu_LDLIBS	:= $(nvcc_LDLIBS) $(cuda_LDLIBS) $(c_LDLIBS)
 
+# Main Program (multi-GPU version)
+multi_gpu_SRC		:= $(srcdir)/$(multi_gpu_FILE)
+multi_gpu_OBJ		:= $(objdir)/$(multi_gpu_FILE).o
+multi_gpu_TARGET	:= $(bindir)/$(basename $(multi_gpu_FILE))
+multi_gpu_DEPS		:= $(c_OBJS) $(cuda_device_OBJS) $(cuda_OBJS)
+multi_gpu_CFLAGS	:= $(c_CFLAGS)
+multi_gpu_INCLUDES	:= $(c_INCLUDES) -I$(nvcc_incdir)
+multi_gpu_LDFLAGS	:= -L$(nvcc_libdir) $(common_LDFLAGS)
+multi_gpu_LDLIBS	:= $(nvcc_LDLIBS) $(cuda_LDLIBS) $(c_LDLIBS)
+
 
 ########################################
 # Main Compilation Rules
@@ -827,13 +856,16 @@ single_gpu_LDLIBS	:= $(nvcc_LDLIBS) $(cuda_LDLIBS) $(c_LDLIBS)
 
 # Rule to compile all programs.
 .PHONY: all ALL
-all ALL : single_gpu tools
+all ALL : single_gpu multi_gpu tools
 
 
 # Main Program (single-GPU version)
 .PHONY: single_gpu SINGLE_GPU
 single_gpu SINGLE_GPU : $(single_gpu_TARGET) check_sm_versions check_cuda_path
 
+# Main Program (multi-GPU version)
+.PHONY: multi_gpu MULTI_GPU
+multi_gpu MULTI_GPU : $(multi_gpu_TARGET) check_sm_versions check_cuda_path
 
 # Utility programs
 .PHONY: tools TOOLS
@@ -868,7 +900,12 @@ help_tools help_TOOLS HELP_TOOLS Help_tools:
 # Main Program (single-GPU version, C++ code)
 $(single_gpu_TARGET) : $(single_gpu_DEPS) $(single_gpu_OBJ)
 	$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(LINK) $(single_gpu_CFLAGS) $(single_gpu_INCLUDES) $(single_gpu_LDFLAGS) $^ $(single_gpu_LDLIBS) $(CFLAGS) $(LDFLAGS) -o $@
+	$(cmd_prefix)$(CC) $(single_gpu_CFLAGS) $(single_gpu_INCLUDES) $(single_gpu_LDFLAGS) $^ $(single_gpu_LDLIBS) $(CFLAGS) $(LDFLAGS) -o $@
+
+# Main Program (multi-GPU version, C++ code)
+$(multi_gpu_TARGET) : $(multi_gpu_DEPS) $(multi_gpu_OBJ)
+	$(cmd_prefix)mkdir -p $(@D)
+	$(cmd_prefix)$(MPICC) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) $(multi_gpu_LDFLAGS) $^ $(multi_gpu_LDLIBS) $(CFLAGS) $(LDFLAGS) -o $@
 
 # Tools (C code)
 $(tools_BINDIR)/% : $(tools_DEPS) $(tools_OBJDIR)/%.c.o
@@ -881,6 +918,11 @@ $(cuda_device_OBJS) : cuda_CFLAGS+=$(sm_CFLAGS)
 $(objdir)/%.cu.o : $(srcdir)/%.cu
 	$(cmd_prefix)mkdir -p $(@D)
 	$(cmd_prefix)$(NVCC) $(cuda_CFLAGS) $(cuda_INCLUDES) $(addprefix --compiler-options ,$(CXXFLAGS)) $(NVCCFLAGS) --output-file $@ --compile $<
+
+# C files
+$(multi_gpu_OBJ) : $(multi_gpu_SRC)
+	$(cmd_prefix)mkdir -p $(@D)
+	$(cmd_prefix)$(MPICC) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) $(CFLAGS) $(MPICC_FLAGS) -o $@ -c $<
 
 
 # C files
@@ -987,6 +1029,8 @@ help_message := \n\
 	\n\
 	\tsingle_gpu:\tCompiles bioNMF-GPU (single-GPU version).\n\
 	\n\
+	\tmulti_gpu:\tCompiles bioNMF-mGPU (multi-GPU version).\n\
+	\n\
 	\ttools:\t\tCompiles some utility programs.\n\
 			\t\t\tCurrently, this target does NOT require any CUDA-related\n\
 			\t\t\tconfiguration or software. In particular, it is NOT\n\
@@ -1063,6 +1107,8 @@ help_message := \n\
 	\n\
 	\tKERNEL_TIME:\tShows time elapsed on kernel code. Default value: '$(KERNEL_TIME)'.\n\
 	\n\
+	\tCOMM_TIME:\tShows time elapsed on MPI communications. Default: '$(COMM_TIME)'.\n\
+	\n\
 	\tSYNC_TRANSF:\tPerforms SYNCHRONOUS data transfers. Default value: '$(SYNC_TRANSF)'.\n\
 	\n\
 	\tFIXED_INIT:\tMakes use of \"random\" values from a fixed seed.\n\
@@ -1095,7 +1141,7 @@ help_message := \n\
 		\t\t\tShows PTX-specific compilation warnings. Default: '$(PTXAS_WARN_VERBOSE)'.\n\
 	\n\
 	\tKEEP_INTERMEDIATE:\n\
-		\t\t\tKeeps temporary files generated by NVCC. Default value: '$(KEEP_INTERMEDIATE)'.\n\
+		\t\t\tKeeps temporary files generated by NVCC. Default: '$(KEEP_INTERMEDIATE)'.\n\
 	\n\
 	\n\
  You can add other compiling options, or overwrite the default flags, using the\n\
@@ -1108,7 +1154,7 @@ help_message := \n\
 		\t\t\thost code. Default value: '$(NVCC_basename)'\n\
 	\n\
 	\tCFLAGS:\t\tOptions for C-only programs (excludes CUDA code).\n\
-		\t\t\tThey are also included in the final linkage command.\n\
+		\t\t\tThey are also included in the final linking stage.\n\
 	\n\
 	\tCXXFLAGS:\tOptions controlling the NVCC's internal compiler for\n\
 		\t\t\tCUDA source files. They are automatically prefixed\n\
@@ -1122,7 +1168,12 @@ help_message := \n\
 		\t\t\t(intermediate) code on devices of Compute Capability 1.x\n\
 	\n\
 	\tPTXAS_FLAGS:\tFlags for PTX code compilation, which generates the\n\
-		\t\t\tactual GPU assembler.\n
+		\t\t\tactual GPU assembler.\n\
+	\n\
+	\tMPICC:\t\tCompiler for MPI code. Default value: '$(default_MPICC)'\n\
+	\n\
+	\tMPICC_FLAGS:\tOptions for MPI code. They are also included in the\n\
+		\t\t\tfinal linking stage.\n
 
 ####################
 

@@ -3975,7 +3975,7 @@ int matrix_save( char const *restrict filename, index_t save_bin, real const *re
 	// -------------------------------
 
 	if ( verbose )
-		print_message( shown_by_all, "Saving output file...\n" );
+		print_message( shown_by_all, "\nSaving output file...\n" );
 
 	// Saves output as "native" binary.
 	if ( save_bin > 1 ) {

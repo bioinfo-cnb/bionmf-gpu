@@ -195,7 +195,7 @@
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
-/* "Private" global variables */
+/* Global variables */
 
 #if NMFGPU_DEBUG || NMFGPU_VERBOSE || NMFGPU_VERBOSE_2
 	static bool const dbg_shown_by_all = false;	// Information or error messages on debug.
@@ -355,7 +355,10 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 		status =
 	#endif
 
-		set_random_values( W, d_W, N, K, Kp,
+		set_random_values( d_W, N, K, Kp,
+					#if NMFGPU_CPU_RANDOM
+						W,
+					#endif
 					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
 						false,		// NO matrix transposing
 					#endif
@@ -373,8 +376,10 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 					stream_W, &event_W );
 
 	#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
-		if ( status != EXIT_SUCCESS )
+		if ( status != EXIT_SUCCESS ) {
+			destroy_random();
 			return EXIT_FAILURE;
+		}
 	#endif
 
 	// ----------------------------
@@ -384,8 +389,10 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 		// Offset to portion of data to be initialized by this process.
 		size_t const offset = (size_t) bM * (size_t) Kp;
-		real *const pH = &H[ offset ];
 		real *const p_dH = &d_H[ offset ];
+		#if NMFGPU_CPU_RANDOM
+			real *const pH = &H[ offset ];
+		#endif
 
 		// Number of rows
 		index_t const height = MpP;
@@ -394,26 +401,31 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			status =
 		#endif
 
-			set_random_values( pH, p_dH, height, K, Kp,
-						#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF)
-							true,		// Matrix transposing
-						#endif
-						#if NMFGPU_CPU_RANDOM && (NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
-							|| (! NMFGPU_PROFILING_GLOBAL))
-							"H",
-						#endif
-						#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF) \
-							|| ((! NMFGPU_CPU_RANDOM) && (! NMFGPU_PROFILING_GLOBAL))
-							"d_H",
-						#endif
-						#if ( NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF )
-							&upload_H_timing,
-						#endif
-						streams_NMF[ psNMF_M ], NULL );
+			set_random_values( p_dH, height, K, Kp,
+					#if NMFGPU_CPU_RANDOM
+						pH,
+					#endif
+					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF)
+						true,		// Matrix transposing
+					#endif
+					#if NMFGPU_CPU_RANDOM && (NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
+						|| (! NMFGPU_PROFILING_GLOBAL))
+						"H",
+					#endif
+					#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF) \
+						|| ((! NMFGPU_CPU_RANDOM) && (! NMFGPU_PROFILING_GLOBAL))
+						"d_H",
+					#endif
+					#if ( NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF )
+						&upload_H_timing,
+					#endif
+					streams_NMF[ psNMF_M ], NULL );
 
 		#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
-			if ( status != EXIT_SUCCESS )
+			if ( status != EXIT_SUCCESS ) {
+				destroy_random();
 				return EXIT_FAILURE;
+			}
 		#endif
 	}
 
@@ -501,16 +513,14 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 	// Number of iterations
 
-	div_t const niter_div = div( nIters , niter_test_conv );
-	index_t const niter_conv = (index_t) niter_div.quot;		// Number of times to perform test of convergence.
-	index_t const niter_rem = (index_t) niter_div.rem;		// Remaining iterations.
+	index_t const niter_conv = (nIters / niter_test_conv);		// Number of times to perform test of convergence.
+	index_t const niter_rem  = (nIters % niter_test_conv);		// Remaining iterations.
 	bool converged = false;
 
 	#if NMFGPU_VERBOSE
 		print_message( verb_shown_by_all, "niter_test_conv=%" PRI_IDX ", niter_conv=%" PRI_IDX ", niter_rem=%" PRI_IDX ".\n",
-				niter_test_conv, niter_div.quot, niter_div.rem );
+				niter_test_conv, niter_conv, niter_rem );
 	#endif
-
 
 	print_message( shown_by_all, "Starting NMF( K=%"PRI_IDX" )...\n", K );
 	flush_output( false );
@@ -532,7 +542,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 			#if NMFGPU_DEBUG
 			///////////////////////////////
-				print_message( verb_shown_by_all, "============ iter=%" PRI_IDX ", Loop %" PRI_IDX
+				print_message( verb_shown_by_all, "\n\n============ iter=%" PRI_IDX ", Loop %" PRI_IDX
 						" (niter_test_conv): ============\n------------ Matrix H: ------------\n", iter,i);
 			/////////////////////////////
 			#endif
@@ -558,7 +568,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
-				print_message( verb_shown_by_all, "------------ iter=%i, loop %i (niter_test_conv) Matrix W: ------------\n",
+				print_message( verb_shown_by_all, "\n------------ iter=%i, loop %i (niter_test_conv) Matrix W: ------------\n",
 						iter,i);
 			/////////////////////////////
 			#endif
@@ -592,7 +602,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			status =
 		#endif
 
-			matrix_adjust( d_H, block_M.BL[ pBLM ], Kp,
+			matrix_adjust( d_H, M, Kp,
 					#if NMFGPU_DEBUG
 						K, true, 	// Matrix transposing
 					#endif
@@ -612,7 +622,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 			status =
 		#endif
 
-			matrix_adjust( d_W, block_N.BL[ pBLN ], Kp,
+			matrix_adjust( d_W, N, Kp,
 					#if NMFGPU_DEBUG
 						K, false,	// No matrix transposing
 					#endif
@@ -651,7 +661,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
-				print_message( dbg_shown_by_all, "Returned difference between classification vectors: %zu\n", diff );
+				print_message( dbg_shown_by_all, "\nReturned difference between classification vectors: %zu\n", diff );
 			/////////////////////////////
 			#endif
 
@@ -701,7 +711,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	if ( (!converged) * niter_rem ) { // (converged == false) && (niter_rem > 0)
 
 		#if NMFGPU_VERBOSE
-			print_message( verb_shown_by_all, "Performing remaining iterations (%" PRI_IDX ")...\n", niter_rem);
+			print_message( verb_shown_by_all, "\nPerforming remaining iterations (%" PRI_IDX ")...\n", niter_rem);
 		#endif
 
 		// Runs NMF for niter_rem iterations...
@@ -709,7 +719,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
-				print_message( verb_shown_by_all, "============ Loop %" PRI_IDX " (remaining) ============\n"
+				print_message( verb_shown_by_all, "\n============ Loop %" PRI_IDX " (remaining) ============\n"
 						"------------ Matrix H: ------------\n",i);
 			/////////////////////////////
 			#endif
@@ -736,7 +746,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 
 			#ifdef NMFGPU_DEBUG
 			///////////////////////////////
-				print_message(verb_shown_by_all, "------------ Matrix W (loop=%" PRI_IDX ",remaining): ------------\n",i);
+				print_message(verb_shown_by_all, "\n------------ Matrix W (loop=%" PRI_IDX ",remaining): ------------\n",i);
 			/////////////////////////////
 			#endif
 
@@ -1109,7 +1119,7 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// Fails if the factorization rank is too large.
 	if ( K > MIN( N, M ) ) {
-		print_error( error_shown_by_all, "Error: invalid factorization rank: K=%" PRI_IDX ".\nIt cannot be greater "
+		print_error( error_shown_by_all, "Error: invalid factorization rank: K=%" PRI_IDX ".\nIt must not be greater "
 				"than any of matrix dimensions.\n", K );
 		freeHostMemory( Vrow, "V" ); clean_matrix_tags( mt );
 		shutdown_GPU();

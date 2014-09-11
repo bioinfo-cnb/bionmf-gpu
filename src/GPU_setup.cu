@@ -840,13 +840,13 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
 		int cublas_version = 0;
 		cublasGetVersion( cublas_handle, &cublas_version );
 
-		print_message( verb_shown_by_all, "%s (device ID: %" PRI_IDX "): Compute_Capability=%i.%i, CUDA=%i.%i, cuBLAS=%i.%i\n"
+		print_message( verb_shown_by_all, "\n%s (device ID: %" PRI_IDX "): Compute_Capability=%i.%i, CUDA=%i.%i, cuBLAS=%i.%i\n"
 				"\tWarp_size=%i, Memory_Alignment=%i, Max_Threads_per_Block=%i, Threads_per_Block=%i, "
 				"Max_Grid_Dimensions(X,Y)=(%i,%i).\n"
 				"\tMultiprocessors=%i, Threads_per_MultiProcessor=%i.\n"
 				"\tGlobal_Memory=%zu bytes (%g MiB), Total_Memory=%g MiB, Free_Memory=%g MiB, Used=%g MiB, "
 				"Maximum_Allocatable=%g MiB.\n"
-				"\tDevice is integrated: %s, can map host memory: %s, host memory mapped: %s.\n",
+				"\tDevice is integrated: %s, can map host memory: %s, host memory mapped: %s.\n\n",
 				device_prop.name, dev_id, device_prop.major, device_prop.minor,
 				runtime_version/1000, runtime_version%100, cublas_version/1000, cublas_version%100,
 				device_prop.warpSize, memory_alignment, device_prop.maxThreadsPerBlock, threadsPerBlock,
@@ -909,7 +909,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 {
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "get_BLs( num_act_processes=%" PRI_IDX ", mem_size=%zu, do_classf=%i, NpP=%" PRI_IDX ", MpP=%"
+		print_message( dbg_shown_by_all, "get_BLs( num_act_processes=%" PRI_IDX ", mem_size=%zu, do_classf=%i, NpP=%" PRI_IDX ", MpP=%"
 				PRI_IDX ", MpPp=%" PRI_IDX ", mappedHostMemory=%i )\n", num_act_processes, mem_size, do_classf, NpP, MpP, MpPp,
 				mappedHostMemory );
 	#endif
@@ -933,11 +933,11 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 
 		// Forces block sizes to be the half of dimensions:
 
-		print_message( verb_shown_by_all, "Forcing blocks size to the half of dimensions.\n" );
+		print_message( verb_shown_by_all, "\nForcing blocks size to the half of dimensions.\n" );
 
 		lBLN = (NpP/2) + (NpP % 2);
 
-		if ( MpPp != memory_alignment ) {	// i.e., (MpPp > memory_alignment)
+		if ( MpPp > memory_alignment ) {
 			// Tries to set lBLM == lBLMp, if possible.
 			lBLMp = get_padding( MpPp/2 );
 			lBLM = MIN( lBLMp, MpP );
@@ -962,8 +962,8 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 			l_full_matrix = false;
 		}
 
-		size_t maxcols_Vc = MAX( (max_nitems_dV / N), memory_alignment );	// Truncated but >= memory_alignment.
-		maxcols_Vc -= ( maxcols_Vc % memory_alignment );			// Previous multiple of <memory_alignment>.
+		size_t maxcols_Vc = MAX( (max_nitems_dV / N), (size_t) memory_alignment );	// Truncated but >= memory_alignment.
+		maxcols_Vc -= ( maxcols_Vc % memory_alignment );				// Previous multiple of <memory_alignment>.
 		if ( (size_t) lBLMp > maxcols_Vc ) {
 			lBLMp = maxcols_Vc;
 			if ( lBLM > lBLMp ) {
@@ -1002,8 +1002,8 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 		data_matrices += classf_data;
 	}
 
-	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-		print_message( verb_shown_by_all, "Total device memory required (approx.): %g MiB.\n"
+	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_DEBUG
+		print_message( dbg_shown_by_all, "\nTotal device memory required (approx.): %g MiB.\n"
 				"Required by output and auxiliary data: %g MiB.\n",
 				((float) required_mem + data_matrices) * ((float) sizeof(real) / 1048576.0f),
 				(float) data_matrices * ((float) sizeof(real) / 1048576.0f) );
@@ -1039,8 +1039,8 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 		 */
 		size_t const free_memory = mem_size - data_matrices;
 
-		#if NMFGPU_VERBOSE_2 || NMFGPU_FORCE_BLOCKS
-			print_message( verb_shown_by_all, "mem_size=%zu, data_matrices=%zu, required_mem=%" PRIuFAST64 ", free_memory=%zu\n",
+		#if NMFGPU_DEBUG || NMFGPU_FORCE_BLOCKS
+			print_message( dbg_shown_by_all, "mem_size=%zu, data_matrices=%zu, required_mem=%" PRIuFAST64 ", free_memory=%zu\n",
 					mem_size, data_matrices, required_mem, free_memory );
 		#endif
 
@@ -1067,7 +1067,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 		size_t cols = (size_t) N * (size_t) lBLMp;	// (d_Vcol)
 		lBLM = MIN( lBLMp, MpP );
 
-		#if NMFGPU_VERBOSE_2
+		#if NMFGPU_DEBUG
 			index_t step = 1;	// Number of loops.
 		#endif
 
@@ -1095,8 +1095,8 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 			size_t const nitems_WH = MAX( rows, cols );
 			required_mem = (uint_fast64_t) rows + (uint_fast64_t) cols + (uint_fast64_t) nitems_WH;
 
-			#if NMFGPU_VERBOSE_2
-				print_message( verb_shown_by_all, "Step %" PRI_IDX ": BLN=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
+			#if NMFGPU_DEBUG
+				print_message( dbg_shown_by_all, "Step %" PRI_IDX ": BLN=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
 						" (%g MiB), dBLN=%" PRI_IDX ", dBLM=%" PRI_IDX ", required_mem=%" PRIuFAST64 "\n",
 						step, lBLN, lBLM, lBLMp, (float)(required_mem + data_matrices) *
 						((float)sizeof(real) / 1048576.0f), dBLN, dBLM, required_mem );
@@ -1156,7 +1156,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 				cols = (size_t) N * (size_t) lBLMp;
 
 				// Maximum values for BLMp
-				max_dim = MAX( (max_nitems_dV / N), 1 );
+				size_t max_dim = MAX( (max_nitems_dV / N), 1 );
 				max_dim = MIN( max_dim, (size_t) MpPp );
 
 				if ( rows >= cols ) {	// required_memory == (2*rows + cols) == (2*Mp + N*BLMp) <= free_mem
@@ -1179,8 +1179,8 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 				lBLM = MIN( lBLMp, MpP );
 			}
 
-			#if NMFGPU_VERBOSE_2
-				print_message( verb_shown_by_all, "Resulting values: BLN=%" PRI_IDX ", BLM=%" PRI_IDX
+			#if NMFGPU_DEBUG
+				print_message( dbg_shown_by_all, "Resulting values: BLN=%" PRI_IDX ", BLM=%" PRI_IDX
 						", BLMp=%" PRI_IDX "\n", lBLN, lBLM, lBLMp );
 			#endif
 
@@ -1200,8 +1200,8 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 
 
 	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_VERBOSE_2 || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-		print_message( verb_shown_by_all, "Resulting values: BLN=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
-				" (approx. %g MiB), full_matrix=%i\n", lBLN, lBLM, lBLMp,
+		print_message( dbg_shown_by_all, "Resulting values: BLN=%" PRI_IDX ", BLM=%" PRI_IDX ", BLMp=%" PRI_IDX
+				" (approx. %g MiB), full_matrix=%i\n\n", lBLN, lBLM, lBLMp,
 				(float) (required_mem + data_matrices) * (sizeof(real) / 1048576.0f), l_full_matrix );
 	#endif
 
@@ -1217,34 +1217,41 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 // ---------------------------------------------
 
 /*
- * Initializes a "block_D" data (D == NpP or MpP).
+ * Initializes a "block_D" data (DpP == NpP or MpP).
  *
  * Data for blockwise processing is stored in a block_t structure. This method initializes such structure.
  *
- * BLDp <= Dp
+ * BLDp <= DpPp
  *
- * Divides dimension "D" in <num_steps> blocks of length "BLD" and possibly, one more block of length <D % BLD>.
- * In any case, the length information of the last block (either BLD or <D % BLD>) is always stored in block_D.BL[1],
- * EXCEPT if D == BLD (in this case, it is only stored in block_D.BL[0], and sets block_D.num_steps[0..1] to {1,0}).
+ * Divides dimension "DpP" in <num_steps> blocks of length "BLD" and possibly, one more block of length <DpP % BLD>.
+ * In any case, the length information of the last block (either BLD or <DpP % BLD>) is always stored in block_D.BL[1],
+ * UNLESS if DpP == BLD (in this case, it is only stored in block_D.BL[0], and sets block_D.num_steps[0..1] to {1,0}).
  */
-static void init_block_conf( index_t D, index_t Dp, index_t BLD, index_t BLDp, block_t *__restrict__ const block_D )
+static void init_block_conf( index_t DpP, index_t DpPp, index_t BLD, index_t BLDp, block_t *__restrict__ const block_D )
 {
+
+	// Initializes DpPp and BLDp if not set.
+
+	DpPp = MAX( DpP, DpPp );
+	BLDp = MAX( BLD, BLDp );
+
+	// ----------------------------
 
 	block_D->BL[0] = BLD;
 	block_D->BLp[0] = BLDp;
 
-	if ( BLDp != Dp ) { // BlDp < Dp, blockwise processing
+	if ( BLDp != DpPp ) { // BlDp < DpPp, blockwise processing
 
-		/* Divides dimension "D" in <num_steps> blocks of length <BLD>, and possibly one more block of length <D % BLD>.
-		 * In any case, the length information of the last block (either, <BLD> or <D % BLD>), is always stored in BL[1].
+		/* Divides dimension "DpP" in <num_steps> blocks of length <BLD>, and possibly one more block of length <DpP % BLD>.
+		 * In any case, the length information of the last block (either, <BLD> or <DpP % BLD>), is always stored in BL[1].
 		 */
 
 		// Number of blocks in BL[0]
-		block_D->num_steps[0] = (Dp / BLDp) - (! (Dp % BLDp));	// '-1' if (Dp % BLDp) == 0.
+		block_D->num_steps[0] = (DpPp / BLDp) - (! (DpPp % BLDp));	// '-1' if (DpPp % BLDp) == 0.
 
 		// Last block
-		block_D->BL[1] = ((D % BLDp) ? (D % BLDp) : BLD);
-		block_D->BLp[1] = ((Dp % BLDp) ? (Dp % BLDp) : BLDp);	// Already a multiple of <memory_alignment> (if both Dp and BLDp are).
+		block_D->BL[1] = ((DpP % BLDp) ? (DpP % BLDp) : BLD);
+		block_D->BLp[1] = ((DpPp % BLDp) ? (DpPp % BLDp) : BLDp); // Already a multiple of <memory_alignment> (if both Dp and BLDp are).
 		block_D->num_steps[1] = 1;
 
 	} else {  // D == BLD : There is only one block (BL[0])
@@ -1257,9 +1264,9 @@ static void init_block_conf( index_t D, index_t Dp, index_t BLD, index_t BLDp, b
 	} // if (D > BLD)
 
 	// Prints block configuration
-	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
+	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_VERBOSE_2 || NMFGPU_DEBUG
 		append_printed_message( dbg_shown_by_all, "\t%" PRI_IDX " block(s) of length %" PRI_IDX " (padding=%" PRI_IDX ")\n",
-				block_D->num_steps[0], BLD, BLDp);
+					block_D->num_steps[0], BLD, BLDp);
 		if ( block_D->num_steps[1] )
 			append_printed_message( dbg_shown_by_all, "\t1 block of length %" PRI_IDX " (padding=%" PRI_IDX ")\n",
 					block_D->BL[1], block_D->BLp[1]);
@@ -1413,7 +1420,8 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 						"d_last_classification): %s\n", cudaGetErrorString(cuda_status) );
 				freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 				freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
-				d_classification = d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
+				d_classification = NULL;
+				d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 				return EXIT_FAILURE;
 			}
 		}
@@ -1427,8 +1435,8 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 					PRI_IDX "] (mapped-memory mode).\n", Kp );
 			freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
-			d_last_classification = d_classification = d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol =
-			d_Vrow = NULL;
+			d_last_classification = d_classification = NULL;
+			d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 		cuda_status = cudaHostGetDevicePointer( (void **)&d_accum, (void *)h_accum, 0 );
@@ -1438,8 +1446,8 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			freeHostMemory( (void *)h_accum, "h_accum, mapped-memory mode" );
 			freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
-			h_accum = d_last_classification = d_classification = d_Aux = h_Aux = d_H = d_W = d_WH = h_WH =
-			d_Vcol = d_Vrow = NULL;
+			d_last_classification = d_classification = NULL;
+			h_accum = d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1452,8 +1460,8 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			freeHostMemory( (void *)h_accum, "h_accum, mapped-memory mode" );
 			freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
-			d_accum = h_accum = d_last_classification = d_classification = d_Aux = h_Aux = d_H = d_W = d_WH =
-			h_WH = d_Vcol = d_Vrow = NULL;
+			d_last_classification = d_classification = NULL;
+			d_accum = h_accum = d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 		cuda_status = cudaHostGetDevicePointer( (void **)&d_scalar, (void *)h_scalar, 0 );
@@ -1464,8 +1472,8 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			freeHostMemory( (void *)h_accum, "h_accum, mapped-memory mode" );
 			freeHostMemory( (void *)h_Aux, "h_Aux, mapped-memory mode" );
 			freeHostMemory( (void *)h_WH, "h_WH, mapped-memory mode" );
-			h_scalar = d_accum = h_accum = d_last_classification = d_classification = d_Aux = h_Aux = d_H = d_W =
-			d_WH = h_WH = d_Vcol = d_Vrow = NULL;
+			d_last_classification = d_classification = NULL;
+			h_scalar = d_accum = h_accum = d_Aux = h_Aux = d_H = d_W = d_WH = h_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1566,7 +1574,8 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			if ( do_classf ){ cudaFree(d_classification); }
 			cudaFree(d_Aux); cudaFree(d_H); cudaFree(d_W); cudaFree(d_WH);
 			if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
-			d_classification = d_Aux = d_H = d_W = d_WH = d_Vcol = d_Vrow = NULL;
+			d_classification = NULL;
+			d_Aux = d_H = d_W = d_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1581,7 +1590,8 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
 			if ( do_classf ){ cudaFree(d_classification); }
 			cudaFree(d_Aux); cudaFree(d_H); cudaFree(d_W); cudaFree(d_WH);
 			if (d_Vcol != d_Vrow){ cudaFree(d_Vcol); } cudaFree(d_Vrow);
-			d_accum = d_classification = d_Aux = d_H = d_W = d_WH = d_Vcol = d_Vrow = NULL;
+			d_classification = NULL;
+			d_accum = d_Aux = d_H = d_W = d_WH = d_Vcol = d_Vrow = NULL;
 			return EXIT_FAILURE;
 		}
 
@@ -1861,17 +1871,19 @@ static int finalize_GPU_data( void )
 	/* CUDA Streams for synchronization */
 
 	// Main-flow streams
-	for ( index_t st=0; st<num_streams_NMF; st++ ) {
-		cuda_status = cudaStreamDestroy( streams_NMF[ st ] );
-		if ( cuda_status != cudaSuccess ) {
-			print_error( sys_error_shown_by_all, "Error destroying stream object %" PRI_IDX "/%" PRI_IDX
-					" for synchronization on main flow: %s\n", st, num_streams_NMF,
-					cudaGetErrorString(cuda_status) );
-			status = EXIT_FAILURE;
+	if ( streams_NMF ) {
+		for ( index_t st=0; st<num_streams_NMF; st++ ) {
+			cuda_status = cudaStreamDestroy( streams_NMF[ st ] );
+			if ( cuda_status != cudaSuccess ) {
+				print_error( sys_error_shown_by_all, "Error destroying stream object %" PRI_IDX "/%" PRI_IDX
+						" for synchronization on main flow: %s\n", st, num_streams_NMF,
+						cudaGetErrorString(cuda_status) );
+				status = EXIT_FAILURE;
+			}
 		}
+		free( (void *) streams_NMF );
+		streams_NMF = NULL;
 	}
-	free( (void *) streams_NMF );
-
 
 	// Stream for d_H
 	cuda_status = cudaStreamDestroy( stream_H );
@@ -2099,7 +2111,7 @@ int setup_GPU( size_t mem_size, bool do_classf )
 {
 
 	#if NMFGPU_VERBOSE_2
-		print_message( dbg_shown_by_all, "setup_GPU( num_act_processes=%" PRI_IDX ",mem_size=%zu,do_classf=%i)\n",
+		print_message( dbg_shown_by_all, "setup_GPU( num_act_processes=%" PRI_IDX ", mem_size=%zu, do_classf=%i )\n",
 				num_act_processes, mem_size, do_classf );
 	#endif
 
@@ -2146,19 +2158,16 @@ int setup_GPU( size_t mem_size, bool do_classf )
 
 	// block_N
 	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-		append_printed_message( verb_shown_by_all, "\n" );
-		print_message( dbg_shown_by_all, "For dimension \"NpP\" = %" PRI_IDX " (N=%" PRI_IDX ", %" PRI_IDX " processes):\n",
-				NpP, N, num_act_processes);
+		print_message( dbg_shown_by_all, "For dimension \"NpP\" = %" PRI_IDX ":\n", NpP );
 	#endif
 	init_block_conf( NpP, NpP, BLN, BLN, &block_N );
 
 	// block_M
 	#if NMFGPU_FORCE_BLOCKS || NMFGPU_VERBOSE || NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-		append_printed_message( verb_shown_by_all, "\n" );
-		print_message( dbg_shown_by_all, "For dimension \"MpP\" = %" PRI_IDX " (%" PRI_IDX " with padding ; M=%" PRI_IDX
-				", %" PRI_IDX " processes):\n", MpP, MpPp, M, num_act_processes );
+		print_message( dbg_shown_by_all, "For dimension \"MpP\" = %" PRI_IDX " (%" PRI_IDX " with padding):\n",
+				MpP, MpPp, M, num_act_processes );
 	#endif
-	init_block_conf( MpP, Mp, BLM, BLMp, &block_M );
+	init_block_conf( MpP, MpPp, BLM, BLMp, &block_M );
 
 	// ----------------------------------
 
@@ -2292,11 +2301,6 @@ int finalize_GPU_device( void )
 	#endif
 
 	int status = EXIT_SUCCESS;	// Return status
-
-	// ------------------------------------------
-
-	// First, it checks for previous errors.
-	status = check_cuda_status();
 
 	// ------------------------------------------
 

@@ -1585,7 +1585,7 @@ int upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, re
 {
 
 	#if NMFGPU_VERBOSE_2
-		print_message( verb_shown_by_all, "Uploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
+		print_message( verb_shown_by_all, "\nUploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 				",transpose: %i, event %s, mapped memory: %i)\n", matrix_name_A, matrix_name_dA, height, width,
 				pitch, transpose, ( event_A ? "provided" : "NOT provided"), mappedHostMemory );
 	#endif
@@ -1659,6 +1659,7 @@ int upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, re
 	///////////////////////////////
 	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 	{
+		append_printed_message( dbg_shown_by_all, "\n");
 		bool const real_data = true;
 		struct matrix_tags_t const *mt = NULL;
 		int const status2 = show_device_matrix( d_A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
@@ -1693,7 +1694,7 @@ int upload_matrix( real const *__restrict__ A, index_t height, index_t pitch, re
 
 	#if NMFGPU_VERBOSE_2
 		print_message( verb_shown_by_all, "Uploading Matrix %s to %s (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
-				",transpose: %i, event %s).. Done\n", matrix_name_A, matrix_name_dA, height, width, pitch,
+				",transpose: %i, event %s).. Done\n\n", matrix_name_A, matrix_name_dA, height, width, pitch,
 				transpose, ( event_A ? "provided" : "NOT provided") );
 	#endif
 
@@ -1900,6 +1901,7 @@ int upload_matrix_partial( real const *__restrict__ A, index_t height, index_t p
 	///////////////////////////////
 	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 	{
+		append_printed_message( dbg_shown_by_all, "\n");
 		bool const real_data = true;
 		bool const transpose = false;
 		struct matrix_tags_t const *mt = NULL;
@@ -1914,7 +1916,7 @@ int upload_matrix_partial( real const *__restrict__ A, index_t height, index_t p
 
 	#if NMFGPU_VERBOSE_2
 		print_message( verb_shown_by_all, "Uploading Matrix %s to %s (partial, height=%" PRI_IDX ",pitch=%" PRI_IDX ",strow=%" PRI_IDX
-				",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ", mappedHostMemory=%i)...Done.\n",
+				",stcol=%" PRI_IDX ",block_width=%" PRI_IDX ", block_pitch=%" PRI_IDX ", mappedHostMemory=%i)...Done.\n\n",
 				matrix_name_A, matrix_name_dA, height, pitch, strow, stcol, block_width, block_pitch, mappedHostMemory );
 	#endif
 
@@ -2024,6 +2026,7 @@ int download_matrix( void *__restrict__ A, size_t nitems, size_t data_size, void
 	///////////////////////////////
 	#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF
 	{
+		append_printed_message( dbg_shown_by_all, "\n");
 		struct matrix_tags_t const *mt = NULL;
 		int const status2 = matrix_show( A, height, width, pitch, real_data, transpose, dbg_shown_by_all, mt );
 		if ( status2 != EXIT_SUCCESS )
@@ -2036,7 +2039,7 @@ int download_matrix( void *__restrict__ A, size_t nitems, size_t data_size, void
 
 	#if NMFGPU_VERBOSE_2
 		print_message( verb_shown_by_all, "Downloading Matrix %s to %s (no event, height=%" PRI_IDX ",width=%" PRI_IDX
-				",pitch=%" PRI_IDX ",transpose: %i, mappedHostMemory: %i)...Done.\n", matrix_name_dA, matrix_name_A,
+				",pitch=%" PRI_IDX ",transpose: %i, mappedHostMemory: %i)...Done.\n\n", matrix_name_dA, matrix_name_A,
 				height, width, pitch, transpose, mappedHostMemory );
 	#endif
 
