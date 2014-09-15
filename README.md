@@ -35,7 +35,6 @@
 -->
 
 <!-- ==================================================== -->
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
  <html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml">
  <head>
    <meta name="application-name" content="BioNMF-GPU"/>
@@ -71,7 +70,12 @@ This implementation is based on the NVIDIA's programming model: ***CUDA*** (***C
 ## Quick-start guide
 
 <!-- ALERT: TODO: Quick start guide  -->
-TBD
+# Install (Linux):
+These installation guidelines have been tested on Ubuntu 14.04. If you want to install *bioNMF-GPU* on a different distribution, some of the steps may vary.
+
+First of all, check if your computer has a CUDA-enabled GPU installed on it. You can find more information [here](https://developer.nvidia.com/cuda-gpus). *bioNMF-GPU* works only on computers with CUDA-enabled GPUs.
+
+
 
 <!-- ==================================================== -->
  </body>
