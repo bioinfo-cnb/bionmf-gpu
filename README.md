@@ -71,13 +71,13 @@ This implementation is based on the NVIDIA's programming model: ***CUDA*** (***C
 
 <!-- ALERT: TODO: Quick start guide  -->
 ### Install (Linux):
-These installation guidelines have been tested on Ubuntu 14.04. If you want to install *bioNMF-GPU* on a different distribution, some of the steps may vary.
+These installation guidelines have been tested on Ubuntu 14.04. If you want to install ***bioNMF-GPU*** on a different distribution, some of the steps may vary.
 
-First of all, check if your computer has a CUDA-enabled GPU installed on it. You can find more information [here](https://developer.nvidia.com/cuda-gpus). *bioNMF-GPU* works only on computers with CUDA-enabled GPUs.
+First of all, check if your computer has a CUDA-enabled GPU installed on it. You can find more information [here](https://developer.nvidia.com/cuda-gpus). ***bioNMF-GPU*** works only on computers with CUDA-enabled GPUs.
 
 ####Prerequisites:
-+ NVIDIA proprietary driver: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the "*Using NVIDIA binary driver*" option. You can also do this by going to the terminal and typing: `sudo apt-get install nvidia-current`. You may have to reboot the system in order to use this driver after installing it.
-+ Additional packages: You'll need the following packages in order to make *bioNMF-GPU* work: build-essential, nvidia-cuda-dev and nvidia-cuda-toolkit. You can install them using the *Ubuntu Software Center*, or via terminal: `sudo apt-get install build-essential nvidia-cuda-dev nvidia-cuda-toolkit`
++ **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the "*Using NVIDIA binary driver*" option. You can also do this by going to the terminal and typing: `sudo apt-get install nvidia-current`. You may have to reboot the system in order to use this driver after installing it.
++ **Additional packages**: You'll need the following packages in order to make *bioNMF-GPU* work: build-essential, nvidia-cuda-dev and nvidia-cuda-toolkit. You can install them using the *Ubuntu Software Center*, or via terminal: `sudo apt-get install build-essential nvidia-cuda-dev nvidia-cuda-toolkit`
 
 <!-- ==================================================== -->
  </body>
