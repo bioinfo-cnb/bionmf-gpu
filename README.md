@@ -70,7 +70,7 @@ This implementation is based on the NVIDIA's programming model: ***CUDA*** (***C
 ## Quick-start guide
 
 <!-- ALERT: TODO: Quick start guide  -->
-# Install (Linux):
+### Install (Linux):
 These installation guidelines have been tested on Ubuntu 14.04. If you want to install *bioNMF-GPU* on a different distribution, some of the steps may vary.
 
 First of all, check if your computer has a CUDA-enabled GPU installed on it. You can find more information [here](https://developer.nvidia.com/cuda-gpus). *bioNMF-GPU* works only on computers with CUDA-enabled GPUs.
