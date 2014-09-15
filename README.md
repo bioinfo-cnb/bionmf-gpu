@@ -75,7 +75,9 @@ These installation guidelines have been tested on Ubuntu 14.04. If you want to i
 
 First of all, check if your computer has a CUDA-enabled GPU installed on it. You can find more information [here](https://developer.nvidia.com/cuda-gpus). *bioNMF-GPU* works only on computers with CUDA-enabled GPUs.
 
-
+****Prerequisites:****
++NVIDIA proprietary driver: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the "*Using NVIDIA binary driver*" option. You can also do this by going to the terminal and typing: `sudo apt-get install nvidia-current`. You may have to reboot the system in order to use this driver after installing it.
++Additional packages:
 
 <!-- ==================================================== -->
  </body>
