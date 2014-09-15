@@ -77,7 +77,16 @@ First of all, check if your computer has a CUDA-enabled GPU installed on it. You
 
 ####Prerequisites:
 + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the "*Using NVIDIA binary driver*" option. You can also do this by going to the terminal and typing: `sudo apt-get install nvidia-current`. You may have to reboot the system in order to use this driver after installing it.
-+ **Additional packages**: You'll need the following packages in order to make *bioNMF-GPU* work: build-essential, nvidia-cuda-dev and nvidia-cuda-toolkit. You can install them using the *Ubuntu Software Center*, or via terminal: `sudo apt-get install build-essential nvidia-cuda-dev nvidia-cuda-toolkit`
++ **Additional packages**: You'll need the following packages in order to make *bioNMF-GPU* work: mpich, build-essential, nvidia-cuda-dev and nvidia-cuda-toolkit. You can install them using the *Ubuntu Software Center*, or via terminal: `sudo apt-get install build-essential nvidia-cuda-dev nvidia-cuda-toolkit mpich`
+
+####Compilation:
+Go to *releases* section, and download the latest version of ***bioNMF-GPU***. Unzip it and go into the main folder of the project with a terminal. Before compiling the program, you'll need to set some environment variables. We have automated this process, you only have to execute: `bash env.sh`. Now, you can type `make` to compile our program, and if there's no problem, you'll find the binary files inside *bin* folder.
+
+####Execution:
+***bioNMF-GPU*** is a terminal-based program, so you'll need to open a terminal to perform the execution. Go into the *bin* folder of the program, and you'll find 2 binary files:
++ ***NMF_GPU***: Binary file of the mono-GPU version of the program.
++ ***NMF_mGPU***: Binary file of the multi-GPU version of the program.
+The use of the binary files is the same. Please type `./<[NMF_GPU | NMF_mGPU]> -h>` to display the available options.
 
 <!-- ==================================================== -->
  </body>
