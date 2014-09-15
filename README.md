@@ -85,7 +85,8 @@ Go to *releases* section, and download the latest version of ***bioNMF-GPU***. U
 ####Execution:
 ***bioNMF-GPU*** is a terminal-based program, so you'll need to open a terminal to perform the execution. Go into the *bin* folder of the program, and you'll find 2 binary files:
 + ***NMF_GPU***: Binary file of the mono-GPU version of the program.
-+ ***NMF_mGPU***: Binary file of the multi-GPU version of the program.
++ ***NMF_mGPU***: Binary file of the multi-GPU version of the program. You'll need to type *mpirun* before the executable to run it properly.
+
 The use of the binary files is the same. Please type `./<[NMF_GPU | NMF_mGPU]> -h>` to display the available options.
 
 <!-- ==================================================== -->
