@@ -569,7 +569,7 @@ static int matrix_read_line( FILE *restrict file, index_t current_line, char con
 /*
  * Returns 'true' if "str" represents one or more numbers, or an empty string.
  */
-static bool isnumber( char const *restrict str )
+static bool is_number( char const *restrict str )
 {
 
 	if ( ! str )
@@ -594,7 +594,7 @@ static bool isnumber( char const *restrict str )
 	return ( isvalid * (! c) );	// isvalid && (c == '\0')
 	// Note: add "&& (p > str)" to return 'false' on empty strings.
 
-} // isnumber
+} // is_number
 
 // ---------------------------------------------
 
@@ -826,13 +826,13 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 		index_t nt = (index_t) num_tokensL1;
 
 		index_t i = 1;
-		while ( (i < nt) && isnumber(pdataL1[i]) )
+		while ( (i < nt) && is_number(pdataL1[i]) )
 			i++;
 
 		// File might have name and/or headers if:
 		has_name_headers = (	(i < nt) +				   // Not all tokens, from the second one, are numeric, <OR>
 					numeric_hdrs +				   // input matrix has numeric column headers, <OR>
-					( (nt == 1) && (! isnumber(pdataL1[0])) ) ); // It has only one (non-numeric) token.
+					( (nt == 1) && (! is_number(pdataL1[0])) ) ); // It has only one (non-numeric) token.
 	}
 
 	#if NMFGPU_DEBUG_READ_MATRIX
@@ -998,7 +998,7 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
 
 	// Detects if file may have row labels and sets num_tokensL2 (or num_tokensL2-1) as the number of columns.
 
-	if ( (! isnumber(tokensL2.tokens)) + numeric_lbls ) {	// First token in L2 is not numeric, or input matrix has numeric row labels.
+	if ( (! is_number(tokensL2.tokens)) + numeric_lbls ) {	// First token in L2 is not numeric, or input matrix has numeric row labels.
 
 		// File contains row labels.
 		numcols = (index_t) (num_tokensL2 - 1);

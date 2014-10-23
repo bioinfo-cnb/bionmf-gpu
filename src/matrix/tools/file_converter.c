@@ -157,7 +157,7 @@ static int print_file_converter_help( char const *restrict const execname )
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
-int main( int argc, char const *restrict *restrict argv )
+int main( int argc, char *argv[] )
 {
 
 	#if NMFGPU_PROFILING_GLOBAL
@@ -191,7 +191,7 @@ int main( int argc, char const *restrict *restrict argv )
 	struct input_arguments arguments;	// Input arguments
 
 	// Checks all arguments (shows error messages).
-	if ( check_arguments( argc, argv, &help, &arguments ) != EXIT_SUCCESS )
+	if ( check_arguments( argc, (char const *restrict *restrict) argv, &help, &arguments ) != EXIT_SUCCESS )
 		return EXIT_FAILURE;
 
 	// If help was requested, just prints a help message and returns.

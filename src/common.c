@@ -216,10 +216,10 @@ index_t num_processes = 1;	// (Maximum) Number of processes on the system.
 index_t num_act_processes = 1;	//  Number of "active" (i.e., not-idle) processes (<= num_processes).
 
 // Matrix dimension limits (NOTE: they may be modified if the program is executed in a GPU device).
-index_t memory_alignment = 1;									// Data alignment on memory.
-size_t matrix_max_num_items = SIZE_MAX / ( 2 * sizeof(real) );					// Maximum number of items in a matrix.
-index_t matrix_max_pitch = MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );		// Maximum multiple of <memory_alignment>.
-index_t matrix_max_non_padded_dim = MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );	// Maximum non-padded dimension.
+index_t memory_alignment = 1;										// Data alignment on memory.
+size_t matrix_max_num_items = SIZE_MAX / ( 2 * sizeof(real) );						// Maximum number of items in a matrix.
+index_t matrix_max_pitch = (index_t) MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );		// Maximum multiple of <memory_alignment>.
+index_t matrix_max_non_padded_dim = (index_t) MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );	// Maximum non-padded dimension.
 
 // Matrix dimensions:
 index_t N = 0;		// Number of rows of input matrix V.

@@ -59,10 +59,6 @@
 # Default CUDA Compiler.
 nvcc_basename="nvcc"
 
-# Default CUDA folders
-cuda_bin_folder="bin"
-cuda_lib_folder="lib"
-
 
 #############################
 # Retrieves CUDA_HOME
@@ -88,7 +84,7 @@ else
 		echo "
 Error: no argument was specified, and could not find any path to '${nvcc_basename}' in
 your \"PATH\" environment variable. Please, either provide the path to your CUDA
-Toolkit, or add to PATH the path to '${nvcc_basename}'.
+Toolkit, or add to \"PATH\" the path to '${nvcc_basename}'.
 
 Please note that in some shells (e.g., dash), arguments must be set as follow:
 	set -- <path_to_CUDA_Toolkit> ; . ./env.sh
@@ -98,7 +94,7 @@ Please note that in some shells (e.g., dash), arguments must be set as follow:
 	fi
 
 	# Path found:
-	CUDA_HOME="${nvcc_path%/${cuda_bin_folder}/${nvcc_basename}*}"
+	CUDA_HOME="${nvcc_path%/*/${nvcc_basename}*}"
 	unset nvcc_path
 fi
 unset nvcc_basename
@@ -127,51 +123,49 @@ export CUDA_HOME
 
 
 #############################
-
-# Path to CUDA library and binary files.
-cuda_bin="${CUDA_HOME}/${cuda_bin_folder}"
-cuda_lib="${CUDA_HOME}/${cuda_lib_folder}"
-
-unset cuda_bin_folder cuda_lib_folder
-
-# Checks current OS:
-os_lower="$(uname -s 2>/dev/null | tr [:upper:] [:lower:])"
-
-#############################
-# Sets the new environment,
-# unless CUDA_HOME is already present.
+# Updates PATH
 #############################
 
-if [ "${PATH}" = "${PATH#*${cuda_bin}}" ] ; then
-	if [ ! -d "${cuda_bin}" ] ; then
-		echo "Warning: '${cuda_bin}' not found, so not added to PATH." >&2
-	else
+cuda_bin="${CUDA_HOME}/bin"
+
+if [ -d "${cuda_bin}" ] ; then
+	if [ "${PATH}" = "${PATH#*${cuda_bin}}" ] ; then
 		export PATH="${cuda_bin}":${PATH}
 	fi
+else
+	echo "Warning: '${cuda_bin}' not found, so not added to PATH." >&2
 fi
 
-# Linux:	LD_LIBRARY_PATH
-# Mac OS X:   DYLD_LIBRARY_PATH
-if [ "${os_lower}" = "linux" ] ; then
+unset cuda_bin
 
-	if [ "${LD_LIBRARY_PATH}" = "${LD_LIBRARY_PATH#*${cuda_lib}}" ] ; then
-		if [ ! -d "${cuda_lib}" ] ; then
-			echo "Warning: '${cuda_lib}' not found, so not added to LD_LIBRARY_PATH." >&2
-		else
-			export LD_LIBRARY_PATH="${cuda_lib}":${LD_LIBRARY_PATH}
-		fi
+#############################
+# Updates (DY)LD_LIBRARY_PATH
+#############################
+
+# Path to CUDA library.
+cuda_lib="${CUDA_HOME}/lib"
+
+if [ ! -d "${cuda_lib}" ] ; then
+
+	# 32- or 64-bits platform
+	os_size=$(uname -m | sed -e "s/i.86/32/" -e "s/x86_64/64/" -e "s/armv7l/32/")
+
+	if [ ! -d "${cuda_lib}${os_size}" ] ; then	# e.g., <CUDA_HOME>/lib64
+		echo "Warning: Neither of '${cuda_lib}' or '${cuda_lib}${os_size}' were found, so not added to (DY)LD_LIBRARY_PATH." >&2
+		unset os_size cuda_lib
+		return 1
 	fi
 
-elif [ "${os_lower}" = "darwin" ] ; then
-
-	if [ "${DYLD_LIBRARY_PATH}" = "${DYLD_LIBRARY_PATH#*${cuda_lib}}" ] ; then
-		if [ ! -d "${cuda_lib}" ] ; then
-			echo "Warning: '${cuda_lib}' not found, so not added to DYLD_LIBRARY_PATH." >&2
-		else
-			export DYLD_LIBRARY_PATH="${cuda_lib}":${DYLD_LIBRARY_PATH}
-		fi
-	fi
+	cuda_lib+="${os_size}"
+	unset os_size
 fi
 
-# Clean-up
-unset cuda_bin cuda_lib os_lower
+if [ "${LD_LIBRARY_PATH}" = "${LD_LIBRARY_PATH#*${cuda_lib}}" ] ; then
+	export LD_LIBRARY_PATH="${cuda_lib}":${LD_LIBRARY_PATH}
+fi
+
+if [ "${DYLD_LIBRARY_PATH}" = "${DYLD_LIBRARY_PATH#*${cuda_lib}}" ] ; then
+	export DYLD_LIBRARY_PATH="${cuda_lib}":${DYLD_LIBRARY_PATH}
+fi
+
+unset cuda_lib

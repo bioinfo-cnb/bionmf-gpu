@@ -2627,7 +2627,7 @@ static void finalize_NMF( void )
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
-int main( int argc, char const *restrict *restrict argv )
+int main( int argc, char *argv[] )
 {
 
 	#if NMFGPU_PROFILING_COMM
@@ -2643,7 +2643,7 @@ int main( int argc, char const *restrict *restrict argv )
 	num_act_processes = num_processes = 1;
 
 	// Initializes MPI.
-	status = MPI_Init( &argc, (char ***)&argv );
+	status = MPI_Init( &argc, &argv );
 	if ( status != MPI_SUCCESS ) {
 		setMPIErrorString( status );
 		print_error( sys_error_shown_by_all, "Failed to initialize MPI: %s\n", error_string );
@@ -2681,14 +2681,14 @@ int main( int argc, char const *restrict *restrict argv )
 	struct input_arguments arguments;	// Input arguments
 
 	// Checks all arguments (shows error messages).
-	if ( check_arguments( argc, argv, &help, &arguments ) != EXIT_SUCCESS ) {
+	if ( check_arguments( argc, (char const *restrict *restrict) argv, &help, &arguments ) != EXIT_SUCCESS ) {
 		MPI_Finalize();
 		return EXIT_FAILURE;
 	}
 
 	// If help was requested, just prints a help message and returns.
 	if ( help ) {
-		status = print_nmf_gpu_help( *argv );
+		status = print_nmf_gpu_help( argv[0] );
 		MPI_Finalize();
 		return status;
 	}

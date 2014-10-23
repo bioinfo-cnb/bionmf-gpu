@@ -301,7 +301,7 @@ static int check_additional_arguments( int argc, char const *restrict const *res
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
-int main( int argc, char const *restrict *restrict argv )
+int main( int argc, char *argv[] )
 {
 
 	#if NMFGPU_PROFILING_GLOBAL
@@ -335,7 +335,7 @@ int main( int argc, char const *restrict *restrict argv )
 	struct input_arguments arguments;	// Input arguments
 
 	// Checks all arguments
-	if ( check_arguments( argc, argv, &help, &arguments ) != EXIT_SUCCESS )
+	if ( check_arguments( argc, (char const *restrict *restrict) argv, &help, &arguments ) != EXIT_SUCCESS )
 		return EXIT_FAILURE;
 
 	// If help was requested, just prints a help message and returns.
@@ -353,7 +353,8 @@ int main( int argc, char const *restrict *restrict argv )
 	index_t nrows = 0, ncols = 0;
 	real max_value = DEFAULT_MAXRAND;
 
-	if ( check_additional_arguments( argc, argv, idx_other_args, &nrows, &ncols, &max_value ) != EXIT_SUCCESS )
+	status = check_additional_arguments( argc, (char const *restrict *restrict) argv, idx_other_args, &nrows, &ncols, &max_value );
+	if ( status != EXIT_SUCCESS )
 		return EXIT_FAILURE;
 
 	index_t const pitch = get_padding( ncols );
@@ -369,7 +370,8 @@ int main( int argc, char const *restrict *restrict argv )
 
 	// Warns if it is a single-row/column matrix.
 	if ( (nrows == 1) + (ncols == 1) )
-		append_printed_error( shown_by_all, "\nNote, however, that (row or column) vectors are not a valid input for the NMF algorithm.\n" );
+		append_printed_error( shown_by_all,
+					"\nNote, however, that (row or column) vectors are not a valid input for the NMF algorithm.\n" );
 
 	// ----------------------------------------
 

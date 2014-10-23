@@ -80,7 +80,7 @@
 
  *BioNMF-GPU* is able to process matrices of any size. Even on detached devices with a dedicated (and limited) on-board memory, the NMF algorithm can be executed on large datasets by blockwise transferring and processing the input matrix.
 
- <!--Finally, this software can make use of multiple GPU devices through ***MPI*** (***Message-Passing Interface***).-->
+ Finally, this software can make use of multiple GPU devices through ***MPI*** (***Message-Passing Interface***).
 
  Please, see our *User guide* for implementation details, as well as a description of software usage.
 
@@ -94,24 +94,27 @@
 ### 2.1. Linux / Mac OS X:
 
 * `CUDA Toolkit`, version 4.2 or greater, freely available at <https://developer.nvidia.com/cuda-downloads/>.
-* `GNU C/C++ Compiler`: `gcc`.
+* Any of the following compilers:
+	 + `GNU C/C++ Compiler` (`gcc`).
+	 + `Clang C/C++ front-end for LLVM`.
 * `GNU Make`.
 
-On Mac OS X, you can also use the `Clang` compiler and toolchain installed using [`Xcode`](https://developer.apple.com/technologies/tools/). Note,  however, that there are some important related issues reported on the [Release Notes](http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html).
-<!-- ALERT (TODO): Ver lo del compilador en Mac OS X: gcc (macports), apple-gcc, llvm-gcc o clang??? -->
+On Mac OS X, the `Clang` compiler can be installed from [`Xcode`](https://developer.apple.com/technologies/tools/). It will be used by default, in the compilation process. Please read the [CUDA Release Notes][RN] for any `clang`/`Xcode` -related issue.
 
 An exhaustive list of requirements, as well as detailed installation instructions, can be found on the *"Getting Starting"* guides for [Linux](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-linux/index.html) and [Mac OS X](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-mac-os-x/index.html).
 
 
-**Important note:** folder names containing whitespace characters are *NOT* supported by *BioNMF-GPU*. In that case, either use a (soft) link, or rename your CUDA installation directory.
+**Important notes:**
+   * Folder names containing whitespace characters are *NOT* supported by *BioNMF-GPU*. In that case, either use a (soft) link, or rename your CUDA installation directory.
+   * `Clang` compiler is **not** supported on 32-bits systems. Please, read the [CUDA Release Notes][RN] for details.
+
+[RN]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html> "CUDA Release Notes"
 
 <!-- ==================== -->
 
 ### 2.2. Microsoft Windows:
 
-For Windows systems, we provide a single executable file compiled with generic code for *Compute Capabilities* 1.0, 2.0, and 3.0 (see a detailed list of GPU models at <https://developer.nvidia.com/cuda-gpus>). No further installation procedure is required, and you can skip the rest of this guide. Note, however, this program may run slower than a device-specific version.
-
-If you wish to compile a customized version of *bioNMF-GPU*, you will need the following software:
+To compile *bioNMF-GPU* on this platform, you will need the following software:
 
    * `NVIDIA CUDA Toolkit`, version 4.2 or greater, freely available at <https://developer.nvidia.com/cuda-downloads/>.
    * [`Microsoft Visual Studio`](http://www.microsoft.com/visualstudio/), versions 2008, 2010 or 2012.  
@@ -121,6 +124,7 @@ See detailed installation instructions on the [Getting Starting guide for Window
 
 [GSGW]: <http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-microsoft-windows/index.html> "Getting Starting guide for Windows"
 
+<!--
 #### Alternative install process:
 
 If you prefer a UNIX-like compilation process (i.e., using the `Makefile` we provide, in a command-line environment), or you do not have access to a *full version* of Visual Studio, you can perform the steps below. Note, however, that `nvcc.exe` (the CUDA Compiler) still requires the Microsoft Visual Studio compiler (`cl.exe`), but it can be found on any (old and/or free) `Visual C++ Express edition`.
@@ -134,8 +138,8 @@ If you prefer a UNIX-like compilation process (i.e., using the `Makefile` we pro
 
 	  From this point, the only folder to keep is `CUDAToolkit\`, which can be moved to any desired location. Everything else from the extracted file can be safety deleted, unless you want to also keep the documentation and/or the sample programs (folders `CUDADocumentation\` and `CUDASamples\`, respectively).
 
-   4. Download and install [`Cygwin`](http://cygwin.com/index.html), which contains a set of GNU tools. **Please include the shell interface it provides**. In contrast, it is not necessary to install the GNU compiler (`gcc`), since it will not be used by the CUDA compiler.
-	  <!-- ALERT (TODO): **NOTE:** folder names containing whitespace characters are *NOT* supported by *BioNMF-GPU*. In that case, either use a (soft) link, or rename your CUDA installation directory. -->
+   4. Download and install [`Cygwin`](http://cygwin.com/index.html), which contains a set of GNU tools. **Please include the shell interface it provides**. It is not necessary to install the GNU compiler (`gcc`), since it will not be used by the CUDA compiler.  
+	  **NOTE:** folder names containing whitespace characters are *NOT* supported by *BioNMF-GPU*. In that case, either use a (soft) link, or rename your CUDA installation directory.
 
    5. Download and install any old and/or free `MS Visual C++ Express edition`, such as the 2005, 2008 or 2010 version. You don't need to setup the graphical environment.
 
@@ -143,7 +147,7 @@ If you prefer a UNIX-like compilation process (i.e., using the `Makefile` we pro
 	  See a detailed description of these flags on the *"CUDA Compiler Driver NVCC" reference guide*, which can be found at folder `CUDADocumentation/` or at URL <http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html>.
 
 Now, you can follow the rest of this installation guide as if you were on a UNIX system.
-
+-->
 
 *****************************
 
@@ -226,6 +230,8 @@ The `include/` folder is similarly organized:
 
    * `single_gpu`: Compiles *bioNMF-GPU* (single-GPU version) only.
 
+   * `multi_gpu`: Compiles *bioNMF-mGPU* (multi-GPU version) only.
+
    * `tools`: Compiles some utility programs (see section *5 "Utility programs"* for details).  
 	 Currently, this target does *not* require any CUDA-related configuration or software. In particular, it is *not* necessary to specify  `CUDA_HOME` or `SM_VERSIONS` parameters.
 
@@ -287,6 +293,9 @@ The compilation process can be customized with the following parameters:
    * `KERNEL_TIME`: Shows time elapsed on kernel code.  
 	 Default value: '`0`'.
 
+   * `COMM_TIME`: Shows time elapsed on MPI communications.  
+	 Default value: '`0`'.
+
    * `SYNC_TRANSF`: Performs *synchronous* data transfers.  
 	 Default value: '`0`'.
 
@@ -318,13 +327,14 @@ The compilation process can be customized with the following parameters:
 You can add other compiling options or overwrite the default flags, with the following parameters (which may be environment variables, as well):
 
    * `CC`: Compiler for C-only programs and CUDA host code.
+	 Supported compilers: '`gcc`' and '`clang`'.
 	 Default value: '`gcc`'
 
    * `NVCC`: Compiler for CUDA device code, and CUDA kernel-related host code.
 	 Default value: '`nvcc`'
 
    * `CFLAGS`: Options for `C`-only programs (excludes `CUDA` code).  
-	 They are also included in the final linkage command.
+	 They are also included in the final linking stage.
 
    * `CXXFLAGS`: Options controlling the `NVCC`'s internal compiler for `CUDA` source files.  
 	 They are automatically prefixed with '`--compiler-options`' in the command line.
@@ -335,7 +345,13 @@ You can add other compiling options or overwrite the default flags, with the fol
 
    * `OPENCC_FLAGS`: Flags for the `nvopencc` compiler, which generates `PTX` (intermediate) code on devices of Compute Capability *"1.x"*.
 
-   * `PTXAS_FLAGS`:	Flags for `PTX` code compilation, which generates the actual GPU assembler.
+   * `PTXAS_FLAGS`: Flags for `PTX` code compilation, which generates the actual GPU assembler.
+
+   * `MPICC`: Compiler for `MPI` code.
+	  Default value: '`mpicc`'
+
+   * `MPICC_FLAGS`: Options for `MPI` code.  
+	  They are also included in the final linking stage.
 
 
 #### The `SM_VERSIONS` parameter:
@@ -418,22 +434,21 @@ which will be translated into the following argument(s) for `NVCC`:
 
 ### 4.3. Other compiling options
 
- The compilation process can be further customized by editing section *"Compiler Options"* in `Makefile`. There, you can adjust `gcc`-specific flags, and/or options for the `nvcc` compiler, as well as its internal tools (e.g., `nvopencc`, `ptx`, etc).
+ The compilation process can be further customized by editing section *"Compiler Options"* in `Makefile`. There, you can adjust `CC`-specific flags, and/or options for the `NVCC` compiler, as well as its internal tools (e.g., `nvopencc`, `ptx`, etc).
 
-#### `gcc` options:
- Since non-device code in `CUDA` source files, is internally compiled by `nvcc` as `C++`, options for `gcc` are distributed into two groups: common `C`/`C++` flags, and options for `C`-only source files. Within each group, some flags may, or may not be applied according to `Makefile` input parameters. For instance, '`common_fast_CFLAGS`' and '`c_only_fast_CFLAGS`', specify which flags are applied when the input parameter `FAST_MATH` is set to '`1`'.
+#### `CC` options:
+ Since host (i.e., non-device) code in `CUDA` source files is internally compiled by `NVCC` as `C++`, options for `CC` are distributed into two groups: common- `C`/`C++` flags, and options for `C`-only source files. Within each group, some flags may, or may not be applied according to `Makefile` input parameters. For instance, '`common_fast_CFLAGS`' and '`c_only_fast_CFLAGS`', specify which flags are applied when the input parameter `FAST_MATH` is set to '`1`'.
 
  *Notes:*
 
-   * `C`-only source files require support for `ISO-C99` standard. Therefore, flags for `C`-only code include the option '`-std=c99`'.
+   * Further options may apply according to the selected `CC` compiler (`gcc` or `clang`) and the current OS (`darwin` or `linux`).  
+   * `C`-only source files require support for `ISO-C99` standard. Therefore, flags for `C`-only code include the option '`-std=c99`'.  
    * Some (optional) useful features for processing single-precision floating-point data are only available when '`_GNU_SOURCE`' is defined.
-     Such option is included for `C`-only source files when the input parameter `SINGLE` is set to '`1`'.
+     Such option is included for `C`-only source files when the input parameter `SINGLE` is set to '`1`'.  
 
 
-#### `nvcc` options:
- Variables containing flags for `nvcc`, follow a similar naming scheme as for `gcc` options. Most of options for `nvcc` are those specified as common `C`/`C++` flags, prefixed with '`--compiler-options`'.
-
- If you have customized the `CC` variable (e.g., with '`CC=gcc-4.2`'), and wish `nvcc` to use that same compiler for host code, please uncomment the '`--compiler-bindir`' option in `Makefile`. It will instruct `nvcc` to use the compiler specified in the `CC` variable.
+#### `NVCC` options:
+ Variables containing flags for `NVCC`, follow a similar naming scheme as for `CC` options. Most of options for `NVCC` are those specified as common `C`/`C++` flags, prefixed with '`--compiler-options`'.
 
  **Note for Windows CygWin/Mingw users**: It may be necessary to uncomment the '`--drive-prefix`' option in order to correctly handle filenames and paths in Windows native format.
 
