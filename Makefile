@@ -34,18 +34,17 @@
 
 ##########################################################################
 #
-# Makefile for bioNMF-GPU
-#
-# WARNING:
-#	Makefile supported on Mac OS X and Linux platforms only.
+# Makefile for bioNMF-GPU on UNIX systems.
 #
 # Targets:
 #
-#	all:		Compiles all programs (default).
+#	all:		DEFAULT. Compiles all programs except the multi-GPU
+#			version. It is equivalent to: 'single_gpu tools'.
 #
 #	single_gpu:	Compiles bioNMF-GPU (single-GPU version).
 #
 #	multi_gpu:	Compiles bioNMF-mGPU (multi-GPU version).
+#			Target NOT compiled by default.
 #
 #	tools:		Compiles some utility programs.
 #			Currently, this target does NOT require any CUDA-related
@@ -63,12 +62,12 @@
 #
 #	clobber:	Removes the entire binary directory.
 #
-#	clobber_single_gpu, clobber_tools:
+#	clobber_single_gpu, clobber_multi_gpu, clobber_tools:
 #			Removes the specified executable and object files.
 #
 #	clean:		Removes all object files (i.e., *.o).
 #
-#	clean_single_gpu, clean_tools:
+#	clean_single_gpu, clean_multi_gpu, clean_tools:
 #			Removes the specified object files.
 #
 #
@@ -159,9 +158,10 @@
 #
 #	CC:		Compiler for C-only programs and CUDA host code.
 #			Supported compilers: 'gcc' and 'clang'.
+#			Default value: 'clang' for Darwin. 'gcc' otherwise.
 #
 #	NVCC:		Compiler for CUDA device code, and CUDA kernel-related
-#			host code.
+#			host code. Default value: 'nvcc'.
 #
 #	CFLAGS:		Options for C-only programs (excludes CUDA code).
 #			They are also included in the final linking stage.
@@ -180,7 +180,7 @@
 #	PTXAS_FLAGS:	Flags for PTX code compilation, which generates the
 #			actual GPU assembler.
 #
-#	MPICC:		Compiler for MPI code.
+#	MPICC:		Compiler for MPI code. Default value: 'mpicc'.
 #
 #	MPICC_FLAGS:	Options for MPI code. They are also included in the
 #			final linking stage.
@@ -553,7 +553,7 @@ nvcc_libdir := $(firstword $(wildcard $(CUDA_HOME)/lib$(os_size) $(CUDA_HOME)/li
 # NOTE:
 #	* Literal tabs and newline characters are ignored. Only '\t' and '\n' are printed.
 #	* Only double quotes (") need to be escaped, if any.
-error_cuda_home_not_found := \n\
+error_cuda_home_not_found := "\n\
 	ERROR:\n\n\
 		'CUDA_HOME' not set, and could not find any path to '$(NVCC_basename)' in your \"PATH\"\n\
 		environment variable. Please, either set CUDA_HOME to your CUDA-Toolkit\n\
@@ -561,7 +561,7 @@ error_cuda_home_not_found := \n\
 		\n\
 		Finally, please remember that folders with whitespace characters are NOT\n\
 		supported. In that case, please either use a (soft) link or rename your CUDA\n\
-		installation directory.\n
+		installation directory.\n"
 
 
 #########
@@ -656,10 +656,10 @@ unsupported_sm_versions := $(filter 10 11 12,$(subst -, ,$(SM_VERSIONS)))
 # NOTE:
 #	* Literal tabs and newline characters are ignored. Only '\t' and '\n' are printed.
 #	* Only double quotes (") need to be escaped, if any.
-warning_unsupported_sm_versions := \n\
+warning_unsupported_sm_versions := "\n\
 	Warning:\n\
 		On Compute Capability 1.2 and lower, all double-precision operations will be\n\
-		demoted to single-precision arithmetic.\n
+		demoted to single-precision arithmetic.\n"
 
 
 
@@ -903,7 +903,7 @@ multi_gpu_LDLIBS	:= $(nvcc_LDLIBS) $(cuda_LDLIBS) $(c_LDLIBS)
 ########################################
 
 .SUFFIXES:
-.SUFFIXES: .c .c.o .cu .cu.o .cuh
+.SUFFIXES: .c .c.o .cu .cu.o
 
 
 # Always keeps all intermediate files (unless the 'clean' target is explicitly requested)
@@ -912,42 +912,41 @@ multi_gpu_LDLIBS	:= $(nvcc_LDLIBS) $(cuda_LDLIBS) $(c_LDLIBS)
 
 
 # Rule to compile all programs.
-.PHONY: all ALL
-all ALL : single_gpu multi_gpu tools
+.PHONY: all All ALL
+all All ALL : single_gpu tools
 
 
 # Main Program (single-GPU version)
-.PHONY: single_gpu SINGLE_GPU
-single_gpu SINGLE_GPU : $(single_gpu_TARGET) check_sm_versions check_cuda_path
+.PHONY: single_gpu Single_GPU SINGLE_GPU
+single_gpu Single_GPU SINGLE_GPU : $(single_gpu_TARGET) check_sm_versions check_cuda_path
+
 
 # Main Program (multi-GPU version)
-.PHONY: multi_gpu MULTI_GPU
-multi_gpu MULTI_GPU : $(multi_gpu_TARGET) check_sm_versions check_cuda_path
+.PHONY: multi_gpu Multi_GPU MULTI_GPU
+multi_gpu Multi_GPU MULTI_GPU : $(multi_gpu_TARGET) check_sm_versions check_cuda_path
+
 
 # Utility programs
-.PHONY: tools TOOLS
-tools TOOLS : $(tools_TARGETS)
+.PHONY: tools Tools TOOLS
+tools Tools TOOLS : $(tools_TARGETS)
 
 
 # Main help
-.PHONY: help HELP Help
-help HELP Help:
-#	$(info ...) ignores escaped sequences (e.g., '\n' or '\t').
-	@echo "$(help_message)"
+.PHONY: help Help HELP
+help Help HELP :
+	@echo -e $(help_message)
 
 
 # Help for 'SM_VERSIONS' parameter
-.PHONY: help_sm_versions help_SM_VERSIONS HELP_SM_VERSIONS Help_sm_versions
-help_sm_versions help_SM_VERSIONS HELP_SM_VERSIONS Help_sm_versions:
-#	$(info ...) ignores escaped sequences (e.g., '\n' or '\t').
-	@echo "$(help_sm_versions_message)"
+.PHONY: help_sm_versions Help_SM_Versions HELP_SM_VERSIONS
+help_sm_versions Help_SM_Versions HELP_SM_VERSIONS :
+	@echo -e $(help_sm_versions_message)
 
 
 # Help for utility programs
-.PHONY: help_tools help_TOOLS HELP_TOOLS Help_tools
-help_tools help_TOOLS HELP_TOOLS Help_tools:
-#	$(info ...) ignores escaped sequences (e.g., '\n' or '\t').
-	@echo "$(help_tools_message)"
+.PHONY: help_tools Help_Tools HELP_TOOLS
+help_tools Help_Tools HELP_TOOLS :
+	@echo -e $(help_tools_message)
 
 
 ########################################
@@ -997,8 +996,7 @@ $(objdir)/%.c.o : $(srcdir)/%.c
 .PHONY: check_cuda_path
 check_cuda_path :
 ifeq ($(CUDA_HOME),)
-#	$(error ...) ignores escaped sequences (e.g., '\n' or '\t').
-	@echo "$(error_cuda_home_not_found)" >&2
+	@echo -e $(error_cuda_home_not_found) >&2
 	@exit 1
 endif
 
@@ -1009,8 +1007,7 @@ endif
 check_sm_versions :
 ifneq ($(SINGLE),1)
 ifneq ($(strip $(unsupported_sm_versions)),)
-#	$(info ...) ignores escaped sequences (e.g., '\n' or '\t').
-	@echo "$(warning_unsupported_sm_versions)" >&2
+ 	@echo -e $(warning_unsupported_sm_versions) >&2
 endif
 endif
 
@@ -1021,18 +1018,23 @@ endif
 
 # Removes executable and object files, as well as the directory tree.
 
-.PHONY: clobber
-clobber:
+.PHONY: clobber Clobber CLOBBER
+clobber Clobber CLOBBER : # clobber_tools clobber_single_gpu clobber_multi_gpu
 	$(cmd_prefix)rm -rf $(bindir)
 
 
-.PHONY: clobber_single_gpu
-clobber_single_gpu: clean_single_gpu
+.PHONY: clobber_single_gpu Clobber_Single_GPU CLOBBER_SINGLE_GPU
+clobber_single_gpu Clobber_Single_GPU CLOBBER_SINGLE_GPU : clean_single_gpu
 	$(cmd_prefix)rm -f $(single_gpu_TARGET)
 
 
-.PHONY: clobber_tools
-clobber_tools: clean_tools
+.PHONY: clobber_multi_gpu Clobber_Multi_GPU CLOBBER_MULTI_GPU
+clobber_multi_gpu Clobber_Multi_GPU CLOBBER_MULTI_GPU : clean_multi_gpu
+	$(cmd_prefix)rm -f $(multi_gpu_TARGET)
+
+
+.PHONY: clobber_tools Clobber_Tools CLOBBER_TOOLS
+clobber_tools Clobber_Tools CLOBBER_TOOLS : clean_tools
 	$(cmd_prefix)rm -f $(tools_TARGETS)
 
 
@@ -1040,26 +1042,30 @@ clobber_tools: clean_tools
 
 # Removes object files ONLY.
 
-.PHONY: clean
-clean:
+.PHONY: clean Clean CLEAN
+clean Clean CLEAN : # clean_tools clean_single_gpu clean_multi_gpu
 	$(cmd_prefix)rm -rf $(objdir)
 
 
-.PHONY: clean_single_gpu
-clean_single_gpu: clean_cuda clean_c
+.PHONY: clean_single_gpu Clean_Single_GPU CLEAN_SINGLE_GPU
+clean_single_gpu Clean_Single_GPU CLEAN_SINGLE_GPU : clean_cuda clean_c
 
 
-.PHONY: clean_tools
-clean_tools : clean_c
+.PHONY: clean_multi_gpu Clean_Multi_GPU CLEAN_MULTI_GPU
+clean_multi_gpu Clean_Multi_GPU CLEAN_MULTI_GPU : clean_cuda clean_c
 
 
-.PHONY: clean_cuda
-clean_cuda:
+.PHONY: clean_tools Clean_Tools CLEAN_TOOLS
+clean_tools Clean_Tools CLEAN_TOOLS : clean_c
+
+
+.PHONY: clean_cuda Clean_Cuda Clean_CUDA CLEAN_CUDA
+clean_cuda Clean_Cuda Clean_CUDA CLEAN_CUDA :
 	$(cmd_prefix)rm -f $(cuda_OBJS)
 
 
-.PHONY: clean_c
-clean_c:
+.PHONY: clean_c Clean_C CLEAN_C
+clean_c Clean_C CLEAN_C :
 	$(cmd_prefix)rm -f $(c_OBJS)
 
 
@@ -1073,16 +1079,18 @@ clean_c:
 
 # Main help message
 
-help_message := \n\
- Makefile for bioNMF-GPU\n\
+help_message := "\n\
+ Makefile for bioNMF-GPU on UNIX systems.\n\
  \n\
  Targets:\n\
 	\n\
-	\tall:\t\tCompiles all programs (default).\n\
+	\tall:\t\tDEFAULT. Compiles all programs except the multi-GPU\n\
+			\t\t\tversion. It is equivalent to: 'single_gpu tools'.\n\
 	\n\
 	\tsingle_gpu:\tCompiles bioNMF-GPU (single-GPU version).\n\
 	\n\
 	\tmulti_gpu:\tCompiles bioNMF-mGPU (multi-GPU version).\n\
+			\t\t\tTarget NOT compiled by default.\n\
 	\n\
 	\ttools:\t\tCompiles some utility programs.\n\
 			\t\t\tCurrently, this target does NOT require any CUDA-related\n\
@@ -1202,10 +1210,10 @@ help_message := \n\
 	\n\
 	\tCC:\t\tCompiler for C-only programs and CUDA host code.\n\
 		\t\t\tSupported compilers: 'gcc' and 'clang'.\n\
-		\t\t\tDefault value: '$(default_CC)'\n\
+		\t\t\tDefault value: '$(default_CC)'.\n\
 	\n\
 	\tNVCC:\t\tCompiler for CUDA device code, and CUDA kernel-related\n\
-		\t\t\thost code. Default value: '$(NVCC_basename)'\n\
+		\t\t\thost code. Default value: '$(NVCC_basename)'.\n\
 	\n\
 	\tCFLAGS:\t\tOptions for C-only programs (excludes CUDA code).\n\
 		\t\t\tThey are also included in the final linking stage.\n\
@@ -1224,16 +1232,16 @@ help_message := \n\
 	\tPTXAS_FLAGS:\tFlags for PTX code compilation, which generates the\n\
 		\t\t\tactual GPU assembler.\n\
 	\n\
-	\tMPICC:\t\tCompiler for MPI code. Default value: '$(default_MPICC)'\n\
+	\tMPICC:\t\tCompiler for MPI code. Default value: '$(default_MPICC)'.\n\
 	\n\
 	\tMPICC_FLAGS:\tOptions for MPI code. They are also included in the\n\
-		\t\t\tfinal linking stage.\n
+		\t\t\tfinal linking stage.\n"
 
 ####################
 
 # Help message for SM_VERSIONS.
 
-help_sm_versions_message :=\n\
+help_sm_versions_message := "\n\
  The SM_VERSIONS parameter:\n\
  \n\
  Device code is compiled in two stages. First, the compiler emits an assembler\n\
@@ -1368,14 +1376,14 @@ help_sm_versions_message :=\n\
  \n\
  which will be translated into the following argument(s) for NVCC:\n\
  \n\
-	\t$(subst $(space),\n\t,$(sm_CFLAGS))\n\
+	\t$(subst $(space),\n\t,$(sm_CFLAGS))\n"
 
 
 ####################
 
 # Help message for tools.
 
-help_tools_message :=\n\
+help_tools_message := "\n\
  Tool programs:\n\
  \n\
  In addition to \"bioNMF-GPU\", there are some utility programs to make easier\n\
@@ -1414,7 +1422,8 @@ help_tools_message :=\n\
 	" "  This program generates a valid data matrix with random values. You can\n\
 	" "  select output matrix dimensions, as well as the maximum value for matrix\n\
 	" "  data. The output matrix can be written as ASCII-text, or in a binary file\n\
-	" "  (in any of the binary modes described above).\n\
+	" "  (in any of the binary modes described above).\n"
 
 
 ########################################
+
