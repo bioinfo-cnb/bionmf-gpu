@@ -926,10 +926,14 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 	// ---------------------------
 
 	// Resets getopt(3) variables.
-	optind = 0;
-	opterr = 0;	// Disables error messages.
 
-	int opt = 0;	// Selected option
+	optarg = NULL;
+	optind = 1;
+	opterr = 0;	// Disables error messages.
+	optopt = 0;
+
+	int opt = -1;	// Selected option
+
 
 	/* Reads option arguments:
 	 *
@@ -1124,7 +1128,8 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 
 	// Resets getopt(3) variables.
 	optarg = NULL;
-	optind = opterr = optopt = 0;
+	optind = 1;
+	opterr = optopt = 0;
 
 	// --------------------
 
@@ -1148,6 +1153,8 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 	l_arguments.gpu_device = l_gpu_device;
 
 	l_arguments.idx_other_args = l_idx_other_args;
+
+	*help = false;
 
 	*arguments = l_arguments;
 
