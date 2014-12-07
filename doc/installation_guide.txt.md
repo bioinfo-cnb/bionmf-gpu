@@ -1,7 +1,7 @@
 <!--
  ************************************************************************
  *
- * NMF-mGPU -- Non-negative Matrix Factorization on multi-GPU systems.
+ * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
  * Copyright (C) 2011-2014:
  *
@@ -34,7 +34,6 @@
  ************************************************************************
 -->
 <!-- ==================================================== -->
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
  <html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml">
  <head>
    <meta name="application-name" content="NMF-mGPU"/>
@@ -44,7 +43,7 @@
    <meta name="language" content="en"/>
    <meta name="copyright" content="(C) 2011-2014 Edgardo Mejia-Roa (edgardomejia@fis.ucm.es). ArTeCS Group, Complutense University of Madrid (UCM), Spain."/>
    <meta http-equiv="content-Type" content="text/html; charset=UTF-8"/>
-   <meta http-equiv="last-modified" content="2014/11/27" scheme="YYYY/MM/DD"/>
+   <meta http-equiv="last-modified" content="2014/12/07" scheme="YYYY/MM/DD"/>
    <link rel="stylesheet" type="text/css" href="styles.css"/>
    <title>NMF-mGPU Installation Guide</title>
  </head>

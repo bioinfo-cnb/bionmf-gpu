@@ -1,7 +1,7 @@
 
 ##########################################################################
  #
- # NMF-mGPU -- Non-negative Matrix Factorization on multi-GPU systems.
+ # NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  #
  # Copyright (C) 2011-2014:
  #
