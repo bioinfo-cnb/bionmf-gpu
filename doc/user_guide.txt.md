@@ -1,7 +1,7 @@
 <!--
  ************************************************************************
  *
- * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ * NMF-mGPU -- Non-negative Matrix Factorization on multi-GPU systems.
  *
  * Copyright (C) 2011-2014:
  *
@@ -16,20 +16,20 @@
  *		E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-GPU.
+ * This file is part of NMF-mGPU.
  *
- * BioNMF-GPU is free software: you can redistribute it and/or modify
+ * NMF-mGPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-GPU is distributed in the hope that it will be useful,
+ * NMF-mGPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
+ * along with NMF-mGPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ************************************************************************
 -->
@@ -37,29 +37,29 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
  <html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml">
  <head>
-   <meta name="application-name" content="BioNMF-GPU"/>
+   <meta name="application-name" content="NMF-mGPU"/>
    <meta name="author" content="Edgardo Mejia-Roa (edgardomejia@fis.ucm.es), Carlos Garcia, Jose Ignacio Gomez, Manuel Prieto, Francisco Tirado, and Alberto Pascual-Montano (pascual@cnb.csic.es)."/>
-   <meta name="description" content="Non-negative Matrix Factorization (NMF) on (multi-)GPU systems, for Biology. User guide"/>
+   <meta name="description" content="Non-negative Matrix Factorization (NMF) for Biology on multi-GPU systems. User guide"/>
    <meta name="keywords" content="bioNMF, NMF, Matrix factorization, GPU, multi-GPU, GPGPU, NVIDIA, CUDA, CUBLAS, Bioinformatics"/>
    <meta name="language" content="en"/>
    <meta name="copyright" content="(C) 2011-2014 Edgardo Mejia-Roa (edgardomejia@fis.ucm.es). ArTeCS Group, Complutense University of Madrid (UCM), Spain."/>
    <meta http-equiv="content-Type" content="text/html; charset=UTF-8"/>
    <meta http-equiv="last-modified" content="2014/04/30" scheme="YYYY/MM/DD"/>
    <link rel="stylesheet" type="text/css" href="styles.css"/>
-   <title>BioNMF-GPU user guide</title>
+   <title>NMF-mGPU user guide</title>
  </head>
  <body>
 
 <!-- ==================================================== -->
 
-# *BioNMF-GPU* USER GUIDE
+# *NMF-mGPU* USER GUIDE
 
- This documents shows how to use *bioNMF-GPU*.
+ This documents shows how to use *NMF-mGPU*.
 
  **Index:**
 
    1. Introduction.
-   2. *BioNMF-GPU* arguments.
+   2. *NMF-mGPU* arguments.
    3. Data-file format.
    4. Analysis process.
    5. Examples of use.
@@ -71,25 +71,25 @@
 
 ## 1. Introduction
 
- ***BioNMF-GPU*** implements the ***Non-negative Matrix Factorization*** (***NMF***) by making use of a ***Graphics-Processing Unit*** (***GPU***). NMF is able to represent a data set as the linear combination of a collection of elements named *factors*. The *factorization rank* (i.e, the number of *factors*) is usually specified as a low value, so NMF results in a considerably reduced representation of the input data.
+ ***NMF-mGPU*** implements the ***Non-negative Matrix Factorization*** (***NMF***) by making use of a ***Graphics-Processing Unit*** (***GPU***). NMF is able to represent a data set as the linear combination of a collection of elements named *factors*. The *factorization rank* (i.e, the number of *factors*) is usually specified as a low value, so NMF results in a considerably reduced representation of the input data.
  
  Mathematically, this algorithm can be described as the *decomposition* of an input matrix, **V**, into two other matrices, **W** and **H**, whose product is approximately the former (i.e., **V** ~ **W** \* **H**). If matrix **V** has *n* rows and *m* columns, then dimensions for output matrices, **W** and **H**, will be *n* × *k* and *k* × *m* (respectively), being *"k"* the specified *factorization rank*. In this context, **W** contains the (reduced) set of *k* factors, and **H** stores the coefficients of the linear combination of such factors that rebuilds **V**. Usually, the factorization rank (*k*) provided by the user, is a value much less than *n* and *m*.
  
  In contrast to other similar factorization algorithms (e.g., *PCA*, *SVD*, or *ICA*), NMF is constrained to use *non-negative* values and additive-only combinations on all matrices. This results in a *parts-based* representation of data, where each factor can be *contextually interpreted*.
  
- Driven by the ever-growing demands of the game industry, where numerous algebraic operations are required to draw images on the screen, GPUs have evolved from simple graphics-drawing devices into highly parallel and programmable systems that largely outperforms any conventional processor. This GPU implementation of the NMF algorithm has been developed using the NVIDIA's ***Compute Unified Device Architecture*** (***CUDA***) programming model. *CUDA* represents the GPU as a programmable *co-processor*, which will be then responsible of computing all required algebraic operations.
+ Driven by the ever-growing demands of the game industry, where numerous algebraic operations are required to draw images on the screen, GPUs have evolved from simple graphics-drawing devices into highly parallel and programmable systems that largely outperforms any conventional processor. This GPU implementation of the NMF algorithm has been developed using the NVIDIA's ***Compute Unified Device Architecture*** (***CUDA***) programming model. *CUDA* represents the GPU as a programmable *coprocessor*, which will be then responsible of computing all required algebraic operations.
 
- *BioNMF-GPU* is able to process matrices of any size. Even on detached devices with a dedicated (and limited) on-board memory, the NMF algorithm can be executed on large datasets by blockwise transferring and processing the input matrix, as necessary.
+ *NMF-mGPU* is able to process matrices of any size. Even on detached devices with a dedicated (and limited) on-board memory, the NMF algorithm can be executed on large datasets by blockwise transferring and processing the input matrix, as necessary.
 
  <!--Finally, this software can make use of multiple GPU devices through ***MPI*** (***Message-Passing Interface***).-->
 
- In addition to *bioNMF-GPU*, there are some utility programs to make easier working with input files. It includes a program for binary-text file conversion, and another to generate input matrices with random data (useful for testing *bioNMF-GPU*). See section 6 *"Utility programs"* for details.
+ In addition to *NMF-mGPU*, there are some utility programs to make easier working with input files. It includes a program for binary-text file conversion, and another to generate input matrices with random data (useful for testing *NMF-mGPU*). See section 6 *"Utility programs"* for details.
 
 
 *****************************
 
 
-## 2. *BioNMF-GPU* arguments
+## 2. *NMF-mGPU* arguments
 
 Program usage:
 
@@ -151,11 +151,11 @@ Please see section *4 "Analysis process"* for a detailed description of the impl
 
 ## 3. Data-file formats
 
-*BioNMF-GPU* is able to work with matrices stored in a binary or text file. This section describes both file formats, which can be used for input or output data.
+*NMF-mGPU* is able to work with matrices stored in a binary or text file. This section describes both file formats, which can be used for input or output data.
 
 Regardless of the format, the file must contain *non-negative* data only. Optionally, there can be column headers, and/or row labels, as well as a short description string (denoted as *"matrix name"*). Any of such three ***tag elements*** is independent of each other, and may or may not appear in the file.
 
-***Note:*** it is *not* allowed to have any column or row with *all* entries set to zero, there must be at least one *positive* value on each. *BioNMF-GPU* will try to detect and report it as invalid file format.
+***Note:*** it is *not* allowed to have any column or row with *all* entries set to zero, there must be at least one *positive* value on each. *NMF-mGPU* will try to detect and report it as invalid file format.
 
 Some examples of valid input files, in both formats, can be found in the `test/` folder. In addition, some utility programs (such as a text-binary file converter) are provided in order to make easier working with input and output files. Please, see section *6 "Utility programs"* for details.
 <!-- ALERT: TODO -->
@@ -179,17 +179,17 @@ Nevertheless, this is a *simplified* scheme, since actually, every item is optio
 
    * Please do *not* use double- (`"`) or single-quote (`'`) characters in any tag element.
 
-   * By default, *bioNMF-GPU* follows the system-default locale (e.g., '`C`' on UNIX platforms). In particular, it uses *dots* ('`.`') as decimal symbols, and reports a comma ('`,`') as an invalid character.
+   * By default, *NMF-mGPU* follows the system-default locale (e.g., '`C`' on UNIX platforms). In particular, it uses *dots* ('`.`') as decimal symbols, and reports a comma ('`,`') as an invalid character.
 
    * Only UNIX (`LF`, '`\n`') and MS-DOS/Windows (`CR+LF`, '`\r\n`'), end-of-line styles are accepted.
 
 #### Numeric row labels and/or column headers:
-By default, *bioNMF-GPU* processes numeric row labels as matrix data. To prevent this, please add '`-r`' to the command-line arguments. This option forces *bioNMF-GPU* to process the first data column in the file, as row labels.  
+By default, *NMF-mGPU* processes numeric row labels as matrix data. To prevent this, please add '`-r`' to the command-line arguments. This option forces *NMF-mGPU* to process the first data column in the file, as row labels.  
 Similarly, to prevent a misinterpretation of numeric column headers and/or the description string, please use the '`-c`' option.
 
 Please note that such options are *not* required for *binary files*, since there is no way to accidentally mix matrix data and tag elements.
 
-A list of all available arguments can be found on section *2 "BioNMF-GPU arguments"*.
+A list of all available arguments can be found on section *2 "NMF-mGPU arguments"*.
 
 #### Whitespace characters rather than tabs:
 Under the following conditions, input data may be separated by *single* whitespace characters ('` `'):
@@ -198,17 +198,17 @@ Under the following conditions, input data may be separated by *single* whitespa
    * There must *not* be any *tab* character in the file.
    * *Consecutive space characters* will be processed as '`0.0`' or an empty string, as necessary.
    * Both, first and second rows must *not* begin with an *empty* column header and/or row label (i.e., they must not start with a whitespace character), since they will be misinterpreted as null data (i.e., '`0.0`').  
-	 However, you can force a header/label detection with the '`-r`' and/or '`-c`' options (see section *2 "BioNMF-GPU arguments"* for details).
+	 However, you can force a header/label detection with the '`-r`' and/or '`-c`' options (see section *2 "NMF-mGPU arguments"* for details).
 
 <!-- ==================== -->
 
 ### 3.2. Binary files
 
-In addition to ASCII-text files, *bioNMF-GPU* also accepts a data matrix stored in a binary format. Such binary files, can be read and/or written in two sub-formats: *"native"* and *non-"native"*.
+In addition to ASCII-text files, *NMF-mGPU* also accepts a data matrix stored in a binary format. Such binary files, can be read and/or written in two sub-formats: *"native"* and *non-"native"*.
 
    * ***"Native"* mode** refers to *raw* I/O. That is, data are stored/loaded with the precision specified at compilation time: '`float`' if the `Makefile` parameter "`SINGLE`" was set to '`1`', or '`double`' otherwise. Matrix dimensions are stored/loaded in a similar way (i.e., '`unsigned int`', if "`UNSIGNED`" was set to '`1`'; '[`signed`] `int`', otherwise). This mode is faster because *no* error checking is performed. Therefore, it should *not* be used to read untrusted input files.  
      **Important note:** In *output* files, this mode also *skips* all data transformation steps (e.g., *matrix transposing*). In particular, matrix **H** (which is computed in transposed mode due to performance reasons) will *not* be "restored" before writing the output file.  
-     Finally, please see section *4 "Compiling bioNMF-GPU"*, in the *Installation guide*, for a list of available `Makefile` parameters.
+     Finally, please see section *4 "Compiling NMF-mGPU"*, in the *Installation guide*, for a list of available `Makefile` parameters.
 
    * In **non-*"native"* mode**, data are *always* stored/loaded using *double* precision (and *unsigned* integers for matrix dimensions), regardless the options specified at compilation. This is the recommended mode for input or final output data, since every datum is checked for invalid format.
 
@@ -255,7 +255,7 @@ TBD
 
 ## 4. Analysis process
 
-This section describes the NMF algorithm implemented on *bioNMF-GPU*, as well as all related command-line options that can be used to customize the analysis process.
+This section describes the NMF algorithm implemented on *NMF-mGPU*, as well as all related command-line options that can be used to customize the analysis process.
 
 <!-- ==================== -->
 
@@ -265,7 +265,7 @@ NMF takes an input matrix (**V**) and returns two matrices, **W** and **H**, who
 
 NMF iteratively modifies **W** and **H** until their product approximates to **V**. Such modifications, composed by matrix products and other algebraic operations, are derived from minimizing a cost function that quantifies, in some way, the differences between **W** \* **H** and **V**. There are numerous objective functions, each leading to different update rules.
 
-The following pseudo-code shows the NMF algorithm as it was implemented in *bioNMF-GPU*:
+The following pseudo-code shows the NMF algorithm as it was implemented in *NMF-mGPU*:
 
 		NMF_GPU( V, n, m, k ):
 
@@ -342,7 +342,7 @@ This section describes all output files generated by each processing step.
 ## 9. Running tests and examples of use.
 
 
-This section shows the compilation process for *BioNMF-GPU*, with the provided `Makefile` in a command-line environment. 
+This section shows the compilation process for *NMF-mGPU*, with the provided `Makefile` in a command-line environment. 
 
 
 
@@ -351,7 +351,7 @@ First, it describes how to set some optional environment variables (although the
 ### 4.1. Environment setup.
 
 
-*BioNMF-GPU* requires the path to your CUDA Toolkit in order to be compiled. It may be necessary also for execution (e.g., dynamically-linked libraries)
+*NMF-mGPU* requires the path to your CUDA Toolkit in order to be compiled. It may be necessary also for execution (e.g., dynamically-linked libraries)
 
 You can specify it through any of the following ways:
 
@@ -363,7 +363,7 @@ You can specify it through any of the following ways:
 
 ## 10. Utilities
 
-In addition to *bioNMF-GPU*, there are some utility programs to make easier working with input files. It includes a program for binary-text file conversion, and another to generate input matrices with random data (useful for testing *bioNMF-GPU*).
+In addition to *NMF-mGPU*, there are some utility programs to make easier working with input files. It includes a program for binary-text file conversion, and another to generate input matrices with random data (useful for testing *NMF-mGPU*).
 
 ***Note:*** These programs do *not* make use of the GPU device. They are implemented in pure-`C99` language, and all operations are performed on the *host* (i.e., the CPU). Therefore, they do *not* require any CUDA-related option, configuration or software.
 
@@ -414,7 +414,7 @@ TBD (see Section *3.3. "Maximum matrix dimensions"*)
 *****************************
 
 
-## 12. How to cite *bioNMF-GPU*.
+## 12. How to cite *NMF-mGPU*.
 
  If you use this software, please cite the following work:
 

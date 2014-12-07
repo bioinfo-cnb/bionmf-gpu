@@ -1,6 +1,6 @@
 ##########################################################################
 #
-# BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+# NMF-mGPU -- Non-negative Matrix Factorization on multi-GPU systems.
 #
 # Copyright (C) 2011-2014:
 #
@@ -15,33 +15,33 @@
 #	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
 #
 #
-# This file is part of bioNMF-GPU.
+# This file is part of NMF-mGPU.
 #
-# BioNMF-GPU is free software: you can redistribute it and/or modify
+# NMF-mGPU is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# BioNMF-GPU is distributed in the hope that it will be useful,
+# NMF-mGPU is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
+# along with NMF-mGPU. If not, see <http://www.gnu.org/licenses/>.
 #
 ##########################################################################
 
 ##########################################################################
 #
-# Makefile for bioNMF-GPU on UNIX systems.
+# Makefile for NMF-mGPU on UNIX systems.
 #
 # Targets:
 #
 #	all:		DEFAULT. Compiles all programs except the multi-GPU
 #			version. It is equivalent to: 'single_gpu tools'.
 #
-#	single_gpu:	Compiles bioNMF-GPU (single-GPU version).
+#	single_gpu:	Compiles NMF-mGPU (single-GPU version).
 #
 #	multi_gpu:	Compiles bioNMF-mGPU (multi-GPU version).
 #			Target NOT compiled by default.
@@ -189,7 +189,7 @@
 #
 # Tool programs:
 #
-# In addition to "bioNMF-GPU", there are some utility programs to make easier
+# In addition to "NMF-mGPU", there are some utility programs to make easier
 # working with input files. It includes a program for binary-text file conversion
 # and another to generate input matrices with random data (useful for testing).
 #
@@ -204,7 +204,7 @@
 # 'CUDA_HOME' and/or 'SM_VERSIONS' parameters.
 #
 # 1) Binary-text file converter:
-#    Since "bioNMF-GPU" accepts input matrices stored in a binary or ASCII-text
+#    Since "NMF-mGPU" accepts input matrices stored in a binary or ASCII-text
 #    file, this program allows file conversion between both formats.
 #    For binary files, there are two sub-formats: "native" and non-"native".
 #
@@ -975,7 +975,8 @@ $(objdir)/%.cu.o : $(srcdir)/%.cu
 	$(cmd_prefix)mkdir -p $(@D)
 	$(cmd_prefix)$(NVCC) $(cuda_CFLAGS) $(cuda_INCLUDES) $(addprefix --compiler-options ,$(CXXFLAGS)) $(NVCCFLAGS) --output-file $@ --compile $<
 
-# C files
+
+# MPI/C files
 $(multi_gpu_OBJ) : $(multi_gpu_SRC)
 	$(cmd_prefix)mkdir -p $(@D)
 	$(cmd_prefix)$(MPICC) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) $(CFLAGS) $(MPICC_FLAGS) -o $@ -c $<
@@ -1080,14 +1081,14 @@ clean_c Clean_C CLEAN_C :
 # Main help message
 
 help_message := "\n\
- Makefile for bioNMF-GPU on UNIX systems.\n\
+ Makefile for NMF-mGPU on UNIX systems.\n\
  \n\
  Targets:\n\
 	\n\
 	\tall:\t\tDEFAULT. Compiles all programs except the multi-GPU\n\
 			\t\t\tversion. It is equivalent to: 'single_gpu tools'.\n\
 	\n\
-	\tsingle_gpu:\tCompiles bioNMF-GPU (single-GPU version).\n\
+	\tsingle_gpu:\tCompiles NMF-mGPU (single-GPU version).\n\
 	\n\
 	\tmulti_gpu:\tCompiles bioNMF-mGPU (multi-GPU version).\n\
 			\t\t\tTarget NOT compiled by default.\n\
@@ -1386,7 +1387,7 @@ help_sm_versions_message := "\n\
 help_tools_message := "\n\
  Tool programs:\n\
  \n\
- In addition to \"bioNMF-GPU\", there are some utility programs to make easier\n\
+ In addition to \"NMF-mGPU\", there are some utility programs to make easier\n\
  working with input files. It includes a program for binary-text file conversion\n\
  and another to generate input matrices with random data (useful for testing).\n\
  \n\
@@ -1400,7 +1401,7 @@ help_tools_message := "\n\
  'CUDA_HOME' and/or 'SM_VERSIONS' parameters.\n\
  \n\
  1) Binary-text file converter:\n\
-	" "  Since \"bioNMF-GPU\" accepts input matrices stored in a binary or ASCII-text\n\
+	" "  Since \"NMF-mGPU\" accepts input matrices stored in a binary or ASCII-text\n\
 	" "  file, this program allows file conversion between both formats.\n\
 	" "  For binary files, there are two sub-formats: \"native\" and non-\"native\".\n\
 		\n\

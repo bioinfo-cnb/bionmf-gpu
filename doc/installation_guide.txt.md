@@ -1,7 +1,7 @@
 <!--
  ************************************************************************
  *
- * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ * NMF-mGPU -- Non-negative Matrix Factorization on multi-GPU systems.
  *
  * Copyright (C) 2011-2014:
  *
@@ -16,20 +16,20 @@
  *		E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-GPU.
+ * This file is part of NMF-mGPU.
  *
- * BioNMF-GPU is free software: you can redistribute it and/or modify
+ * NMF-mGPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-GPU is distributed in the hope that it will be useful,
+ * NMF-mGPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
+ * along with NMF-mGPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ************************************************************************
 -->
@@ -37,124 +37,132 @@
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
  <html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml">
  <head>
-   <meta name="application-name" content="BioNMF-GPU"/>
+   <meta name="application-name" content="NMF-mGPU"/>
    <meta name="author" content="Edgardo Mejia-Roa (edgardomejia@fis.ucm.es), Carlos Garcia, Jose Ignacio Gomez, Manuel Prieto, Francisco Tirado, and Alberto Pascual-Montano (pascual@cnb.csic.es)."/>
-   <meta name="description" content="Non-negative Matrix Factorization (NMF) on (multi-)GPU systems, for Biology. Installation guide"/>
+   <meta name="description" content="Non-negative Matrix Factorization (NMF) for Biology on multi-GPU systems. Installation guide"/>
    <meta name="keywords" content="bioNMF, NMF, Matrix factorization, GPU, multi-GPU, GPGPU, NVIDIA, CUDA, CUBLAS, Bioinformatics"/>
    <meta name="language" content="en"/>
    <meta name="copyright" content="(C) 2011-2014 Edgardo Mejia-Roa (edgardomejia@fis.ucm.es). ArTeCS Group, Complutense University of Madrid (UCM), Spain."/>
    <meta http-equiv="content-Type" content="text/html; charset=UTF-8"/>
-   <meta http-equiv="last-modified" content="2014/04/30" scheme="YYYY/MM/DD"/>
+   <meta http-equiv="last-modified" content="2014/11/27" scheme="YYYY/MM/DD"/>
    <link rel="stylesheet" type="text/css" href="styles.css"/>
-   <title>BioNMF-GPU Installation Guide</title>
+   <title>NMF-mGPU Installation Guide</title>
  </head>
  <body>
 
 <!-- ==================================================== -->
 
-# *BioNMF-GPU* INSTALLATION GUIDE
+# *NMF-mGPU* INSTALLATION GUIDE
 
- This document shows how to install and compile *bioNMF-GPU*.
+This document shows how to install and compile *NMF-mGPU*.
 
- **Index:**
+**Index:**
 
-   1. Introduction.
-   2. System requirements.
-   3. Directory structure.
-   4. Compiling *bioNMF-GPU*.
-   5. Utility programs.
-   6. *BioNMF-GPU* execution setup.
-   7. Testing *bioNMF-GPU*.
-   8. Issues/troubleshooting.
-   9. How cite *bioNMF-GPU*.
-
-
-*****************************
-
-
-## 1. Introduction
-
- ***BioNMF-GPU*** implements the ***Non-negative Matrix Factorization*** (***NMF***) algorithm by making use of a ***Graphics-Processing Unit*** (***GPU***). NMF takes an input matrix (**V**) and returns two matrices, **W** and **H**, whose product is equal to the former (i.e., **V** ~ **W** \* **H**). If **V** has *n* rows and *m* columns, then dimensions for **W** and **H**, will be *n* × *k* and *k* × *m*, respectively. The *factorization rank* (*"k"*) specified by the user, is usually a value much less than *n* and *m*.
-
- This GPU implementation of the NMF algorithm has been developed using the NVIDIA's ***Compute Unified Device Architecture*** (***CUDA***) programming model. *CUDA* represents the GPU as a programmable *co-processor*, which will be then responsible of computing all required algebraic operations.
-
- *BioNMF-GPU* is able to process matrices of any size. Even on detached devices with a dedicated (and limited) on-board memory, the NMF algorithm can be executed on large datasets by blockwise transferring and processing the input matrix.
-
- Finally, this software can make use of multiple GPU devices through ***MPI*** (***Message-Passing Interface***).
-
- Please, see our *User guide* for implementation details, as well as a description of software usage.
+   1. [Introduction](#intro).
+   2. [System requirements](#requirements).
+   3. [Directory structure](#folders).
+   4. [Compiling *NMF-mGPU*](#compilation).
+   5. [Utility programs](#tools).
+   6. [*NMF-mGPU* execution setup](#setup).
+   7. [Testing *NMF-mGPU*](#testing).
+   8. [Issues/troubleshooting](#troubleshooting).
+   9. [How cite *NMF-mGPU*](#citation).
 
 
 *****************************
 
 
-## 2. System requirements
+## 1. <a id="intro">Introduction</a>
+
+***NMF-mGPU*** implements the ***Non-negative Matrix Factorization*** (***NMF***) algorithm by making use of ***Graphics Processing Units*** (***GPUs***). NMF takes an input matrix (**V**) and returns two matrices, **W** and **H**, whose product is equal to the former (i.e., **V** ~ **W** \* **H**). If **V** has *n* rows and *m* columns, then dimensions for **W** and **H**, will be *n* × *k* and *k* × *m*, respectively. The *factorization rank* (*"k"*) specified by the user, is usually a value much less than both, *n* and *m*.
+
+   This software has been developed using the NVIDIA's [***CUDA***][CUDA_homepage] ([***Compute Unified Device Architecture***][CUDA_homepage]) framework for GPU Computing. *CUDA* represents a GPU device as a programmable general-purpose *coprocessor* able to perform linear-algebra operations.
+
+   On detached devices with low on-board memory available, large datasets can be blockwise transferred from the CPU's main memory to the GPU's memory and processed accordingly. In addition, *NMF-mGPU* has been explicitly optimized for the different CUDA architectures.
+
+   Finally, *NMF-mGPU* also provides a *multi-GPU* version that makes use of multiple GPU devices through the [***MPI***][MPI_homepage] ([***Message Passing Interface***][MPI_homepage]) standard.
 
 
-### 2.1. Linux / Mac OS X:
+[CUDA_homepage]: <http://www.nvidia.com/object/cuda_home_new.html> "CUDA Homepage"
+[MPI_homepage]: <http://mpi-forum.org/> "MPI Forum"
 
-* `CUDA Toolkit`, version 4.2 or greater, freely available at <https://developer.nvidia.com/cuda-downloads/>.
-* Any of the following compilers:
-	 + `GNU C/C++ Compiler` (`gcc`).
-	 + `Clang C/C++ front-end for LLVM`.
-* `GNU Make`.
-
-On Mac OS X, the `Clang` compiler can be installed from [`Xcode`](https://developer.apple.com/technologies/tools/). It will be used by default, in the compilation process. Please read the [CUDA Release Notes][RN] for any `clang`/`Xcode` -related issue.
-
-An exhaustive list of requirements, as well as detailed installation instructions, can be found on the *"Getting Starting"* guides for [Linux](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-linux/index.html) and [Mac OS X](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-mac-os-x/index.html).
-
-
-**Important notes:**
-   * Folder names containing whitespace characters are *NOT* supported by *BioNMF-GPU*. In that case, either use a (soft) link, or rename your CUDA installation directory.
-   * `Clang` compiler is **not** supported on 32-bits systems. Please, read the [CUDA Release Notes][RN] for details.
-
-[RN]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html> "CUDA Release Notes"
-
-<!-- ==================== -->
-
-### 2.2. Microsoft Windows:
-
-To compile *bioNMF-GPU* on this platform, you will need the following software:
-
-   * `NVIDIA CUDA Toolkit`, version 4.2 or greater, freely available at <https://developer.nvidia.com/cuda-downloads/>.
-   * [`Microsoft Visual Studio`](http://www.microsoft.com/visualstudio/), versions 2008, 2010 or 2012.  
-	 In order to install all features, the CUDA Toolkit requires the **full version**, not just the *Express edition*.
-
-See detailed installation instructions on the [Getting Starting guide for Windows][GSGW]. After installing the software, you can use the project template files supplied with the Toolkit to create a new project and import the *bioNMF-GPU*'s source files. There are step-by-step instructions on *Chapter 2* of the [CUDA Samples Reference Manual](http://docs.nvidia.com/cuda/cuda-samples/index.html).
-
-[GSGW]: <http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-microsoft-windows/index.html> "Getting Starting guide for Windows"
-
-<!--
-#### Alternative install process:
-
-If you prefer a UNIX-like compilation process (i.e., using the `Makefile` we provide, in a command-line environment), or you do not have access to a *full version* of Visual Studio, you can perform the steps below. Note, however, that `nvcc.exe` (the CUDA Compiler) still requires the Microsoft Visual Studio compiler (`cl.exe`), but it can be found on any (old and/or free) `Visual C++ Express edition`.
-
-   1. Download the [`CUDA Toolkit`](https://developer.nvidia.com/cuda-downloads/) and uncompress the file.  
-	  It is highly recommended to *previously* move the downloaded file to an empty folder, since it does not contain a *"root"* directory, but multiple files and folders. The installation package can be extracted using a decompression tool which supports the LZMA compression method, such as [`7-zip`](http://www.7-zip.org) or [`WinZip`](http://www.winzip.com).
-
-   2. Execute the file `setup.exe` and install the display driver *only*.
-
-   3. Check your GPU device and the driver by executing any of the CUDA sample programs (e.g., `CUDASamples\Bin\win32\Release\deviceQuery.exe`). They are *statically* linked and do not require any library. You can find some screenshots on the [Getting Starting Guide for Windows][GSGW] (there is a copy of such document in the `CUDADocumentation\` folder).
-
-	  From this point, the only folder to keep is `CUDAToolkit\`, which can be moved to any desired location. Everything else from the extracted file can be safety deleted, unless you want to also keep the documentation and/or the sample programs (folders `CUDADocumentation\` and `CUDASamples\`, respectively).
-
-   4. Download and install [`Cygwin`](http://cygwin.com/index.html), which contains a set of GNU tools. **Please include the shell interface it provides**. It is not necessary to install the GNU compiler (`gcc`), since it will not be used by the CUDA compiler.  
-	  **NOTE:** folder names containing whitespace characters are *NOT* supported by *BioNMF-GPU*. In that case, either use a (soft) link, or rename your CUDA installation directory.
-
-   5. Download and install any old and/or free `MS Visual C++ Express edition`, such as the 2005, 2008 or 2010 version. You don't need to setup the graphical environment.
-
-   6. Edit the `Makefile` we provide, go to the *"Compiler options"* section, and uncomment the `nvcc` flag '`--driver-prefix`'. You might need to also uncomment and adjust the flag '`--compiler-bindir`' in order to specify the path to `cl.exe` (the MS Visual C++ compiler).  
-	  See a detailed description of these flags on the *"CUDA Compiler Driver NVCC" reference guide*, which can be found at folder `CUDADocumentation/` or at URL <http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html>.
-
-Now, you can follow the rest of this installation guide as if you were on a UNIX system.
--->
 
 *****************************
 
 
-## 3. Directory structure
+## 2. <a id="requirements">System Requirements</a>
 
-This section lists the files and folders you should find after downloading and decompressing *BioNMF-GPU*.
+ The main system requirements for *NMF-mGPU* are the following:
+
+   * **UNIX System (GNU/Linux or Darwin/Mac OS X)**. *NMF-mGPU* has not been tested on Microsoft Windows yet. <!-- TODO: Try on MS Windows -->
+
+   * One or more **CUDA-capable GPU device(s)**: A detailed list of compatible hardware can be found at <http://developer.nvidia.com/cuda-gpus>  
+	 Please note that **all** devices must be of the same architecture (i.e., heterogeneous GPU clusters are not supported yet).
+
+   * **CUDA Toolkit and CUDA Driver**: They are freely available at the [CUDA Downloads Page][CUDA-Download]. Nevertheless, for *deprecated* GPU devices and/or OS platforms, you can download a previous CUDA release (e.g., version `5.5`) from the [CUDA Archive Page][CUDA-OR-Download]. Please note that *NMF-mGPU* requires, at least, the version `4.2`.
+
+   * A `C` compiler **conforming to the `C99` standard**, such as [GNU GCC](https://gcc.gnu.org) or [LLVM Clang](http://llvm.org/).
+
+   * The ***optional* multi-GPU version** also requires an *MPI-2.0* (or greater) software library, such as [OpenMPI](http://www.open-mpi.org/) or [MPICH](http://www.mpich.org/).
+
+
+[CUDA-Download]: <http://developer.nvidia.com/cuda-downloads/> "CUDA Download Page"
+[CUDA-OR-Download]: <https://developer.nvidia.com/cuda-toolkit-archive/> "CUDA Archive Page"
+
+
+Please note that *no* CUDA driver, or even a GPU device, is required to *just* compile *NMF-mGPU*. This is useful, for instance, in cluster environments where the program shall be compiled in a front-end not equipped with a GPU device (e.g., a virtual machine).  
+
+
+Further system requirements and installation steps for CUDA software, vary according to your operating system:
+
+   * **GNU/Linux**: For instance, on **Ubuntu 14.04**:
+
+	   + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the "*Using NVIDIA binary driver*" option. You can also do this by going to the terminal and typing: `sudo apt-get install nvidia-current`. You may have to reboot the system in order to use this driver after installing it.
+
+	   + **Additional packages**: You'll need the following packages in order to make *NMF-mGPU* work: `build-essential`, `nvidia-cuda-dev` and `nvidia-cuda-toolkit`. You can install them using the *Ubuntu Software Center*, or via terminal by typing: `sudo apt-get install build-essential nvidia-cuda-dev nvidia-cuda-toolkit`
+
+	   + **Multi-GPU version (optional)**: This version of *NMF-mGPU* also requires the package: `openmpi` or `mpich`.
+
+    For other GNU/Linux distributions, we recommend to read the [Getting Starting Guide for GNU/Linux](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-linux/index.html#package-manager-installation). Similarly, the [Release Notes][CRN] contain important information about [unsupported][CRN-unsupported] and [deprecated][CRN-deprecated] features, as well as [known issues][CRN-issues].
+
+
+   * For **Darwin/Mac OS X**:
+
+	   + **`C`/`C++` compiler**: Please install the Apple's [Xcode](https://developer.apple.com/xcode/downloads/) toolset. Some versions may require to explicitly add the *Command Line Developer Tools* plug-in in order to make available the required commands on the Terminal.
+
+	   + **CUDA Toolkit and Drivers**: Just download and execute the proper `.dmg` file from the [CUDA Download Page][CUDA-Download] (or the [Archive Page][CUDA-OR-Download] for previous releases), and follow the instructions.
+
+	We highly recommend to read the [Getting Starting Guide for Darwin/Mac OS X](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-mac-os-x/index.html) for detailed instructions. Similarly, the [Release Notes][CRN] contain important information about [unsupported][CRN-unsupported] and [deprecated][CRN-deprecated] features, as well as [known issues][CRN-issues].
+
+
+### Warning:
+
+   * **Folder names containing whitespace characters are *NOT* supported by *NMF-mGPU***. Please avoid them in the path to your *CUDA Toolkit* installation directory. A (soft) link can be used as a workaround. For instance:
+
+			ln  -s   /Developer/Whitespaced\ foldername/cuda     /Developer/cuda
+
+
+   * **The [LLVM Clang](http://llvm.org/) compiler is *NOT* supported on *32-bits* system** since it does not recognize the `-malign-double` switch. Please read the [CUDA Release Notes on compilers][CRN-compiler] for details.
+
+
+[CRN]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html> "CUDA Release Notes"
+[CRN-unsupported]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html#unsupported-features>
+    "CUDA Release Notes - Unsupported Features"
+[CRN-deprecated]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html#deprecated-features>
+    "CUDA Release Notes - Deprecated Features"
+[CRN-issues]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html#known-issues-title> "CUDA Release Notes - Known Issues"
+[CRN-compiler]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html#cuda-compiler-known-issues>
+    "CUDA Release Notes - Compiler Known Issues"
+
+
+
+*****************************
+
+
+
+## 3. <a id="folders">Directory structure</a>
+
+This section lists the files and folders you should find after downloading and decompressing *NMF-mGPU*.
 
 ### 3.1. Files and folders
 
@@ -168,7 +176,7 @@ After extraction of the compressed file, you should see the following folders:
 
 In addition, there are some important files that must be customized *before* the compilation process:
 
-   * `Makefile`	─ Compilation directives.
+   * `Makefile`	─ Compilation directives for UNIX platforms.
    * `env.sh`	─ Required environment variables (see chapter 6.1 *Execution environment*).
 
 <!-- ==================== -->
@@ -178,7 +186,7 @@ In addition, there are some important files that must be customized *before* the
 The `src/` folder is organized as follow:
 
    * Main-program files (`C99` code):
-	 + `bioNMF-GPU.c`					─ Main program (single-GPU version).
+	 + `NMF-mGPU.c`					─ Main program (single-GPU version).
 
    * CUDA files (compiled as `C++` code):
 	 + `NMF_routines.cu`				─ NMF-related operations.
@@ -212,7 +220,7 @@ The `include/` folder is similarly organized:
 *****************************
 
 
-## 4. Compiling *bioNMF-GPU*
+## 4. <a id="compilation">Compiling *NMF-mGPU*</a>
 
  This section describes all supported options provided by our `Makefile`, which allow to customize the compilation process.
 
@@ -226,11 +234,11 @@ The `include/` folder is similarly organized:
 
  List of (main) available actions:
 
-   * `all`: Compiles all programs (*default* target if none specified).
+   * `all`: *DEFAULT target*. Compiles all programs except the multi-GPU version. It is equivalent to: '`single_gpu tools`'.
 
-   * `single_gpu`: Compiles *bioNMF-GPU* (single-GPU version) only.
+   * `single_gpu`: Compiles *NMF-mGPU* (single-GPU version) only.
 
-   * `multi_gpu`: Compiles *bioNMF-mGPU* (multi-GPU version) only.
+   * `multi_gpu`: Compiles *bioNMF-mGPU* (multi-GPU version) only. Target *NOT* compiled by default.
 
    * `tools`: Compiles some utility programs (see section *5 "Utility programs"* for details).  
 	 Currently, this target does *not* require any CUDA-related configuration or software. In particular, it is *not* necessary to specify  `CUDA_HOME` or `SM_VERSIONS` parameters.
@@ -243,11 +251,11 @@ The `include/` folder is similarly organized:
 
    * `clobber`: Removes the entire binary directory, with all executable and object files.
 
-   * `clobber_single_gpu`, `clobber_tools`: Removes the specified executable and its associated object files.
+   * `clobber_single_gpu`, `clobber_multi_gpu`, `clobber_tools`: Removes the specified executable and its associated object files.
 
    * `clean`: Removes all object files (i.e., `*.o`), keeping any executable program.
 
-   * `clean_single_gpu`, `clean_tools`: Removes all object files associated to the specified program.
+   * `clean_single_gpu`, `clean_multi_gpu`, `clean_tools`: Removes all object files associated to the specified program.
 
 <!-- ==================== -->
 
@@ -328,10 +336,10 @@ You can add other compiling options or overwrite the default flags, with the fol
 
    * `CC`: Compiler for C-only programs and CUDA host code.
 	 Supported compilers: '`gcc`' and '`clang`'.
-	 Default value: '`gcc`'
+	 Default value: '`clang`' for Darwin (i.e. Mac OS X). '`gcc`' otherwise.
 
    * `NVCC`: Compiler for CUDA device code, and CUDA kernel-related host code.
-	 Default value: '`nvcc`'
+	 Default value: '`nvcc`'.
 
    * `CFLAGS`: Options for `C`-only programs (excludes `CUDA` code).  
 	 They are also included in the final linking stage.
@@ -469,7 +477,7 @@ Further tunning for a particular GPU architecture can be performed by customizin
 
 ### 4.5. Compilation process and generated files
 
-To compile *bioNMF-GPU* and utility programs, you just need to execute at the prompt:
+To compile *NMF-mGPU* and utility programs, you just need to execute at the prompt:
 
 		$> make  [ all ]  CUDA_HOME="/path/to/CUDA-Toolkit"
 
@@ -494,9 +502,9 @@ or as environment variables, for some of them:
 			$> export CUDA_HOME="/usr/local/cuda-5.5"
 			$> make CUDA_HOME="/usr/local/cuda-4.1"
 
-	 *bioNMF-GPU* will be compiled with CUDA Toolkit version *4.1*.
+	 *NMF-mGPU* will be compiled with CUDA Toolkit version *4.1*.
 
-   * Since the `env.sh` script also requires the path to your CUDA Toolkit (see chapter 6.1 *"Execution environment"*), you can perform both actions in a single step by executing such script *before* compiling *bioNMF-GPU*.  
+   * Since the `env.sh` script also requires the path to your CUDA Toolkit (see chapter 6.1 *"Execution environment"*), you can perform both actions in a single step by executing such script *before* compiling *NMF-mGPU*.  
      That is,
 
 			$> .  env.sh  "/path/to/CUDA"
@@ -515,7 +523,7 @@ If such variable is set to '`2`', it also prints all `nvcc` internal commands. P
 
 After compilation, you should find the following files and folders (among others) in `bin/` directory:
 
-   * `bin/NMF_GPU`	─ *bioNMF-GPU* executable file (single-GPU version).
+   * `bin/NMF_GPU`	─ *NMF-mGPU* executable file (single-GPU version).
    * `bin/tools/`	─ Utility programs (see next section).
    * `bin/obj/`		─ All object files.
 
@@ -527,9 +535,9 @@ The `obj/` folder contains all object files following a directory structure simi
 *****************************
 
 
-## 5. Utility programs
+## 5. <a id="tools">Utility programs</a>
 
-In addition to *bioNMF-GPU*, there are some utility programs to make easier working with input files. It includes a program for binary-text file conversion, and another to generate input matrices with random data (useful for testing *bioNMF-GPU*).
+In addition to *NMF-mGPU*, there are some utility programs to make easier working with input files. It includes a program for binary-text file conversion, and another to generate input matrices with random data (useful for testing *NMF-mGPU*).
 
 To compile such programs, just execute:
 
@@ -545,7 +553,7 @@ which will generate the following files:
 
 ### 5.1. Binary-text file converter
 
-Since *bioNMF-GPU* accepts input matrices stored in a binary or text file, this program allows file conversion between both formats. For binary files, there are two sub-formats: *"native"* and *non-"native"*.
+Since *NMF-mGPU* accepts input matrices stored in a binary or text file, this program allows file conversion between both formats. For binary files, there are two sub-formats: *"native"* and *non-"native"*.
 
    * ***"Native"* mode** refers to *raw* I/O. That is, data are stored/loaded with the precision specified at compilation time: '`float`' if the `Makefile` parameter "`SINGLE`" was set to '`1`', or '`double`' otherwise. Matrix dimensions are stored/loaded in a similar way (i.e., '`unsigned int`', if "`UNSIGNED`" was set to '`1`'; '[`signed`] `int`', otherwise). This mode is faster because *no* error checking is performed. Therefore, it should *not* be used to read untrusted input files.  
      **Important note:** In *output* files, this mode also *skips* all data transformation steps (e.g., *matrix transposing*). In particular, matrix **H** (which is computed in transposed mode due to performance reasons) will *not* be "restored" before writing the output file.
@@ -553,7 +561,7 @@ Since *bioNMF-GPU* accepts input matrices stored in a binary or text file, this 
    * In **non-*"native"* mode**, data are *always* stored/loaded using *double* precision (and *unsigned* integers for matrix dimensions), regardless the options specified at compilation. This is the recommended mode for input or final output data, since every datum is checked for invalid format.
 
 <!-- ALERT: TODO: -->
-All file formats accepted by *bioNMF-GPU* are detailed in section *3 "Data-file format"* of the *User guide*, similarly for program usage (section *6 "Utility programs"*). Finally, there are some examples of valid input files in the `test/` folder.
+All file formats accepted by *NMF-mGPU* are detailed in section *3 "Data-file format"* of the *User guide*, similarly for program usage (section *6 "Utility programs"*). Finally, there are some examples of valid input files in the `test/` folder.
 
 <!-- ==================== -->
 
@@ -571,13 +579,13 @@ All file formats accepted by *bioNMF-GPU* are detailed in section *3 "Data-file 
 *****************************
 
 
-## 6. *BioNMF-GPU* execution setup
+## 6. <a id="setup">*NMF-mGPU* execution setup</a>
 
- This section describes how to set up an appropriate environment to execute *bioNMF-GPU*.
+ This section describes how to set up an appropriate environment to execute *NMF-mGPU*.
 
 ### 6.1. Execution environment
 
- When *bioNMF-GPU* is compiled on a UNIX system, some of the required libraries (e.g, *CUBLAS*) are *dynamically* linked. That is, they are not embedded into the executable file, but the program locates and loads them *at runtime*.
+ When *NMF-mGPU* is compiled on a UNIX system, some of the required libraries (e.g, *CUBLAS*) are *dynamically* linked. That is, they are not embedded into the executable file, but the program locates and loads them *at runtime*.
 
  To set up an appropriate execution environment, you can use the provided script `env.sh`, as follow:
 
@@ -611,10 +619,10 @@ All file formats accepted by *bioNMF-GPU* are detailed in section *3 "Data-file 
 
 
 #### Compilation & execution environment in a single step:
- The script `env.sh` also exports the environment variable '`CUDA_HOME`' containing the path to your CUDA Toolkit (either because it was specified as an argument, or because it was derived from `PATH`). As described in section *4.2 "`Makefile` parameters"*, this variable is required for the compilation process. Therefore, you can set up both, compilation and execution environments, in a single step by executing `env.sh` *before* compiling *bioNMF-GPU*. That is,
+ The script `env.sh` also exports the environment variable '`CUDA_HOME`' containing the path to your CUDA Toolkit (either because it was specified as an argument, or because it was derived from `PATH`). As described in section *4.2 "`Makefile` parameters"*, this variable is required for the compilation process. Therefore, you can set up both, compilation and execution environments, in a single step by executing `env.sh` *before* compiling *NMF-mGPU*. That is,
 
 		$> .  env.sh  "/path/to/CUDA"			# Sets up the environment
-		$> make  SM_VERSIONS=13   FAST_MATH=1	# Compiles bioNMF-GPU
+		$> make  SM_VERSIONS=13   FAST_MATH=1	# Compiles NMF-mGPU
 		$> bin/NMF_GPU <input_file> [...]		# Executes the program
 
 
@@ -634,7 +642,7 @@ All file formats accepted by *bioNMF-GPU* are detailed in section *3 "Data-file 
 			dyldinfo  -dylibs  <path_to_executable_file>
 
 
-For instance, on a 32-bits Ubuntu Linux, with a CUDA Toolkit version 5.5 installed on '`/usr/local/cuda-5.5`', the output for *bioNMF-GPU* (single-GPU version) should be something similar to:
+For instance, on a 32-bits Ubuntu Linux, with a CUDA Toolkit version 5.5 installed on '`/usr/local/cuda-5.5`', the output for *NMF-mGPU* (single-GPU version) should be something similar to:
 
 		$> ldd bin/NMF_GPU
 				linux-gate.so.1 =>  (0xb7754000)
@@ -670,9 +678,9 @@ For instance, on a 32-bits Ubuntu Linux, with a CUDA Toolkit version 5.5 install
 *****************************
 
 
-## 7. Testing *bioNMF-GPU*
+## 7. <a id="testing">Testing *NMF-mGPU*</a>
 
-TBD
+ TBD
 
 <!-- ALERT: TODO -->
 
@@ -680,7 +688,7 @@ TBD
 *****************************
 
 
-## 8. Issues/Troubleshooting
+## 8. <a id="troubleshooting">Issues/Troubleshooting</a>
 
    1. `Dash: env.sh: argument not recognized.`
 
@@ -757,13 +765,16 @@ TBD
 
 #### 7. `gcc: Option '-<X>' not recognized.`
 
+ TBD
+
 <!-- ALERT: TODO: -->
-TBD.
+
 
 *****************************
 
 
-## 9. How to cite *bioNMF-GPU*.
+
+## 9. <a id="citation">How to cite *NMF-mGPU*.</a>
 
  If you use this software, please cite the following work:
 

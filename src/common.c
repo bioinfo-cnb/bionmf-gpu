@@ -1,6 +1,6 @@
 /************************************************************************
  *
- * BioNMF-GPU 2.0 -- Non-negative Matrix Factorization on (multi-)GPU systems.
+ * NMF-mGPU -- Non-negative Matrix Factorization on multi-GPU systems.
  *
  * Copyright (C) 2011-2014:
  *
@@ -15,25 +15,25 @@
  *	E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
  *
  *
- * This file is part of bioNMF-GPU.
+ * This file is part of NMF-mGPU.
  *
- * BioNMF-GPU is free software: you can redistribute it and/or modify
+ * NMF-mGPU is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * BioNMF-GPU is distributed in the hope that it will be useful,
+ * NMF-mGPU is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with BioNMF-GPU. If not, see <http://www.gnu.org/licenses/>.
+ * along with NMF-mGPU. If not, see <http://www.gnu.org/licenses/>.
  *
  ***********************************************************************/
 /**********************************************************
  * common.c
- *	Some generic definitions, constants, macros and functions used by bioNMF-GPU.
+ *	Some generic definitions, constants, macros and functions used by NMF-mGPU.
  *
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
@@ -700,7 +700,7 @@ int print_nmf_gpu_help( char const *restrict const execname )
 	// ---------------------------
 
 	status = print_message( shown_by_all,
-				"\n\t<< bioNMF-GPU: Non-negative Matrix Factorization on GPU >>\n\n"
+				"\n\t<< NMF-mGPU: Non-negative Matrix Factorization on GPU >>\n\n"
 				"Usage:\n\t%s <filename> [ -b <native> ] [ -cr ] [ -k <factorization_rank> ] [ -i <nIters> ] "
 				"[ -j <niter_test_conv> ]\n\t\t[ -t <stop_threshold> ] [ -e <native> ] [ -z <GPU_device> ]\n\t%s -h\n\n"
 				"---------------\n\nData matrix options:\n", execname, execname );
