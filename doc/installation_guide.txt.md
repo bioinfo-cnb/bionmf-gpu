@@ -58,14 +58,14 @@ This document shows how to install and compile *NMF-mGPU*.
 **Index:**
 
    1. [Introduction](#intro).
-   2. [System requirements](#requirements).
-   3. [Directory structure](#folders).
+   2. [System Requirements](#requirements).
+   3. [Directory Structure](#folders).
    4. [Compiling *NMF-mGPU*](#compilation).
-   5. [Utility programs](#tools).
-   6. [*NMF-mGPU* execution setup](#setup).
+   5. [Utility Programs](#tools).
+   6. [*NMF-mGPU* Execution Setup](#setup).
    7. [Testing *NMF-mGPU*](#testing).
-   8. [Issues/troubleshooting](#troubleshooting).
-   9. [How cite *NMF-mGPU*](#citation).
+   8. [Issues/Troubleshooting](#troubleshooting).
+   9. [How to Cite *NMF-mGPU*](#citation).
 
 
 *****************************
@@ -110,17 +110,26 @@ This document shows how to install and compile *NMF-mGPU*.
 
 
 Please note that *no* CUDA driver, or even a GPU device, is required to *just* compile *NMF-mGPU*. This is useful, for instance, in cluster environments where the program shall be compiled in a front-end not equipped with a GPU device (e.g., a virtual machine).  
+&nbsp;
 
 
 Further system requirements and installation steps for CUDA software, vary according to your operating system:
 
    * **GNU/Linux**: For instance, on **Ubuntu 14.04**:
 
-	   + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the "*Using NVIDIA binary driver*" option. You can also do this by going to the terminal and typing: `sudo apt-get install nvidia-current`. You may have to reboot the system in order to use this driver after installing it.
+	   + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the *"Using NVIDIA binary driver"* option.  
+		 Alternatively, you can open a terminal and type:
 
-	   + **Additional packages**: You'll need the following packages in order to make *NMF-mGPU* work: `build-essential`, `nvidia-cuda-dev` and `nvidia-cuda-toolkit`. You can install them using the *Ubuntu Software Center*, or via terminal by typing: `sudo apt-get install build-essential nvidia-cuda-dev nvidia-cuda-toolkit`
+				sudo apt-get install nvidia-current
 
-	   + **Multi-GPU version (optional)**: This version of *NMF-mGPU* also requires the package: `openmpi` or `mpich`.
+		 You may have to reboot the system in order to use this driver after installing it.
+
+	   + **Additional packages**: The following packages are required: `build-essential`, `nvidia-cuda-dev` and `nvidia-cuda-toolkit`.  
+		 They can be installed through the *Ubuntu Software Center*, or via a terminal by typing: 
+
+				sudo apt-get install build-essential nvidia-cuda-dev nvidia-cuda-toolkit
+
+	   + **Multi-GPU version (optional)**: This version also requires any of the following packages: `openmpi` or `mpich`.
 
     For other GNU/Linux distributions, we recommend to read the [Getting Starting Guide for GNU/Linux](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-linux/index.html#package-manager-installation). Similarly, the [Release Notes][CRN] contain important information about [unsupported][CRN-unsupported] and [deprecated][CRN-deprecated] features, as well as [known issues][CRN-issues].
 
@@ -131,7 +140,12 @@ Further system requirements and installation steps for CUDA software, vary accor
 
 	   + **CUDA Toolkit and Drivers**: Just download and execute the proper `.dmg` file from the [CUDA Download Page][CUDA-Download] (or the [Archive Page][CUDA-OR-Download] for previous releases), and follow the instructions.
 
-	We highly recommend to read the [Getting Starting Guide for Darwin/Mac OS X](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-mac-os-x/index.html) for detailed instructions. Similarly, the [Release Notes][CRN] contain important information about [unsupported][CRN-unsupported] and [deprecated][CRN-deprecated] features, as well as [known issues][CRN-issues].
+	   + **Multi-GPU version (optional)**: Most MPI libraries are available on package managers, such as [MacPorts](http://www.macports.org/) or [Homebrew](http://brew.sh/). Otherwise, you can download the source code and compile it.
+
+	We highly recommend to read the [Getting Starting Guide for Darwin/Mac OS X](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-mac-os-x/index.html) for detailed instructions.
+
+
+Finally, we also recommend to read the [Release Notes][CRN] contain important information about [unsupported][CRN-unsupported] and [deprecated][CRN-deprecated] features, as well as [known issues][CRN-issues].
 
 
 ### Warning:
@@ -139,7 +153,6 @@ Further system requirements and installation steps for CUDA software, vary accor
    * **Folder names containing whitespace characters are *NOT* supported by *NMF-mGPU***. Please avoid them in the path to your *CUDA Toolkit* installation directory. A (soft) link can be used as a workaround. For instance:
 
 			ln  -s   /Developer/Whitespaced\ foldername/cuda     /Developer/cuda
-
 
    * **The [LLVM Clang](http://llvm.org/) compiler is *NOT* supported on *32-bits* system** since it does not recognize the `-malign-double` switch. Please read the [CUDA Release Notes on compilers][CRN-compiler] for details.
 
@@ -159,7 +172,7 @@ Further system requirements and installation steps for CUDA software, vary accor
 
 
 
-## 3. <a id="folders">Directory structure</a>
+## 3. <a id="folders">Directory Structure</a>
 
 This section lists the files and folders you should find after downloading and decompressing *NMF-mGPU*.
 
@@ -170,13 +183,13 @@ After extraction of the compressed file, you should see the following folders:
    * `doc/`		─ Installation and User guides.
    * `src/`		─ Source code.
    * `include/`	─ Header files.
-   * `test/`	─ Examples of a valid input files.
+   * `test/`	─ Examples of a valid input file.
 
 
-In addition, there are some important files that must be customized *before* the compilation process:
+In addition, there are some important files that should be customized *before* the compilation process:
 
    * `Makefile`	─ Compilation directives for UNIX platforms.
-   * `env.sh`	─ Required environment variables (see chapter 6.1 *Execution environment*).
+   * `env.sh`	─ Required environment variables (see [*NMF-mGPU Execution Setup*](#setup)).
 
 <!-- ==================== -->
 
@@ -185,9 +198,10 @@ In addition, there are some important files that must be customized *before* the
 The `src/` folder is organized as follow:
 
    * Main-program files (`C99` code):
-	 + `NMF-mGPU.c`					─ Main program (single-GPU version).
+	 + `NMF-GPU.c`					─ Main program (single-GPU version).
+	 + `NMF-mGPU.c`					─ Main program (multi-GPU version).
 
-   * CUDA files (compiled as `C++` code):
+   * CUDA files (compiled as `CUDA` code):
 	 + `NMF_routines.cu`				─ NMF-related operations.
 	 + `matrix/matrix_operations.cu`	─ Algebraic operations and data transfers on matrices.
 	 + `GPU_kernels.cu`					─ CUDA kernels (i.e., device code).
@@ -198,9 +212,9 @@ The `src/` folder is organized as follow:
 	 + `matrix/matrix_io.c`				─ Functions to read/write data matrices.
 	 + `matrix/matrix_io_routines.c`	─ Auxiliary I/O routines.
 
-   * Utility programs (`C99` code; see section *5 "Utility programs"*):
+   * Utility programs (`C99` code; see [*Utility Programs*](#tools)):
 	 + `matrix/tools/file_converter.c`	─ ASCII-Binary file conversion.
-	 + `matrix/tools/generate_matrix.c`	─ Generates a matrix with random values in text or binary format.
+	 + `matrix/tools/generate_matrix.c`	─ Generates a matrix with random values in text or binary file format.
 
 
 The `include/` folder is similarly organized:
@@ -225,7 +239,6 @@ The `include/` folder is similarly organized:
 
  Note: All the information contained in the following subsections can be printed on the screen by executing:
 
-		$> cd <BioNMF_PATH>
 		$> make help
 
 
@@ -239,14 +252,14 @@ The `include/` folder is similarly organized:
 
    * `multi_gpu`: Compiles *bioNMF-mGPU* (multi-GPU version) only. Target *NOT* compiled by default.
 
-   * `tools`: Compiles some utility programs (see section *5 "Utility programs"* for details).  
+   * `tools`: Compiles some utility programs (see [*Utility Programs*](#tools) for details).  
 	 Currently, this target does *not* require any CUDA-related configuration or software. In particular, it is *not* necessary to specify  `CUDA_HOME` or `SM_VERSIONS` parameters.
 
    * `help`: Prints a help message with all this information.
 
    * `help_sm_versions`: Prints a detailed description of valid values for the `SM_VERSIONS` parameter.
 
-   * `help_tools`: Prints a short description of available utility programs (see section *5 "Utility programs"*).
+   * `help_tools`: Prints a short description of available [*utility programs*](#tools).
 
    * `clobber`: Removes the entire binary directory, with all executable and object files.
 
@@ -279,10 +292,10 @@ The compilation process can be customized with the following parameters:
 	To generate device-specific executable code for CC **2.1**, please specify it as: '`20-21`'.  
 	See a more detailed description of this parameter below, or by executing: '`make help_sm_versions`'.  
 	This parameter is currently ignored on the `tools` target.  
-	Default value(s): `"10  13  20  30  20-21  PTX35"`.
+	Default value(s): `"13  20  30  20-21  PTX35"`.
 
    * `SINGLE`: If set to '`1`', uses single-precision data (i.e., '`float`'). Else, uses double-precision data (i.e., '`double`').  
-	 Note, however, that in Compute Capability 1.2 and lower, all double-precision operations are *demoted* to single-precision arithmetic.  
+	 Note, however, that in Compute Capability 1.2 and lower, all double-precision operations are *demoted* to single-precision arithmetic, or are not supported.  
 	 Default value: '`1`'.
 
    * `UNSIGNED`: Uses *unsigned* integers for matrix dimensions, which may generate faster code. Nevertheless, please note that *CUBLAS* library functions use *signed*-integer parameters. Therefore, matrix dimensions must *not* overflow such data type. An error message will be shown if this happens.  
@@ -374,61 +387,64 @@ For a detailed description of concepts above, please see chapter *GPU Compilatio
 
 There are three ways to specify target architecture(s) in the `SM_VERSIONS` parameter:
 
-   * **Device-specific features & code** (i.e., `PTX` and executable code with **similar** Compute Capability):
-	 Emits `PTX` assembler code, which is then compiled into executable instructions, just for the given *Compute Capability(-ies)* (CC). Since the former is just an intermediate code (i.e., it is *not* retained in the output file), and the latter is generated with a device-specific binary format, the program may not be compatible with other GPU architectures. That is, any given CC value, *"XY"*, is translated to the following `nvcc` option: "`--generate-code=arch=compute_`*XY*`,code=sm_`*XY*".
+   1. **Device-specific features & code** (i.e., `PTX` and executable code with **similar** Compute Capability):
+	  Emits `PTX` assembler code, which is then compiled into executable instructions, just for the given *Compute Capability(-ies)* (CC). Since the former is just an intermediate code (i.e., it is *not* retained in the output file), and the latter is generated with a device-specific binary format, the program may not be compatible with other GPU architectures. That is, any given CC value, *"XY"*, is translated to the following `nvcc` option: "`--generate-code=arch=compute_`*XY*`,code=sm_`*XY*".
 
-	 For instance, '`SM_VERSIONS="13  35"`' generates executable code just for devices of Compute Capability **1.3** and **3.5**, respectively. GPU devices with other CC values, such as 1.1 or 2.0, may not be able to execute the program.
+	  For instance, '`SM_VERSIONS="13  35"`' generates executable code just for devices of Compute Capability **1.3** and **3.5**, respectively. GPU devices with other CC values, such as 1.1 or 2.0, may not be able to execute the program.
 
-	 *Note:* For devices, such as CC **2.1**, that do not have a similar `PTX` CC number, please specify the nearest lower value (***"2.0"***, for the previous example) by using the dashed-separated form below.
+	  *Note:* For devices, such as CC **2.1**, that do not have a similar `PTX` CC number, please specify the nearest lower value (***"2.0"***, for the previous example) by using the dashed-separated form below.
 
 
-   * **Generic features, device-specific code** (i.e., `PTX` and executable code, with **different** Compute Capabilities):
-	 This is a generalization of the previous form. Here, different *Compute Capabilities* (CC) values can be specified for both, `PTX` and executable code, separated by a dash.  
-	 That is,
+   2. **Generic features, device-specific code** (i.e., `PTX` and executable code, with **different** Compute Capabilities):
+	  This is a generalization of the previous form. Here, different *Compute Capabilities* (CC) values can be specified for both, `PTX` and executable code, separated by a dash.  
+	  That is,
 	   > "*XY*`-`*WZ*"  (with *XY* <= *WZ*),
 
-	 emits `PTX` assembler code for CC *"X.Y"*, which is then compiled into executable instructions for a device of CC *"W.Z"*. The former, determines the target *architecture* (i.e., the available hardware/software features and functionality). The latter, specifies the target *device* in terms of binary code format.
+	  emits `PTX` assembler code for CC *"X.Y"*, which is then compiled into executable instructions for a device of CC *"W.Z"*. The former, determines the target *architecture* (i.e., the available hardware/software features and functionality). The latter, specifies the target *device* in terms of binary code format.
 
-	 Similarly as above, no `PTX` code is embedded in the output file, so the program may not be compatible with other GPU device models. That is, the previous expression is translated to the `NVCC` option: "`--generate-code=arch=compute_`*XY*`,code=sm_`*WZ*"
+	  Similarly as above, no `PTX` code is embedded in the output file, so the program may not be compatible with other GPU device models. That is, the previous expression is translated to the `NVCC` option: "`--generate-code=arch=compute_`*XY*`,code=sm_`*WZ*"
 
-	 Note that "*XY*`-`*XY*" is equivalent to just specify *"XY"* as in the previous form. On the other hand, if *XY* < *WZ*, the program is still compiled for the target device (i.e., CC *"W.Z"*), but it will only make use of features available on CC *"X.Y"*, discarding any functionality introduced since.
+	  Note that "*XY*`-`*XY*" is equivalent to just specify *"XY"* as in the previous form. On the other hand, if *XY* < *WZ*, the program is still compiled for the target device (i.e., CC *"W.Z"*), but it will only make use of features available on CC *"X.Y"*, discarding any functionality introduced since.
 
-	 *Note:* As stated above, please use this form to specify target devices, such as CC **2.1**, that do not have a similar `PTX` CC number (so, a lower value must also be given). Example: '`20-21`'.
+	  *Note:* As stated above, please use this form to specify target devices, such as CC **2.1**, that do not have a similar `PTX` CC number (so, a lower value must also be given). Example: '`20-21`'.
 
-	 For instance, '`SM_VERSIONS="10-13  20-21"`':
+	  For instance, '`SM_VERSIONS="10-13  20-21"`':
 	   + Generates executable code for a device of CC **1.3**, with the basic features that are available on CC **1.0**. In particular, it *discards* all support for double-precision floating-point data, introduced on CC **1.3**.
 	   + Compiles the algorithm with the features and functionality available on CC **2.0**, and generates a binary image for a device of CC **2.1**.
 	   + Since no `PTX` code is retained in the output file, the program may not compatible with other GPU devices (e.g., CC 3.0).
 
 
-   * **Generic features & *"code"***:
+   3. **Generic features & *"code"***:
 
-	 Emits `PTX` assembler code for the given *Compute Capability* (CC), which is then embedded into the output file. No executable code is generated. Instead, the former is dynamically compiled at runtime according to the actual GPU device. Such process is known as *Just In Time* (JIT) compilation.
+	  Emits `PTX` assembler code for the given *Compute Capability* (CC), which is then embedded into the output file. No executable code is generated. Instead, the former is dynamically compiled at runtime according to the actual GPU device. Such process is known as *Just In Time* (JIT) compilation.
 
-	 To specify a target architecture in a such way, please use the word '`PTX`' followed by the target Compute Capability.  
-	 That is,
+	  To specify a target architecture in a such way, please use the word '`PTX`' followed by the target Compute Capability.  
+	  That is,
 	   > "`PTX`*wz*",
 
-	 generates `PTX` code for Compute Capability *"w.z"*, and embeds it into the output file. Such code can be later compiled and executed on any device, with a similar or greater CC value. Similarly as previous forms, the expression above is translated to the following `nvcc` option: "`--generate-code=arch=compute_`*wz*`,code=compute_`*wz*".
+	  generates `PTX` code for Compute Capability *"w.z"*, and embeds it into the output file. Such code can be later compiled and executed on any device, with a similar or greater CC value. Similarly as previous forms, the expression above is translated to the following `nvcc` option: "`--generate-code=arch=compute_`*wz*`,code=compute_`*wz*".
 
-	 Note, however, that JIT compilation increases the startup delay. In addition, the final executable code will use just those architectural features that are available on CC *"w.z"*, discarding any functionality introduced since.
+	  Note, however, that JIT compilation increases the startup delay. In addition, the final executable code will use just those architectural features that are available on CC *"w.z"*, discarding any functionality introduced since.
 
-	 For instance, '`SM_VERSIONS="PTX10  PTX35"`':
+	  For instance, '`SM_VERSIONS="PTX10  PTX35"`':
 	   + Emits `PTX` code for the first CUDA-capable architecture (i.e., CC **1.0**). Therefore, the program can be later dynamically compiled and executed on *any* current or future GPU device. Nevertheless, it will only use the (very) basic features present on such architecture.
 	   + Generates `PTX` code that can be later compiled and executed on devices of CC **3.5**, or higher.
 	   + Any device prior to CC **3.5** (e.g., 1.3, 2.1, or 3.0), will execute the basic CC **1.0** version.
 
 
-This parameter is currently ignored on the '`tools`' target.
+Notes:
+
+   * This parameter is currently ignored on the '`tools`' target.
+   * Double-precision floating-point data are ***not*** supported on Compute Capability 1.2 and lower. The compilation process may fail if any of them is specified and the parameter `SINGLE` is set to '`0`'.
+   * By default, **no code is compiled for Compute Capabilities 1.2 and lower**, since they are being deprecated on newer versions of the CUDA Toolkit. Code for such architectures must be explicitly requested as shown in the examples above.
 
 
 Current default value(s):
 
-		"10  13  20  30  35  20-21  PTX35"
+		"13  20  30  35  20-21  PTX35"
 
 which will be translated into the following argument(s) for `NVCC`:
 
-		--generate-code=arch=compute_10,code=sm_10
 		--generate-code=arch=compute_13,code=sm_13
 		--generate-code=arch=compute_20,code=sm_20
 		--generate-code=arch=compute_30,code=sm_30
@@ -457,7 +473,7 @@ which will be translated into the following argument(s) for `NVCC`:
 #### `NVCC` options:
  Variables containing flags for `NVCC`, follow a similar naming scheme as for `CC` options. Most of options for `NVCC` are those specified as common `C`/`C++` flags, prefixed with '`--compiler-options`'.
 
- **Note for Windows CygWin/Mingw users**: It may be necessary to uncomment the '`--drive-prefix`' option in order to correctly handle filenames and paths in Windows native format.
+ <!-- **Note for Windows CygWin/Mingw users**: It may be necessary to uncomment the '`--drive-prefix`' option in order to correctly handle filenames and paths in Windows native format. -->
 
  In this section of `Makefile`, you can also find options for `nvopencc`. This tool is internally used by `nvcc` to generate `PTX` assembler code on devices of Compute Capability *1.x*. For newer devices, such options are ignored. Finally, there are flags to control `PTX` code compilation.
 
@@ -534,7 +550,7 @@ The `obj/` folder contains all object files following a directory structure simi
 *****************************
 
 
-## 5. <a id="tools">Utility programs</a>
+## 5. <a id="tools">Utility Programs</a>
 
 In addition to *NMF-mGPU*, there are some utility programs to make easier working with input files. It includes a program for binary-text file conversion, and another to generate input matrices with random data (useful for testing *NMF-mGPU*).
 
@@ -550,7 +566,7 @@ which will generate the following files:
 ***Note:*** These programs do *not* make use of the GPU device. They are implemented in pure-`C99` language, and all operations are performed on the *host* (i.e., the CPU). Therefore, they do *not* require any CUDA-related option, configuration or software. In particular, it is *not* necessary to specify the `Makefile` parameters "`CUDA_HOME`" and/or "`SM_VERSIONS`".
 
 
-### 5.1. Binary-text file converter
+### 5.1. Binary-text File Converter
 
 Since *NMF-mGPU* accepts input matrices stored in a binary or text file, this program allows file conversion between both formats. For binary files, there are two sub-formats: *"native"* and *non-"native"*.
 
@@ -564,7 +580,7 @@ All file formats accepted by *NMF-mGPU* are detailed in section *3 "Data-file fo
 
 <!-- ==================== -->
 
-### 5.2. Matrix generator
+### 5.2. Data Matrix Generator
 
  This program generates a data matrix with non-negative random values. You can select the output matrix dimensions, as well as the maximum value (i.e, all data will be between '`0.0`' and the specified value, included). In addition, the output matrix can be written as an ASCII text, or in a binary file (in any of the binary modes described above).
 
@@ -578,7 +594,7 @@ All file formats accepted by *NMF-mGPU* are detailed in section *3 "Data-file fo
 *****************************
 
 
-## 6. <a id="setup">*NMF-mGPU* execution setup</a>
+## 6. <a id="setup">*NMF-mGPU* Execution Setup</a>
 
  This section describes how to set up an appropriate environment to execute *NMF-mGPU*.
 
@@ -773,7 +789,7 @@ For instance, on a 32-bits Ubuntu Linux, with a CUDA Toolkit version 5.5 install
 
 
 
-## 9. <a id="citation">How to cite *NMF-mGPU*.</a>
+## 9. <a id="citation">How to Cite *NMF-mGPU*</a>
 
  If you use this software, please cite the following work:
 

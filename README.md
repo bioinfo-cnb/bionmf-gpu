@@ -43,7 +43,7 @@
    <meta name="language" content="en"/>
    <meta name="copyright" content="(C) 2011-2014 Edgardo Mejia-Roa (edgardomejia@fis.ucm.es). ArTeCS Group, Complutense University of Madrid (UCM), Spain."/>
    <meta http-equiv="content-Type" content="text/html; charset=UTF-8"/>
-   <meta http-equiv="last-modified" content="2014/12/07" scheme="YYYY/MM/DD"/>
+   <meta http-equiv="last-modified" content="2015/01/03" scheme="YYYY/MM/DD"/>
    <link rel="stylesheet" type="text/css" href="doc/styles.css"/>
    <title>NMF-mGPU: Non-negative Matrix Factorization on multi-GPU systems</title>
  </head>
@@ -66,6 +66,7 @@
 [MPI_homepage]: <http://mpi-forum.org/> "MPI Forum"
 
 
+*****************************  
 *****************************
 
 
@@ -74,7 +75,7 @@
 Basic steps:
 
    1. [Install the NVIDIA CUDA Toolkit and Drivers](#install).
-   2. [Download, Uncompress and Compile ***NMF-mGPU***](#compile).
+   2. [Download, Decompress and Compile ***NMF-mGPU***](#compile).
    3. [Example of Use](#example).
 
 The full [installation guide](doc/installation_guide.txt.md) can be found in the '`doc`' folder.  
@@ -105,47 +106,48 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 [CUDA-OR-Download]: <https://developer.nvidia.com/cuda-toolkit-archive/> "CUDA Archive Page"
 
 
-<!-- ++++++++++++++++++++ -->
+<!-- ==================== -->
 
 
 ### 1.2 Install Instructions
 
-   * For **GNU/Linux**
+   * For **GNU/Linux**:
 
      Instructions vary among different distributions. For instance, on **Ubuntu 14.04**:
 
 	   + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the *"Using NVIDIA binary driver"* option.  
 		 Alternatively, you can open a terminal and type:
 
-				sudo apt-get install nvidia-current
+				sudo  apt-get  install  nvidia-current
 
 		 You may have to reboot the system in order to use this driver after installing it.
 
 	   + **Additional packages**: The following packages are required: `build-essential`, `nvidia-cuda-dev` and `nvidia-cuda-toolkit`.  
 		 They can be installed through the *Ubuntu Software Center*, or via a terminal by typing: 
 
-				sudo apt-get install build-essential nvidia-cuda-dev nvidia-cuda-toolkit
+				sudo  apt-get  install  build-essential  nvidia-cuda-dev  nvidia-cuda-toolkit
 
 	   + **Multi-GPU version (optional)**: This version also requires any of the following packages: `openmpi` or `mpich`.
 
     For other GNU/Linux distribution, we recommend to read the [Getting Starting Guide for GNU/Linux](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-linux/index.html#package-manager-installation).
 
 
-   * For **Darwin/Mac OS X**
+   * For **Darwin/Mac OS X**:
 
 	   + **`C`/`C++` compiler**: Please install the Apple's [Xcode](https://developer.apple.com/xcode/downloads/) toolset. Some versions may require to explicitly add the *Command Line Developer Tools* plug-in in order to make available the required commands on the Terminal.
 
 	   + **CUDA Toolkit and Drivers**: Just download and execute the proper `.dmg` file from the [CUDA Download Page][CUDA-Download] (or the [Archive Page][CUDA-OR-Download] for previous releases), and follow the instructions.
+
+	   + **Multi-GPU version (optional)**: Most MPI libraries are available on package managers, such as [MacPorts](http://www.macports.org/) or [Homebrew](http://brew.sh/).
 
 	We highly recommend to read the [Getting Starting Guide for Darwin/Mac OS X](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-mac-os-x/index.html) for detailed instructions.
 
 
 ### Warning:
 
-  **Folder names containing whitespace characters are *NOT* supported by *NMF-mGPU***. Please avoid them in the path to your *CUDA Toolkit* installation directory. A (soft) link can be used as a workaround. For instance:
+  **Folder names containing whitespace characters are *NOT* supported**. Please avoid them in the path to your *CUDA Toolkit* installation directory. A (soft) link can be used as a workaround. For instance:
 
 		$>  ln  -s   /Developer/Whitespaced\ foldername/cuda   /Developer/cuda
-&nbsp;
 
 
 [CRN]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html> "CUDA Release Notes"
@@ -158,10 +160,10 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
     "CUDA Release Notes - Compiler Known Issues"
 
 
-<!-- ==================== -->
+*****************************
 
 
-## 2. <a id="compile">Download, uncompress, and compile ***NMF-mGPU***</a>
+## 2. <a id="compile">Download, Decompress, and Compile ***NMF-mGPU***</a>
 
 
  ***NMF-mGPU*** can be downloaded from two main sources:
@@ -182,24 +184,26 @@ To compile the program, just execute:
 		 $>  make 
 
 
-The compilation process may take some time since different versions of the software (one per GPU model) will be generated into the executable file. To compile code for just a particular GPU architecture (e.g., for *Compute Capability 3.5*), you can use the following command:
+The compilation process may take some time since different versions of the software (one per GPU model) will be generated into the executable file. To compile code for just a particular GPU architecture (e.g., for *Compute Capability 1.3*), you can use the following command:
 
-		 $>  make  SM_VERSIONS=35
+		 $>  make  SM_VERSIONS=13
+Please note that by default, **no code is compiled for *Compute Capabilities* 1.2 and lower**, since they are being deprecated on newer versions of the CUDA Toolkit. Code for such GPU models must be explicitly requested as shown in the example above.  
+&nbsp;
+
 
 
 The resulting executable file, '`NMF_GPU`', will be stored in the `bin/` folder.  
 &nbsp;
 
 
-Finally, to compile the *multi-GPU* version (not performed by default), just execute:
+Finally, to compile the *multi-GPU* version (process not performed by default), just execute:
 
 		 $>  make  multi_gpu  MPICC=<path_to_mpi>/bin/mpicc
 
-Please make sure your MPI Library is properly installed (e.g., environment variables, etc). Similarly as above, the resulting executable file, '`NMF_mGPU`' is stored in the `bin/` folder.  
-&nbsp;
+Please make sure your MPI Library is properly installed (e.g., environment variables, etc). Similarly as above, the resulting executable file, '`NMF_mGPU`' is stored in the `bin/` folder.
 
 
-<!-- ==================== -->
+*****************************
 
 
 ## 3. <a id="example">Example of use</a>
@@ -244,25 +248,27 @@ On the screen, you should see something similar to:
 After completion, both output matrices, **W** and **H**, are stored in the same folder and with a similar filename as the input matrix, but suffixed with '`_W`' and '`_H`' respectively. In the example above, such output files would be:
 
    * `test/ALL_AML_data.txt_W.txt`
-   * `test/ALL_AML_data.txt_H.txt`  
-&nbsp;
+   * `test/ALL_AML_data.txt_H.txt`
 
 
-<!-- ++++++++++++++++++++ -->
+<!-- ==================== -->
 
 
-#### Multi-GPU version
+#### Multi-GPU version:
 
 The *multi-GPU* version works similarly. Nevertheless, the MPI Standard mandates that all programs must be launched through the `mpiexec` or `mpirun` commands. Using similar arguments as the example above, *NMF-mGPU* can be executed as follow:
 
 		 mpiexec  -np 2  bin/NMF_mGPU  test/ALL_AML_data.txt  -k 2  -j 10  -t 40  -i 2000
 The argument '`-np 2`' denotes that *two* GPU devices will be used.
 
-Please make sure that *all* GPU devices are of the same architecture.  
-&nbsp;
+#### Warning:
+
+   ***All* GPU devices must have a similar *Compute Capability*.**
 
 
 <!-- ==================================================== -->
+ <br/>
+ <br/>
  </body>
  </html>
 
