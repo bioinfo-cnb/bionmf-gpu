@@ -53,7 +53,7 @@
 
 # *NMF-mGPU*: Non-negative Matrix Factorization on multi-GPU Systems
 
- ***NMF-mGPU*** implements the ***Non-negative Matrix Factorization*** (***NMF***) algorithm by making use of ***Graphics Processing Units*** (***GPUs***). NMF takes an input matrix (**V**) and returns two matrices, **W** and **H**, whose product is equal to the former (i.e., **V** ~ **W** \* **H**). If **V** has *n* rows and *m* columns, then dimensions for **W** and **H**, will be *n* × *k* and *k* × *m*, respectively. The *factorization rank* (*"k"*) specified by the user, is usually a value much less than both, *n* and *m*.
+ ***NMF-mGPU*** implements the ***Non-negative Matrix Factorization*** (***NMF***) algorithm by making use of ***Graphics Processing Units*** (***GPUs***). NMF takes an input matrix (**V**) and returns two matrices, **W** and **H**, whose product is equal to the former (i.e., **V** ~ **W** \* **H**). If **V** has *n* rows and *m* columns, then dimensions for **W** and **H**, will be *n* × *k* and *k* × *m*, respectively. The *factorization rank* ("*k*") specified by the user, is usually a value much less than both, *n* and *m*.
 
    This software has been developed using the NVIDIA's [***CUDA***][CUDA_homepage] ([***Compute Unified Device Architecture***][CUDA_homepage]) framework for GPU Computing. *CUDA* represents a GPU device as a programmable general-purpose *coprocessor* able to perform linear-algebra operations.
 
@@ -115,7 +115,7 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 
      Instructions vary among different distributions. For instance, on **Ubuntu 14.04**:
 
-	   + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the *"Using NVIDIA binary driver"* option.  
+	   + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section and check the *Using NVIDIA binary driver* option.  
 		 Alternatively, you can open a terminal and type:
 
 				sudo  apt-get  install  nvidia-current
@@ -254,16 +254,19 @@ After completion, both output matrices, **W** and **H**, are stored in the same 
 <!-- ==================== -->
 
 
-#### Multi-GPU version:
+### Multi-GPU version:
 
 The *multi-GPU* version works similarly. Nevertheless, the MPI Standard mandates that all programs must be launched through the `mpiexec` or `mpirun` commands. Using similar arguments as the example above, *NMF-mGPU* can be executed as follow:
 
 		 mpiexec  -np 2  bin/NMF_mGPU  test/ALL_AML_data.txt  -k 2  -j 10  -t 40  -i 2000
 The argument '`-np 2`' denotes that *two* GPU devices will be used.
 
-#### Warning:
+#### Warnings:
 
-   ***All* GPU devices must have a similar *Compute Capability*.**
+   * *All* GPU devices must have a **similar** *Compute Capability*.
+
+   * Please, remember to properly setup the environment of your MPI-library.
+
 
 
 <!-- ==================================================== -->
