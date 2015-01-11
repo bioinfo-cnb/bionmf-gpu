@@ -93,7 +93,7 @@ This document shows how to install and compile *NMF-mGPU*.
 
  The main system requirements for *NMF-mGPU* are the following:
 
-   * **UNIX System (GNU/Linux or Darwin/Mac OS X)**. *NMF-mGPU* has not been tested on Microsoft Windows yet. <!-- TODO: Try on MS Windows -->
+   * **UNIX System (GNU/Linux or Darwin/Mac OS X)**. *NMF-mGPU* has not been tested on Microsoft Windows yet.
 
    * One or more **CUDA-capable GPU device(s)**: A detailed list of compatible hardware can be found at <http://developer.nvidia.com/cuda-gpus>  
 	 Please note that **all** devices must be of the same architecture (i.e., heterogeneous GPU clusters are not supported yet).
@@ -473,24 +473,19 @@ which will be translated into the following argument(s) for `NVCC`:
 #### `NVCC` options:
  Variables containing flags for `NVCC`, follow a similar naming scheme as for `CC` options. Most of options for `NVCC` are those specified as common `C`/`C++` flags, prefixed with '`--compiler-options`'.
 
- <!-- **Note for Windows CygWin/Mingw users**: It may be necessary to uncomment the '`--drive-prefix`' option in order to correctly handle filenames and paths in Windows native format. -->
+<!--**Note for Windows CygWin/Mingw users**: It may be necessary to uncomment the '`--drive-prefix`' option in order to correctly handle filenames and paths in Windows native format. -->
 
- In this section of `Makefile`, you can also find options for `nvopencc`. This tool is internally used by `nvcc` to generate `PTX` assembler code on devices of Compute Capability *1.x*. For newer devices, such options are ignored. Finally, there are flags to control `PTX` code compilation.
+ In this section of the `Makefile`, you can also find options for `nvopencc`, which is a tool internally used by `nvcc` to generate `PTX` assembler code on devices of Compute Capability *1.x* only. You can ignore them for newer architectures.
+ 
+ Finally, there are flags to control `PTX` code compilation.
 
  See a detailed description of these flags on the *"CUDA Compiler Driver NVCC" reference guide*, which can be found at folder `<CUDA_HOME>/doc/`, or at URL <http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html>.
 
 
 <!-- ==================== -->
 
-### 4.4. Constants in the source code:
 
-<!-- ALERT: TODO: -->
-TBD
-Further tunning for a particular GPU architecture can be performed by customizing some constants in the source code: `GPU_kernels.cuh` ...
-
-<!-- ==================== -->
-
-### 4.5. Compilation process and generated files
+### 4.4. Compilation process and generated files
 
 To compile *NMF-mGPU* and utility programs, you just need to execute at the prompt:
 
@@ -509,9 +504,9 @@ or as environment variables, for some of them:
 
 *Notes:*
 
-   * Parameters set as environment variables *remain in effect* until you close your terminal session. So, subsequent invocations to `make`, do *not* require to specify them again, unless you want to modify their value.
+   * **Parameters set as environment variables remain in effect until you close your terminal session.** So, subsequent invocations to `make`, do *not* require to specify them again, unless you want to modify their value.
 
-   * `Makefile` arguments *have priority* over environment variables.  
+   * **`Makefile` arguments have priority over environment variables.**
 	 For instance, in:
 
 			$> export CUDA_HOME="/usr/local/cuda-5.5"
@@ -519,7 +514,7 @@ or as environment variables, for some of them:
 
 	 *NMF-mGPU* will be compiled with CUDA Toolkit version *4.1*.
 
-   * Since the `env.sh` script also requires the path to your CUDA Toolkit (see chapter 6.1 *"Execution environment"*), you can perform both actions in a single step by executing such script *before* compiling *NMF-mGPU*.  
+   * Since the `env.sh` script also requires the path to your CUDA Toolkit (see [Execution Setup](#setup)), you can perform both actions in a single step by executing such script *before* compiling *NMF-mGPU*.  
      That is,
 
 			$> .  env.sh  "/path/to/CUDA"
@@ -527,24 +522,30 @@ or as environment variables, for some of them:
 	 In any case, if no path to CUDA is specified, both, `env.sh` and `Makefile`, will try to derive it by looking for `nvcc` in all folders stored in your `PATH` environment variable.
 
 
-Finally, to show all command executed by `make`, you can use the `VERBOSE` parameter,
+Finally, to show all command executed by `make`, you can use the `VERBOSE` parameter:
 
 		$> make VERBOSE=1
 
-If such variable is set to '`2`', it also prints all `nvcc` internal commands. Please, see section *4.2 "`Makefile` parameters"* for details.
+If such variable is set to '`2`', it also prints all `nvcc` internal commands.
 
 
 #### Structure of binary folder:
 
-After compilation, you should find the following files and folders (among others) in `bin/` directory:
+After compilation, you should find the following files and folders (among others) in the `bin/` directory:
 
    * `bin/NMF_GPU`	─ *NMF-mGPU* executable file (single-GPU version).
-   * `bin/tools/`	─ Utility programs (see next section).
+   * `bin/tools/`	─ [Utility Programs](#tools).
    * `bin/obj/`		─ All object files.
 
-The `obj/` folder contains all object files following a directory structure similar to `src/` (shown on section *3.2 "Source-code directory structure"*). This folder can be safety deleted after compilation by executing:
+The `obj/` folder contains all object files following a tree structure similar to `src/` (see [*Directory Structure*](#folders)). This folder can be safety deleted after compilation by executing:
 
 		$> make clean
+
+<!-- ==================== -->
+
+### 4.5. Performance Fine-tuning:
+
+*NMF-mGPU* has been designed to take advantage of different architecture-specific features among existing GPU models. Nevertheless, device code can be further optimized for modern devices by customizing some constants in the source code. For instance, in most GPU kernels, each CUDA thread processes multiple items from global memory in order to increase the thread-level parallelism. For each kernel, the number of such operations is specified by a constant named "*\<kernel_name\>*`__ITEMS_PER_THREAD`", which is defined in `include/GPU_kernels.cuh`. The default value is set to ensure a 100% of occupancy on devices of *Compute Capability 1.x*, so it can be increased if the program will be compiled for newer GPU architectures.
 
 
 *****************************
@@ -563,7 +564,7 @@ which will generate the following files:
    * `bin/tools/file_converter`		─ Binary-text file conversions.
    * `bin/tools/generate_matrix`	─ Program to generate a synthetic-data matrix.
 
-***Note:*** These programs do *not* make use of the GPU device. They are implemented in pure-`C99` language, and all operations are performed on the *host* (i.e., the CPU). Therefore, they do *not* require any CUDA-related option, configuration or software. In particular, it is *not* necessary to specify the `Makefile` parameters "`CUDA_HOME`" and/or "`SM_VERSIONS`".
+***Note:*** These programs do *not* make use of any GPU device. They are implemented in pure-`C99` language, and all operations are performed on the *host* (i.e., the CPU). Therefore, they do *not* require any CUDA-related option, configuration or software. In particular, it is *not* necessary to specify the `Makefile` parameters "`CUDA_HOME`" and/or "`SM_VERSIONS`".
 
 
 ### 5.1. Binary-text File Converter
@@ -576,7 +577,7 @@ Since *NMF-mGPU* accepts input matrices stored in a binary or text file, this pr
    * In **non-*"native"* mode**, data are *always* stored/loaded using *double* precision (and *unsigned* integers for matrix dimensions), regardless the options specified at compilation. This is the recommended mode for input or final output data, since every datum is checked for invalid format.
 
 <!-- ALERT: TODO: -->
-All file formats accepted by *NMF-mGPU* are detailed in section *3 "Data-file format"* of the *User guide*, similarly for program usage (section *6 "Utility programs"*). Finally, there are some examples of valid input files in the `test/` folder.
+<!-- All file formats accepted by *NMF-mGPU* are detailed in section *3 "Data-file format"* of the *User guide*, similarly for program usage (section *6 "Utility programs"*). Finally, there are some examples of valid input files in the `test/` folder. -->
 
 <!-- ==================== -->
 
@@ -588,7 +589,9 @@ All file formats accepted by *NMF-mGPU* are detailed in section *3 "Data-file fo
 
    * Output file will not contain any tag (i.e., row labels, column headers or description string), just numeric data (see section *3 "Data-file formats"* in the *User guide*.)
    * The entire operation is performed on the *host* (i.e., on the CPU), *not* on the GPU device.
-   * Please, see program usage in section *6 "Utility programs"* in the *User guide*. <!-- TODO -->
+
+<!-- ALERT: TODO: -->
+<!--   * Please, see program usage in section *6 "Utility programs"* in the *User guide*. -->
 
 
 *****************************

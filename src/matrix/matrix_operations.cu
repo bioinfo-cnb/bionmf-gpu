@@ -415,6 +415,8 @@ size_t gpu_max_nitems( void )
 void init_kernel_params( index_t pitch )
 {
 
+	// NOTE: The following "*__ITEMS_PER_THREAD" constants are defined in "GPU_kernels.cuh"
+
 	/* matrix_to_row: Uses a block width equal to <pitch>. Each block reduces <REDUCE_TO_ROW__ITEMS_PER_THREAD> times its height
 	 * (see the reduction example in CUDA Samples for details). Block height must be a power of 2.
 	 */
