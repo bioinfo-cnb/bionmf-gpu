@@ -1890,7 +1890,7 @@ static void reverse_bytes( void const *restrict in, size_t size, void *restrict 
 // ---------------------------------------------
 
 /*
- * Reads the signature from a "formated" binary file: a 32-bits unsigned integer
+ * Reads the signature from a "formatted" binary file: a 32-bits unsigned integer
  * in little-endian format.
  *
  * Returns EXIT_SUCCESS, or EXIT_FAILURE if the signature is invalid.
@@ -1935,8 +1935,8 @@ static int read_signature( FILE *restrict file, bool real_data )
 // ---------------------------------------------
 
 /*
- * Loads a matrix from a "formated" binary file: double-precision data in
- * little-endian format).
+ * Loads a matrix from a "formatted" binary file: double-precision data in
+ * little-endian format.
  *
  * If (*matrix) is non-NULL, do not allocates memory, but uses the supplied one.
  * In that case, THERE MUST BE ENOUGH MEMORY ALREADY ALLOCATED (padding included).
@@ -2416,7 +2416,7 @@ static int matrix_read_tags( FILE *restrict file, index_t nrows, index_t ncols, 
 ////////////////////////////////////////////////
 
 /*
- * Loads a real-type matrix from a "formated" binary file: double-precision data,
+ * Loads a real-type matrix from a "formatted" binary file: double-precision data,
  * and 32-bits unsigned integers for matrix dimensions and the file signature,
  * all of them in little-endian format.
  *
@@ -2556,7 +2556,7 @@ int matrix_load_binary_verb( char const *restrict filename, real *restrict *rest
 ////////////////////////////////////////////////
 
 /*
- * Loads a real-type matrix from a "formated" binary file: double-precision data,
+ * Loads a real-type matrix from a "formatted" binary file: double-precision data,
  * and 32-bits unsigned integers for matrix dimensions and the file signature,
  * all of them in little-endian format.
  *
@@ -2713,7 +2713,7 @@ int matrix_load_binary( char const *restrict filename, index_t nrows, index_t nc
 ////////////////////////////////////////////////
 
 /*
- * Loads a matrix from a "native" binary file (i.e., with the native endiannes,
+ * Loads a matrix from a "native" binary file (i.e., with the native endianness,
  * the compiled types for matrix data and dimensions, and no file signature).
  *
  * Detects automatically if matrix has name, column headers and/or row labels,
@@ -3580,7 +3580,7 @@ int matrix_save_combined_ascii( char const *restrict filename, char const *restr
 ////////////////////////////////////////////////
 
 /*
- * Writes the signature to a "formated" binary file: a 32-bits unsigned integer
+ * Writes the signature to a "formatted" binary file: a 32-bits unsigned integer
  * in little-endian format.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
@@ -3687,7 +3687,7 @@ static int matrix_write_tags( FILE *restrict file, index_t nrows, index_t ncols,
 // ---------------------------------------------
 
 /*
- * Saves a real-type matrix from a "formated" binary file: double-precision data,
+ * Saves a real-type matrix from a "formatted" binary file: double-precision data,
  * and 32-bits unsigned integers for matrix dimensions and the file signature,
  * all of them in little-endian format.
  *

@@ -181,7 +181,7 @@ int matrix_load_ascii( char const *RESTRICT filename, index_t nrows, index_t nco
 ////////////////////////////////////////////////
 
 /*
- * Loads a real-type matrix from a "formated" binary file: double-precision data,
+ * Loads a real-type matrix from a "formatted" binary file: double-precision data,
  * and 32-bits unsigned integers for matrix dimensions and the file signature,
  * all of them in little-endian format.
  *
@@ -205,7 +205,7 @@ int matrix_load_binary_verb( char const *RESTRICT filename, real *RESTRICT *REST
 ////////////////////////////////////////////////
 
 /*
- * Loads a real-type matrix from a "formated" binary file: double-precision data,
+ * Loads a real-type matrix from a "formatted" binary file: double-precision data,
  * and 32-bits unsigned integers for matrix dimensions and the file signature,
  * all of them in little-endian format.
  *
@@ -331,7 +331,7 @@ int matrix_save_combined_ascii( char const *RESTRICT filename, char const *RESTR
 ////////////////////////////////////////////////
 
 /*
- * Saves a real-type matrix from a "formated" binary file: double-precision data,
+ * Saves a real-type matrix from a "formatted" binary file: double-precision data,
  * and 32-bits unsigned integers for matrix dimensions and the file signature,
  * all of them in little-endian format.
  *
