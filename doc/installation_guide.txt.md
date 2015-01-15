@@ -784,84 +784,79 @@ The argument '`-np 2`' denotes that *two* GPU devices will be used.
 
 ## 8. <a id="troubleshooting">Issues/Troubleshooting</a>
 
+
    1. `Dash: env.sh: argument not recognized.`
 
    2. `Zsh: 'env.sh' not found.`
 
-   3. Invoking '`env.sh`' on a (`t`)`csh` shell.
+   3. Trouble invoking '`env.sh`' on a (`t`)`csh` shell.
 
-   4. `Catastrophic error: could not set locale "" to allow processing of multibyte characters.`
+   4. \[32-bits\]: `clang: error: unknown argument: '-malign-double'.`
 
-   5. `/usr/include/limits.h(125): catastrophic error: could not open source file "limits.h".`
+   5. `gcc` or `clang`: `Option '-<X>' not recognized.`
 
-   6. `/usr/include/bits/stdio2.h:96: sorry, unimplemented: inlining failed in call to 'fprintf': redefined extern inline functions are not considered for inlining.`
+   6. `Catastrophic error: could not set locale "" to allow processing of multibyte characters.`
 
-   7. `gcc: Option <X> not recognized.`
+   7. `/usr/include/bits/stdio2.h:96: sorry, unimplemented: inlining failed in call to 'fprintf': redefined extern inline functions are not considered for inlining.`
 
-<!-- ==================== -->
-
-#### 1. `Dash: env.sh: argument not recognized.`
-
- On `Dash`, the argument must be specified as follow:
-
-		$> set -- <path_to_CUDA_Toolkit>
-		$> . ./env.sh
 
 <!-- ==================== -->
 
-#### 2. `Zsh: 'env.sh' not found.`
+#### 8.1. `Dash: env.sh: argument not recognized.`
 
- `Zsh` does *not* recognize the "*dot*" command ('`.`'). You must use the '`source`' command, instead. That is,
+ On `Dash` shell, the argument must be previously specified with the `set` command:
 
-		source ./env.sh [ <path_to_CUDA_Toolkit> ]
+		$>  set -- <path_to_CUDA_Toolkit>
+		$>  . ./env.sh
 
 <!-- ==================== -->
 
-#### 3. Invoking '`env.sh`' on a (`t`)`csh` shell.
+#### 8.2. `Zsh: 'env.sh' not found.`
+
+ `Zsh` does *not* recognize the "*dot*" command ('`.`'). The '`source`' command must be used, instead. That is,
+
+		$>  source ./env.sh [ <path_to_CUDA_Toolkit> ]
+
+<!-- ==================== -->
+
+#### 8.3. Trouble invoking '`env.sh`' on a (`t`)`csh` shell.
 
  The script '`env.sh`' may not work on a (`t`)`csh` shell. If you receive any error message (e.g., '`Permission denied.`' or '`Command not found.`'), you can manually set up the environment, as follow:
 
-		set CUDA_HOME="/path/to/CUDA_Toolkit/"
-		set PATH="${CUDA_HOME}/bin":${PATH}
-		set LD_LIBRARY_PATH="${CUDA_HOME}/lib":${LD_LIBRARY_PATH}
+		$>  set  CUDA_HOME="/path/to/CUDA_Toolkit/"
+		$>  set  PATH="${CUDA_HOME}/bin":${PATH}
+		$>  set  LD_LIBRARY_PATH="${CUDA_HOME}/lib":${LD_LIBRARY_PATH}
 
  On *Mac Os X*, please replace '`LD_LIBRARY_PATH`' by '`DYLD_LIBRARY_PATH`'. That is,
 
-		set DYLD_LIBRARY_PATH="${CUDA_HOME}/lib":${DYLD_LIBRARY_PATH}
+		$>  set  DYLD_LIBRARY_PATH="${CUDA_HOME}/lib":${DYLD_LIBRARY_PATH}
 
 <!-- ==================== -->
 
-#### 4. `Catastrophic error: could not set locale "" to allow processing of multibyte characters.`
+#### 8.4. \[32-bits\]: `clang: error: unknown argument: '-malign-double'.`
 
- This issue seems to be related with the Intel compiler, `icc`. Please set your `LANG` environment variable to '`en_US.ISO-8859-15`'
-
-<!-- ==================== -->
-
-#### 5. `/usr/include/limits.h(125): catastrophic error: could not open source file "limits.h".`
-
- This issue seems to be related with the Intel compiler, `icc`, version `10.1.015`. Please comment all '`#include <limits.h>`' lines and define the '`INT_MAX`' constant in the source code.  
- Example:
-
-		// #include <limits.h>
-		#ifndef INT_MAX
-			#define INT_MAX 2147483647
-		#endif
-
- Currently, the only file affected by this issue, is: '`include/index_type.h`'
+ This switch is not recognized by Clang. Therefore, this compiler **cannot** be used to generate 32-bits code. See more information on the [CUDA Release Notes on compilers][CRN-compiler].
 
 <!-- ==================== -->
 
-#### 6. `/usr/include/bits/stdio2.h:96: sorry, unimplemented: inlining failed in call to 'fprintf': redefined extern inline functions are not considered for inlining.`
+#### 8.5. `gcc` or `clang`: `Option '-<X>' not recognized`
+
+ Compiling options vary among different tools, versions, and OS. We have tested some of these combinations (e.g., `gcc-4.8` and `clang-3.4` for `Linux`, or `gcc-4.2` and `clang-3.1` for `Mac OS X`), but the list is not exhaustive. If any option is not recognized, just remove it from the `Makefile`.
+
+<!-- ==================== -->
+
+#### 8.6. `Catastrophic error: could not set locale "" to allow processing of multibyte characters.`
+
+ Try to adjust your locales to '`en_US.UTF-8`' or '`en_US.ISO-8859-15`'. For instance,
+
+		$>  export  LANG=en_US.UTF-8
+		$>  export  LC_ALL=en_US.UTF-8
+
+<!-- ==================== -->
+
+#### 8.7. `/usr/include/bits/stdio2.h:96: sorry, unimplemented: inlining failed in call to 'fprintf': redefined extern inline functions are not considered for inlining.`
 
  This issue seems to be related with `gcc`'s '`-combine`' option. Just remove it from `Makefile`.
-
-<!-- ==================== -->
-
-#### 7. `gcc: Option '-<X>' not recognized.`
-
- TBD
-
-<!-- ALERT: TODO: -->
 
 
 *****************************
