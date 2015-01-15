@@ -150,15 +150,6 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 		$>  ln  -s   /Developer/Whitespaced\ foldername/cuda   /Developer/cuda
 
 
-[CRN]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html> "CUDA Release Notes"
-[CRN-unsupported]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html#unsupported-features>
-    "CUDA Release Notes - Unsupported Features"
-[CRN-deprecated]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html#deprecated-features>
-    "CUDA Release Notes - Deprecated Features"
-[CRN-issues]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html#known-issues-title> "CUDA Release Notes - Known Issues"
-[CRN-compiler]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html#cuda-compiler-known-issues>
-    "CUDA Release Notes - Compiler Known Issues"
-
 
 *****************************
 
