@@ -442,7 +442,15 @@ else
 endif
 
 # Previous selection can be overridden with the parameter or environment variable "CC"
-CC ?= $(default_CC)
+ifneq ($(filter default undefined,$(origin CC)),)
+	CC := $(default_CC)
+else
+	# Just in case the user tried to undefine CC by assigning an empty value
+	# (instead of using the "unset" command).
+	ifeq ($(CC),)
+		CC := $(default_CC)
+	endif
+endif
 
 CC_name := $(or $(findstring gcc,$(CC)),$(findstring clang,$(CC)),$(strip $(notdir $(CC))))
 
