@@ -62,24 +62,20 @@
  *
  * Both types of structure are defined in "matrix_io_routines.h".
  *
- ****************
- *
- * WARNING:
- *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  **********************************************************/
 
-#include "matrix/matrix_io_routines.h"
+#include "matrix_io/matrix_io_routines.h"
 #include "common.h"
+#include "index_type.h"
 
-#include <stdlib.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-#include <stdint.h>	/* uintptr_t, uintmax_t */
-#include <ctype.h>	/* isblank, isprint */
 #include <math.h>	/* log10f, ceilf */
+#include <ctype.h>	/* isblank, isprint */
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <stdint.h>	/* uintptr_t, uintmax_t */
+#include <stdbool.h>
+#include <stdlib.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -329,7 +325,7 @@ size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict 
 
 		if ( ! conv ) {	// No matching performed
 
-			/* No token was matched, but there still to be read a <delimiter> or a LF ('\n') character.
+			/* No token was matched, but there still to read a <delimiter> or a LF ('\n') character.
 			 * Any existing LF ('\r') character would have been stored in 'p' and would have represented a
 			 * successful match (i.e., conv > 0).
 			 */
@@ -463,7 +459,7 @@ struct tag_t tokenize( char *restrict str, int delimiter, size_t *restrict ntoke
 		num_tokens++;
 	}
 
-	// If there are tokens to be processed, allocates more memory.
+	// If there are tokens to process, allocates more memory.
 	while ( (uintptr_t)nt * (len_pstr < max_len_pstr) ) {
 
 		len_pstr = MIN( (len_pstr * 2), max_len_pstr );
@@ -863,7 +859,7 @@ int write_tag( FILE *restrict file, struct tag_t tag, char const *restrict const
  *
  * num_tokens: Number of tokens in memory (i.e., length(tag.ptokens[])).
  *
- * pnumtokens: Number of tokens to be printed BEFORE the last one.
+ * pnumtokens: Number of tokens to print BEFORE the last one.
  *	That is, it prints tag.ptokens[ 0..(pnumtokens-1) ], followed by
  *	tag.ptokens[ num_tokens-1 ], if pnumtokens < num_tokens.
  *

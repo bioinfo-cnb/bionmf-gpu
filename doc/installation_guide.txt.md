@@ -197,37 +197,39 @@ In addition, there are some important files that should be customized *before* t
 
 The `src/` folder is organized as follow:
 
-   * Main-program files (`C99` code):
+   * Main-program files:
 	 + `NMF-GPU.c`					─ Main program (single-GPU version).
 	 + `NMF-mGPU.c`					─ Main program (multi-GPU version).
 
-   * CUDA files (compiled as `CUDA` code):
-	 + `NMF_routines.cu`				─ NMF-related operations.
-	 + `matrix/matrix_operations.cu`	─ Algebraic operations and data transfers on matrices.
-	 + `GPU_kernels.cu`					─ CUDA kernels (i.e., device code).
-	 + `GPU_setup.cu`					─ GPU set-up and management routines.
-	 + `timing.cu`						─ Timing and profiling routines.
+   * CUDA files (compiled as ISO-C code):
+	 + `NMF_routines.c`				─ NMF-related operations.
+	 + `matrix_operations.c`		─ Algebraic operations and data transfers on matrices.
+	 + `GPU_setup.c`				─ GPU set-up and management routines.
+	 + `timing.c`					─ Timing and profiling routines.
 
-   * `C` files (`C99` code):
-	 + `matrix/matrix_io.c`				─ Functions to read/write data matrices.
-	 + `matrix/matrix_io_routines.c`	─ Auxiliary I/O routines.
+   * CUDA device code:
+	 + `GPU_kernels.cu`				─ CUDA kernels.
 
-   * Utility programs (`C99` code; see [*Utility Programs*](#tools)):
-	 + `matrix/tools/file_converter.c`	─ ASCII-Binary file conversion.
-	 + `matrix/tools/generate_matrix.c`	─ Generates a matrix with random values in text or binary file format.
+   * Other C files:
+	 + `matrix_io/matrix_io.c`			─ Functions to read/write data matrices.
+	 + `matrix_io/matrix_io_routines.c` ─ Auxiliary I/O routines.
+
+   * Utility programs (see [*Utility Programs*](#tools)):
+	 + `tools/file_converter.c`		─ ASCII-Binary file conversion.
+	 + `tools/generate_matrix.c`	─ Generates a matrix with random values in text or binary file format.
 
 
 The `include/` folder is similarly organized:
 
    * `real_type.h`						─ Floating-point data definition.
    * `index_type.h`						─ Data type used for array index.
-   * `nmf_routines.cuh`
-   * `matrix_operations.cuh`
+   * `nmf_routines.h`
+   * `matrix_operations.h`
    * `GPU_kernels.cuh`
-   * `GPU_setup.cuh`
-   * `timing.cuh`
-   * `matrix/matrix_io.h`
-   * `matrix/matrix_io_routines.h`
+   * `GPU_setup.h`
+   * `timing.h`
+   * `matrix_io/matrix_io.h`
+   * `matrix_io/matrix_io_routines.h`
 
 
 *****************************
@@ -350,34 +352,33 @@ The compilation process can be customized with the following parameters:
 	 Default value: '`0`'.
 
 
-You can add other compiling options or overwrite the default flags, with the following parameters (which may be environment variables, as well):
+Default compilers can be *overridden* with following parameters or environment variables:
 
-   * `CC`: Compiler for C-only programs and CUDA host code.
-	 Supported compilers: '`gcc`' and '`clang`'.
-	 Default value: '`clang`' for Darwin (i.e. Mac OS X). '`gcc`' otherwise.
+   * `CC`: Compiler for ISO-C and CUDA-host code. Used also in the linking stage of targets "`single_gpu`" and "`tools`".
+	 Supported compilers: '`gcc`' and '`clang`'.  
+	 Default value: '`clang`' for Darwin (i.e., Mac OS X); '`gcc`', otherwise.
 
-   * `NVCC`: Compiler for CUDA device code, and CUDA kernel-related host code.
+   * `NVCC`: Compiler for CUDA device code.  
 	 Default value: '`nvcc`'.
 
-   * `CFLAGS`: Options for `C`-only programs (excludes `CUDA` code).  
-	 They are also included in the final linking stage.
+   * `MPICC`: Compiler for `MPI` code.  
+	 Default value: '`mpicc`'
 
-   * `CXXFLAGS`: Options controlling the `NVCC`'s internal compiler for `CUDA` source files.  
-	 They are automatically prefixed with '`--compiler-options`' in the command line.
 
-   * `NVCCFLAGS`: Options for the `NVCC` compiler.
+Additional flags, not affected by other input parameters, can be specified through the following parameters or environment variables:
 
-   * `LDFLAGS`: Options for the linker.
+   * `CPPFLAGS`, `CFLAGS`, `INCLUDES`, `LDFLAGS`, `LDLIBS`: Additional flags included in all targets.  
+	 **Note:** "`CFLAGS`" is IGNORED by `NVCC`. Instead, please make use of '`CXXFLAGS`' and/or '`NVCC_CFLAGS`' (see below).
 
-   * `OPENCC_FLAGS`: Flags for the `nvopencc` compiler, which generates `PTX` (intermediate) code on devices of Compute Capability *1.x*. It is ignored on newer GPU architectures.
+   * `CXXFLAGS`: Additional options controlling the `NVCC`'s internal compiler. Each word is automatically prefixed by '`--compiler-options`' in the command line. Ignored on files not compiled with `NVCC`.
 
-   * `PTXAS_FLAGS`: Flags for `PTX` code compilation, which generates the actual GPU assembler.
+   * `NVCC_CPPFLAGS`, `NVCCFLAGS`, `NVCC_INCLUDES`: Additional options for `NVCC`.
 
-   * `MPICC`: Compiler for `MPI` code.
-	  Default value: '`mpicc`'
+   * `OPENCC_FLAGS`: Additional flags for `nvopencc`, which generates `PTX` (intermediate) code on devices of *Compute Capability 1.x*. Ignored on newer GPU architectures.
 
-   * `MPICC_FLAGS`: Options for `MPI` code.  
-	  They are also included in the final linking stage.
+   * `PTXAS_FLAGS`: Additional flags for `PTX` code compilation, which generates the actual GPU assembler.
+
+   * `MPICC_CPPFLAGS`, `MPICC_CFLAGS`, `MPICC_INCLUDES`, `MPICC_LDFLAGS`, `MPICC_LDLIBS`: Additional flags for `MPICC`.
 
 
 #### The `SM_VERSIONS` parameter:
@@ -420,7 +421,7 @@ There are three ways to specify target architecture(s) in the `SM_VERSIONS` para
 
    3. **Generic features and "*code*"**:
 
-	  Emits `PTX` assembler code for the given *Compute Capability* (CC), which is then embedded into the output file. No executable code is generated. Instead, the former is dynamically compiled at runtime according to the actual GPU device. Such process is known as "*Just In Time*" (*JIT*) compilation.
+	  Emits `PTX` assembler code for the given *Compute Capability* (CC), which is then embedded into the output file. No executable code is generated. Instead, the former is dynamically compiled at runtime according to the actual GPU device. Such process is known as *Just-in-Time compilation* (*JIT*).
 
 	  To specify a target architecture in a such way, please use the word '`PTX`' followed by the target Compute Capability. That is, "`PTX`*wz*", generates `PTX` code for Compute Capability "*w.z*", and embeds it into the output file. Such code can be later compiled and executed on any device, with a similar or greater CC value. Similarly as previous forms, the expression above is translated to the following `nvcc` option: "`--generate-code=arch=compute_`*wz*`,code=compute_`*wz*".
 
@@ -580,7 +581,7 @@ which will generate the following files:
 
 Since *NMF-mGPU* accepts input matrices stored in a binary or text file, this program allows file conversion between both formats. For binary files there are two sub-formats: "*native*" and "*non-native*".
 
-   * "***Non-native***" **mode**: matrix data are stored using *double*-precision values, and 32-bits *unsigned* integers for matrix dimensions. All values must be previously converted to little-endian format, if necessary.
+   * "***Non-native***" **mode**: matrix data are stored using *double*-precision values, and 32-bits *unsigned* integers for matrix dimensions. If necessary, all values must be converted to little-endian format before the writing operation. Finally, the file contains a binary "*signature*", which will be checked when reading.
 
    * "***native***" **mode**: matrix data are stored in *raw* format according to the selected compilation parameters. That is, '`float`' values if the program was compiled in *single*-precision mode (i.e., the parameter "`SINGLE`" in `Makefile` was set to '`1`'), and '`double`' otherwise. Matrix dimensions are stored in a similar way: '`unsigned int`' if "`UNSIGNED`" was set to '`1`', and '[`signed`] `int`' otherwise. All data is stored with the native endianness.
 
@@ -619,7 +620,7 @@ You can select the output matrix dimensions, as well as the highest possible ran
  If the argument is not specified, it will be derived by looking for `nvcc` in all folders stored in your `PATH` environment variable.
 
 
- Please note this script should *not* be "*executed*" (in a sub-shell), but "*sourced*" on the current session by using the command '`.`'. On some shells, such as `zsh`, you must use the '`source`' command instead. That is,
+ Please note this script should *not* be "*executed*" (in a sub-shell), but "*sourced*" on the current session by using the command '`.`'. On some shells, such as `zsh`, you must use the '`source`' command, instead. That is,
 
 		$> source  ./env.sh  [ <path_to_CUDA_Toolkit> ]
 
@@ -791,13 +792,13 @@ The argument '`-np 2`' denotes that *two* GPU devices will be used.
 
    3. Trouble invoking '`env.sh`' on a (`t`)`csh` shell.
 
-   4. \[32-bits\]: `clang: error: unknown argument: '-malign-double'.`
+   4. Clang on 32-bits System: `error: unknown argument: '-malign-double'.`
 
    5. `gcc` or `clang`: `Option '-<X>' not recognized.`
 
    6. `Catastrophic error: could not set locale "" to allow processing of multibyte characters.`
 
-   7. `/usr/include/bits/stdio2.h:96: sorry, unimplemented: inlining failed in call to 'fprintf': redefined extern inline functions are not considered for inlining.`
+   7. 
 
 
 <!-- ==================== -->
@@ -833,7 +834,7 @@ The argument '`-np 2`' denotes that *two* GPU devices will be used.
 
 <!-- ==================== -->
 
-#### 8.4. \[32-bits\]: `clang: error: unknown argument: '-malign-double'.`
+#### 8.4. Clang on a 32-bits System: `clang: error: unknown argument: '-malign-double'.`
 
  This switch is not recognized by Clang. Therefore, this compiler **cannot** be used to generate 32-bits code. See more information on the [CUDA Release Notes on compilers][CRN-compiler].
 
@@ -841,22 +842,20 @@ The argument '`-np 2`' denotes that *two* GPU devices will be used.
 
 #### 8.5. `gcc` or `clang`: `Option '-<X>' not recognized`
 
- Compiling options vary among different tools, versions, and OS. We have tested some of these combinations (e.g., `gcc-4.8` and `clang-3.4` for `Linux`, or `gcc-4.2` and `clang-3.1` for `Mac OS X`), but the list is not exhaustive. If any option is not recognized, just remove it from the `Makefile`.
+ Compiler options vary among different tools, versions, and OS. We have tested some of these combinations (e.g., `gcc-4.8` and `clang-3.4` for `Linux`, or `gcc-4.2` and `clang-3.1` for `Mac OS X`), but the list is not exhaustive. If any option is not recognized, just remove it from the `Makefile`.
 
 <!-- ==================== -->
 
 #### 8.6. `Catastrophic error: could not set locale "" to allow processing of multibyte characters.`
 
- Try to adjust your locales to '`en_US.UTF-8`' or '`en_US.ISO-8859-15`'. For instance,
+ Try to change your locales to '`en_US.UTF-8`' or '`en_US.ISO-8859-15`'. For instance,
 
 		$>  export  LANG=en_US.UTF-8
 		$>  export  LC_ALL=en_US.UTF-8
 
 <!-- ==================== -->
 
-#### 8.7. `/usr/include/bits/stdio2.h:96: sorry, unimplemented: inlining failed in call to 'fprintf': redefined extern inline functions are not considered for inlining.`
-
- This issue seems to be related with `gcc`'s '`-combine`' option. Just remove it from `Makefile`.
+#### 8.7. 
 
 
 *****************************
@@ -877,5 +876,5 @@ The argument '`-np 2`' denotes that *two* GPU devices will be used.
  </html>
 
 <!--
-// kate: backspace-indents off; folding-markers on; indent-mode normal; indent-width 3; keep-extra-spaces off; newline-at-eof on; remove-trailing-space off; replace-trailing-space-save off; replace-tabs off; replace-tabs-save off; remove-trailing-spaces none; tab-indents on; tab-width 4;
+// kate: backspace-indents off; indent-mode normal; indent-width 3; keep-extra-spaces off; newline-at-eof on; remove-trailing-space off; replace-trailing-space-save off; replace-tabs off; replace-tabs-save off; remove-trailing-spaces none; tab-indents on; tab-width 4;
 -->

@@ -62,11 +62,6 @@
  *
  * Both types of structure are defined in "matrix_io_routines.h".
  *
- ****************
- *
- * WARNING:
- *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  **********************************************************/
 
 #if ! NMFGPU_MATRIX_IO_ROUTINES_H
@@ -74,41 +69,23 @@
 
 #include "index_type.h"
 
-#include <stdbool.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
-
-/* Selects the appropriate "restrict" keyword. */
-
-#undef RESTRICT
-
-#if __CUDACC__				/* CUDA source code */
-	#define RESTRICT __restrict__
-#else					/* C99 source code */
-	#define RESTRICT restrict
-#endif
-
-/* Always process this header as C code, not C++. */
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
 
 /* Type definitions for matrix tags */
 
 // Structure for a tag element.
 struct tag_t {
-	char const *RESTRICT tokens;		// String with tokens.
-	char const *const *RESTRICT ptokens;	// Array of pointers to each token.
+	char const *restrict tokens;		// String with tokens.
+	char const *const *restrict ptokens;	// Array of pointers to each token.
 };
 
 // Structure for tag elements.
 struct matrix_tags_t {
-	char const *RESTRICT name;	// Description string.
+	char const *restrict name;	// Description string.
 	struct tag_t headers;		// Column headers.
 	struct tag_t labels;		// Row labels.
 };
@@ -129,7 +106,7 @@ struct matrix_tags_t {
  *		0 if just a '\n' was read.
  *		Length of line on success.
  */
-size_t read_line( FILE *RESTRICT file, char *RESTRICT *RESTRICT str );
+size_t read_line( FILE *restrict file, char *restrict *restrict str );
 
 ////////////////////////////////////////////////
 
@@ -148,7 +125,7 @@ size_t read_line( FILE *RESTRICT file, char *RESTRICT *RESTRICT str );
  *		0 if just a '\n' or a delimiter was read.
  *		Number of tokens on success.
  */
-size_t read_token( FILE *RESTRICT file, int delimiter, char *RESTRICT *RESTRICT str, int *RESTRICT last_char );
+size_t read_token( FILE *restrict file, int delimiter, char *restrict *restrict str, int *restrict last_char );
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -166,7 +143,7 @@ size_t read_token( FILE *RESTRICT file, int delimiter, char *RESTRICT *RESTRICT 
  *	- number of tokens (>=1)
  *	- An empty struct tag_t, and 0 on error.
  */
-struct tag_t tokenize( char *RESTRICT str, int delimiter, size_t *RESTRICT ntokens );
+struct tag_t tokenize( char *restrict str, int delimiter, size_t *restrict ntokens );
 
 ////////////////////////////////////////////////
 
@@ -176,7 +153,7 @@ struct tag_t tokenize( char *RESTRICT str, int delimiter, size_t *RESTRICT ntoke
  * tokens: Parsed string with tokens.
  * ptokens: Array of pointers to each token.
  */
-struct tag_t new_tag( char *RESTRICT tokens, char **RESTRICT ptokens );
+struct tag_t new_tag( char *restrict tokens, char **restrict ptokens );
 
 ////////////////////////////////////////////////
 
@@ -195,7 +172,7 @@ struct tag_t new_empty_tag( void );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int generate_tag(char const *RESTRICT token_prefix, char const *RESTRICT token_suffix, index_t t0, index_t num_tokens, struct tag_t *RESTRICT tag);
+int generate_tag(char const *restrict token_prefix, char const *restrict token_suffix, index_t t0, index_t num_tokens, struct tag_t *restrict tag);
 
 ////////////////////////////////////////////////
 
@@ -228,7 +205,7 @@ int retok( struct tag_t tag, index_t num_tokens );
  *	2 on internal error or invalid parameter(s).
  *	3 on invalid file format, or maximum line length was reached.
  */
-int read_tag( FILE *RESTRICT file, int delimiter, struct tag_t *RESTRICT tag, size_t *RESTRICT len_tokens, size_t *RESTRICT ntokens );
+int read_tag( FILE *restrict file, int delimiter, struct tag_t *restrict tag, size_t *restrict len_tokens, size_t *restrict ntokens );
 
 ////////////////////////////////////////////////
 
@@ -244,7 +221,7 @@ int read_tag( FILE *RESTRICT file, int delimiter, struct tag_t *RESTRICT tag, si
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int write_tag( FILE *RESTRICT file, struct tag_t tag, char const *RESTRICT const tokens_name, index_t num_tokens, int delimiter, bool prefix,
+int write_tag( FILE *restrict file, struct tag_t tag, char const *restrict const tokens_name, index_t num_tokens, int delimiter, bool prefix,
 		bool suffix );
 
 ////////////////////////////////////////////////
@@ -254,7 +231,7 @@ int write_tag( FILE *RESTRICT file, struct tag_t tag, char const *RESTRICT const
  *
  * num_tokens: Number of tokens in memory (i.e., length(tag.ptokens[])).
  *
- * pnumtokens: Number of tokens to be printed BEFORE the last one.
+ * pnumtokens: Number of tokens to print BEFORE the last one.
  *	That is, it prints tag.ptokens[ 0..(pnumtokens-1) ], followed by
  *	tag.ptokens[ num_tokens-1 ], if pnumtokens < num_tokens.
  *
@@ -269,7 +246,7 @@ int write_tag( FILE *RESTRICT file, struct tag_t tag, char const *RESTRICT const
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int show_tag( struct tag_t tag, char const *RESTRICT const tokens_name, index_t num_tokens, index_t pnumtokens, bool prefix, bool all_processes );
+int show_tag( struct tag_t tag, char const *restrict const tokens_name, index_t num_tokens, index_t pnumtokens, bool prefix, bool all_processes );
 
 ////////////////////////////////////////////////
 
@@ -288,7 +265,7 @@ void clean_tag( struct tag_t tag );
  * headers: A struct tag_t with column headers.
  * labels: A struct tag_t with row labels.
  */
-struct matrix_tags_t new_matrix_tags( char *RESTRICT name, struct tag_t headers, struct tag_t labels );
+struct matrix_tags_t new_matrix_tags( char *restrict name, struct tag_t headers, struct tag_t labels );
 
 ////////////////////////////////////////////////
 
@@ -310,16 +287,6 @@ struct matrix_tags_t swap_matrix_tags( struct matrix_tags_t mt );
  * Cleans all matrix tag elements (name, column headers and row labels).
  */
 void clean_matrix_tags( struct matrix_tags_t mt );
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-#undef RESTRICT	/* To select the appropriate "restrict" keyword. */
-
-/* Always process this header as C code, not C++. */
-#ifdef __cplusplus
-}
-#endif
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

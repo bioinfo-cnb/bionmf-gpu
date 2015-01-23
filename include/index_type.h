@@ -41,9 +41,6 @@
  *	NMFGPU_UINDEX: Makes use of UNSIGNED integers for index type.
  *			Otherwise, uses signed integers.
  *
- * WARNING:
- *	- Requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  *********************************************************/
 
 #if ! NMFGPU_INDEX_TYPE_H
@@ -60,11 +57,12 @@
  *
  * NOTE: UNSIGNED integers may produce faster code.
  */
-typedef
+
 #if NMFGPU_UINDEX	/* Unsigned indexes */
-	unsigned
+	typedef unsigned int index_t;
+#else			/* Signed indexes */
+	typedef int index_t;
 #endif
-		int index_t;
 
 // ---------------------------------------------
 // ---------------------------------------------

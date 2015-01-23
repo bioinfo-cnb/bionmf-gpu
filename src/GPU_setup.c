@@ -32,7 +32,7 @@
  *
  ***********************************************************************/
 /**********************************************************
- * GPU_setup.cu
+ * GPU_setup.c
  *	Generic definitions and routines for GPU set-up and management.
  *
  * NOTE: The following macro constants can be defined to modify the
@@ -145,23 +145,25 @@
  *
  *********************************************************/
 
-// Required by <inttypes.h>
-#ifndef __STDC_FORMAT_MACROS
-	#define __STDC_FORMAT_MACROS (1)
-#endif
-
-#include "GPU_setup.cuh"
-#include "common.h"
+#include "GPU_setup.h"
+#include "matrix_operations.h"		/* check_matrix_dimensions(), max_num_items(), init_kernel_params() */
 #if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-	#include "timing.cuh"
+	#include "timing.h"
 #endif
-#include "matrix/matrix_operations.cuh"		/* check_matrix_dimensions(), max_num_items(), init_kernel_params() */
+#include "common.h"
+#include "index_type.h"
+#include "real_type.h"
 
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>	/* memset() */
-#include <limits.h>	/* [U]INT_MAX */
+#include <cublas_v2.h>
+#include <curand.h>	/* Random values */
+#include <cuda_runtime_api.h>
+
 #include <inttypes.h>	/* uintptr_t, [u]int_fast64_t, PRIuFAST64 */
+#include <limits.h>	/* [U]INT_MAX */
+#include <string.h>	/* memset() */
+#include <errno.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -181,7 +183,7 @@
 
 /* Macro Functions */
 
-/* Alignment value for data to be stored in GPU memory:
+/* Alignment for data stored in GPU memory:
  *	Typically <warpSize/2> on Compute Capability 1.x,
  *	and <warpSize> on CC 2.x and beyond.
  */
@@ -225,7 +227,7 @@ index_t maxBlockHeight_pitch = 16;	// (threadsPerBlock_pitch / pitch)
 bool mappedHostMemory = false;		// Host memory is mapped into the address space of the device.
 
 // Maximum number of items of input arrays in GPU kernels.
-size_t gpu_max_num_items = matrix_max_num_items; // <= matrix_max_num_items
+size_t gpu_max_num_items = SIZE_MAX / ( 2 * sizeof(real) ); // <= matrix_max_num_items
 
 block_t block_N, block_M;		// Information for blockwise processing on dimension N and M.
 
@@ -241,14 +243,14 @@ cudaStream_t stream_Vrow;			// d_Vrow
 cudaStream_t stream_Vcol;			// d_Vcol
 cudaStream_t stream_W;				// d_W
 cudaStream_t stream_H;				// d_H
-cudaStream_t *__restrict__ streams_NMF = NULL;	// Main-flow streams for blockwise processing.
+cudaStream_t *restrict streams_NMF = NULL;	// Main-flow streams for blockwise processing.
 index_t num_streams_NMF = 1;			// Number of main-flow streams: MAX( SUM(block_N.num_steps[i]), SUM(block_M.num_steps[i]) )
 
 // Host matrices (used only with mapped host memory):
-real *__restrict__ h_WH = NULL;			// Temporary matrix: d_WH = d_W * d_H
-real *__restrict__ h_Aux = NULL;		// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
-real *__restrict__ h_accum = NULL;		// Accumulator. K-length vector (<Kp> with padding).
-real const *__restrict__ h_scalar = NULL;	// Scalars for cuBLAS Library calls: scalar[2] = { 0, 1 };
+real *restrict h_WH = NULL;			// Temporary matrix: d_WH = d_W * d_H
+real *restrict h_Aux = NULL;		// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
+real *restrict h_accum = NULL;		// Accumulator. K-length vector (<Kp> with padding).
+real const *restrict h_scalar = NULL;	// Scalars for cuBLAS Library calls: scalar[2] = { 0, 1 };
 
 // ---------------------------------------------
 
@@ -274,21 +276,21 @@ static bool const error_shown_by_all = false;		// Error messages on invalid argu
 /* DEVICE-ONLY GLOBAL Variables */
 
 // Data matrices (device side):
-real *__restrict__ d_Vrow = NULL;		// Block of BLN rows from input matrix V.
-real *__restrict__ d_Vcol = NULL;		// Block of BLM columns from input matrix V.
-real *__restrict__ d_H = NULL;			// Output matrix. Note that it is transposed.
-real *__restrict__ d_W = NULL;			// Output matrix.
-real *__restrict__ d_WH = NULL;			// Temporary matrix: d_WH = d_W * d_H
-real *__restrict__ d_Aux = NULL;		// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
-real *__restrict__ d_accum = NULL;		// Accumulator. K-length vector (<Kp> with padding).
-index_t  *__restrict__ d_classification = NULL;	// Classification vector.
+real *restrict d_Vrow = NULL;		// Block of BLN rows from input matrix V.
+real *restrict d_Vcol = NULL;		// Block of BLM columns from input matrix V.
+real *restrict d_H = NULL;			// Output matrix. Note that it is transposed.
+real *restrict d_W = NULL;			// Output matrix.
+real *restrict d_WH = NULL;			// Temporary matrix: d_WH = d_W * d_H
+real *restrict d_Aux = NULL;		// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
+real *restrict d_accum = NULL;		// Accumulator. K-length vector (<Kp> with padding).
+index_t  *restrict d_classification = NULL;	// Classification vector.
 
 // Previous Classification vector (used only with mapped host memory).
-index_t  *__restrict__ d_last_classification = NULL;
+index_t  *restrict d_last_classification = NULL;
 
-real const *__restrict__ d_scalar = NULL;	// Scalars for cuBLAS Library calls. d_scalar[2] = { 0, 1 };
-real const *__restrict__ d_zero = NULL;		// Pointer to d_scalar[0] == 0
-real const *__restrict__ d_one = NULL;		// Pointer to d_scalar[1] == 1
+real const *restrict d_scalar = NULL;	// Scalars for cuBLAS Library calls. d_scalar[2] = { 0, 1 };
+real const *restrict d_zero = NULL;		// Pointer to d_scalar[0] == 0
+real const *restrict d_one = NULL;		// Pointer to d_scalar[1] == 1
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -695,8 +697,8 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
 
 	cublas_status = cublasSetPointerMode( cublas_handle, CUBLAS_POINTER_MODE_DEVICE );
 	if ( cublas_status != CUBLAS_STATUS_SUCCESS ) {
-		print_error( sys_error_shown_by_all, "Error: Could not set the pointer mode to be used by the cuBLAS library on device %"
-				PRI_IDX ": %s\n", dev_id, getCublasErrorString(cublas_status) );
+		print_error( sys_error_shown_by_all, "Error on device %" PRI_IDX ": Could not set the pointer mode used by the cuBLAS library "
+				"for scalar arguments: %s\n", dev_id, getCublasErrorString(cublas_status) );
 		cublasDestroy( cublas_handle );
 		cudaDeviceReset();
 		return 0;
@@ -785,7 +787,7 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
 
 	// updates "memory_alignment", the limits of matrix dimensions, and the padded factorization rank.
 
-	/* Alignment value for data to be stored in GPU/CPU memory.
+	/* Alignment value for data in GPU/CPU memory.
 	 * It is typically equal to <warpSize/2> on devices of Compute Capability 1.x, and <warpSize> on 2.x and beyond.
 	 */
 	memory_alignment = SET_MEMORY_ALIGNMENT( device_prop.major, device_prop.warpSize );
@@ -863,7 +865,8 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
 
 	#if NMFGPU_VERBOSE
 		print_message( verb_shown_by_all, "Initializing CUDA/cuBLAS on device %" PRI_IDX " (process %" PRI_IDX ", total: %" PRI_IDX
-				"), K=%" PRI_IDX "... done (mem_size=%zu).\n", dev_id, process_id, num_processes, factorization_rank, l_mem_size );
+				"), K=%" PRI_IDX "... done (mem_size=%zu).\n", dev_id, process_id, num_processes, factorization_rank,
+				l_mem_size );
 	#endif
 
 	cudaGetLastError();	// Clears any possibly error flag.
@@ -876,13 +879,13 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
- * Computes the size of data blocks to be transferred to the GPU.
+ * Computes the size of data blocks to transfer to the GPU.
  *
  * Assuming that:
  *	N, M: Total number of rows and columns of input matrix V,
  *	Mp: Total number of columns of V, including useless data for padding,
  *		If num_act_processes == 1, then NpP==N and MpP==M.
- *	NpP, MpP: Dimensions of the block from V to be processed by this GPU,
+ *	NpP, MpP: Dimensions of the block from V processed by this GPU,
  *	Kp: Factorization rank with data for padding.
  *
  * This routine computes BLN <= NpP and BLM <= MpP so it can be loaded into the GPU:
@@ -904,8 +907,8 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
  *
  * do_classf: Set to 'true' if classification vector will be computed.
  */
-static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const BLN, index_t *__restrict__ const BLM,
-		index_t *__restrict__ const BLMp, bool *__restrict__ const full_matrix )
+static int get_BLs( size_t mem_size, bool do_classf, index_t *restrict const BLN, index_t *restrict const BLM,
+		index_t *restrict const BLMp, bool *restrict const full_matrix )
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -918,7 +921,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 	// Maximum size of d_Vr and d_Vc that can be processed by kernels, regardless of "mem_size".
 	size_t const max_nitems_dV = gpu_max_num_items;		// >> memory_alignment
 
-	// Initial output values (i.e., input matrix is small enough to be fully loaded into the GPU memory).
+	// Initial output values (i.e., input matrix can be fully loaded into the GPU memory).
 	index_t lBLN = NpP;
 	index_t lBLM = MpP;
 	index_t lBLMp = MpPp;
@@ -931,7 +934,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
 
 	#if NMFGPU_FORCE_BLOCKS
 
-		// Forces block sizes to be the half of dimensions:
+		// Forces block sizes to the half of dimensions:
 
 		print_message( verb_shown_by_all, "\nForcing blocks size to the half of dimensions.\n" );
 
@@ -1227,7 +1230,7 @@ static int get_BLs( size_t mem_size, bool do_classf, index_t *__restrict__ const
  * In any case, the length information of the last block (either BLD or <DpP % BLD>) is always stored in block_D.BL[1],
  * UNLESS if DpP == BLD (in this case, it is only stored in block_D.BL[0], and sets block_D.num_steps[0..1] to {1,0}).
  */
-static void init_block_conf( index_t DpP, index_t DpPp, index_t BLD, index_t BLDp, block_t *__restrict__ const block_D )
+static void init_block_conf( index_t DpP, index_t DpPp, index_t BLD, index_t BLDp, block_t *restrict const block_D )
 {
 
 	// Initializes DpPp and BLDp if not set.
@@ -1283,7 +1286,7 @@ static void init_block_conf( index_t DpP, index_t DpPp, index_t BLD, index_t BLD
  * into the address space of the device. Memory for temporary buffers (e.g., d_WH or d_Aux) is first
  * allocated on the host, and then mapped.
  *
- * single_matrix_V: 'True' if input matrix V is small enough to be fully loaded into the GPU memory,
+ * single_matrix_V: 'True' if input matrix V can be fully loaded into the GPU memory,
  *		    <AND> this is a single-GPU system.
  *		    In such case, d_Vrow = d_Vcol.
  *
@@ -1621,7 +1624,7 @@ static int allocate_memory( index_t BLN, index_t BLMp, bool single_matrix_V, boo
  *
  * If host memory was mapped, skips streams and events related to matrices d_Vrow and d_Vcol.
  *
- * single_matrix_V: Set to 'true' if NO blockwise processing is necessary (i.e., input matrix is small enough to be fully loaded),
+ * single_matrix_V: Set to 'true' if NO blockwise processing is necessary (i.e., input matrix can be fully loaded),
  *		so that Vrow == Vcol.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
@@ -2117,12 +2120,12 @@ int setup_GPU( size_t mem_size, bool do_classf )
 
 	// -------------------------------------
 
-	/* Computes the size of data blocks to be transferred to the GPU.
+	/* Computes the size of data blocks to transfer to the GPU.
 	 *
 	 * Assuming that:
 	 *	N, M: Total number of rows and columns of input matrix V,
 	 *	Mp: Total number of columns of V, including useless data for padding,
-	 *	NpP, MpP: Dimensions of the block from V to be processed by this GPU,
+	 *	NpP, MpP: Dimensions of the block from V processed by this GPU,
 	 *		If num_act_processes == 1, then NpP==N and MpP==M.
 	 *	Kp: Factorization rank with data for padding.
 	 *
@@ -2366,7 +2369,7 @@ void *getHostMemory( size_t size, bool wc, bool clear )
 
 	// -----------------------------------------
 
-	void *__restrict__ pHost = NULL;
+	void *restrict pHost = NULL;
 	cudaError_t const cuda_status = cudaHostAlloc( (void**) &pHost, size, flags );
 	if ( cuda_status != cudaSuccess ) {
 		print_error( sys_error_shown_by_all, "Error in getHostMemory: cudaHostAlloc(size=%zu bytes): %s\n",
@@ -2400,7 +2403,7 @@ void *getHostMemory( size_t size, bool wc, bool clear )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int freeHostMemory( void *__restrict__ pHost, char const *__restrict__ pHost_name )
+int freeHostMemory( void *restrict pHost, char const *restrict pHost_name )
 {
 
 	if ( pHost ) {

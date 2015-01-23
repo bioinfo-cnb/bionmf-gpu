@@ -32,7 +32,7 @@
  *
  ***********************************************************************/
 /**********************************************************
- * timing.cu
+ * timing.c
  *	Routines for timing.
  *
  * NOTE: The following macro constants can be defined to modify the
@@ -47,19 +47,18 @@
  *
  **********************************************************/
 
-// Required by <inttypes.h>
-#ifndef __STDC_FORMAT_MACROS
-	#define __STDC_FORMAT_MACROS (1)
-#endif
-
-#include "timing.cuh"
-#include "real_type.h"
+#include "timing.h"
 #include "common.h"
+#include "index_type.h"
+#include "real_type.h"
 
-#include <stdlib.h>
-#include <inttypes.h>	/* PRIuFAST32, uintptr_t */
-#include <stdio.h>
+#include <cuda_runtime_api.h>
+
 #include <math.h>	/* isfinite() */
+#include <stdio.h>
+#include <inttypes.h>	/* PRIuFAST32, uintptr_t, uint_fast32_t, uintmax_t */
+#include <stdbool.h>
+#include <stdlib.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -459,7 +458,7 @@ float stop_cuda_timer( void )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__restrict__ td, size_t nitems, index_t counter )
+int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *restrict td, size_t nitems, index_t counter )
 {
 
 	#if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
@@ -492,7 +491,7 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *__res
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, size_t nitems, index_t counter )
+int stop_cuda_timer_cnt( timing_data_t *restrict td, size_t nitems, index_t counter )
 {
 
 	int status = EXIT_SUCCESS;
@@ -517,7 +516,7 @@ int stop_cuda_timer_cnt( timing_data_t *__restrict__ td, size_t nitems, index_t 
  *
  * data_size: Size in bytes of the processed data type.
  */
-void print_elapsed_time( char const *__restrict__ const op, timing_data_t *__restrict__ td, size_t data_size, bool show_secs, bool all_processes )
+void print_elapsed_time( char const *restrict const op, timing_data_t *restrict td, size_t data_size, bool show_secs, bool all_processes )
 {
 
 	// if ( op != NULL ) && ( td != NULL ) && ( data_size > 0 )

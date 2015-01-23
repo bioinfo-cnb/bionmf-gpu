@@ -41,9 +41,6 @@
  *	Data type:
  *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
  *
- * WARNING:
- *	- Requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  *********************************************************/
 
 #if ! NMFGPU_REAL_TYPE_H
@@ -59,13 +56,11 @@
 /* Data-type definitions */
 
 // 'Real' data type.
-typedef
 #if NMFGPU_SINGLE_PREC	/* Single precision */
-	float
+	typedef float real;
 #else	/* Double precision */
-	double
+	typedef double real;
 #endif
-		real;
 
 // ---------------------------------------------
 // ---------------------------------------------

@@ -160,37 +160,31 @@
  *
  * This feature is disabled if NMFGPU_FORCE_BLOCKS is non-zero.
  *
- ****************
- *
- * WARNING:
- *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  *********************************************************/
 
-#include "NMF_routines.cuh"
-#include "matrix/matrix_operations.cuh"
-#include "GPU_setup.cuh"
+#include "NMF_routines.h"
+#include "matrix_operations.h"
+#include "GPU_setup.h"
 #if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-	#include "timing.cuh"
+	#include "timing.h"
 #endif
-#include "matrix/matrix_io.h"
-#include "matrix/matrix_io_routines.h"
+#include "matrix_io/matrix_io.h"
+#include "matrix_io/matrix_io_routines.h"
 #include "common.h"
-#include "real_type.h"
 #include "index_type.h"
+#include "real_type.h"
 
 #include <cuda_runtime_api.h>
 
 #if NMFGPU_PROFILING_GLOBAL
 	#include <sys/time.h>
 #endif
-
-#include <stdlib.h>
-#include <stdbool.h>
-#include <errno.h>
-#include <string.h>
 #include <stdio.h>
-#include <stdint.h>	// uintptr_t
+#include <string.h>
+#include <errno.h>
+#include <stdint.h>	/* uintptr_t */
+#include <stdbool.h>
+#include <stdlib.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -387,7 +381,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 	// Initializes matrix H
 	{
 
-		// Offset to portion of data to be initialized by this process.
+		// Offset to the portion of data initialized by this process.
 		size_t const offset = (size_t) bM * (size_t) Kp;
 		real *const p_dH = &d_H[ offset ];
 		#if NMFGPU_CPU_RANDOM

@@ -32,7 +32,7 @@
  *
  ***********************************************************************/
 /**********************************************************
- * GPU_setup.cuh
+ * GPU_setup.h
  *	Generic definitions and routines for GPU set-up and management.
  *
  * NOTE: The following macro constants can be defined to modify the
@@ -148,45 +148,29 @@
 #if ! NMFGPU_GPU_SETUP_CUH
 #define NMFGPU_GPU_SETUP_CUH (1)
 
-#include "real_type.h"
 #include "index_type.h"
+#include "real_type.h"
 
 #include <cublas_v2.h>
 #include <curand.h>	/* Random values */
 #include <cuda_runtime_api.h>
 
+#include <stdbool.h>
+
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
-
-/* Selects the appropriate "restrict" keyword. */
-
-#undef RESTRICT
-
-#if __CUDACC__				/* CUDA source code */
-	#define RESTRICT __restrict__
-#else					/* C99 source code */
-	#define RESTRICT restrict
-#endif
-
-/* C linkage, not C++. */
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
 
 /* Data types */
 
 /* Block configuration.
- * NOTE: This refer to a block from input matrix V to be loaded into the GPU memory, NOT a block of CUDA threads.
+ * NOTE: This refer to a block from input matrix V to load into the GPU memory, NOT a block of CUDA threads.
  * Input matrix V is processed in blocks of <BLN> rows and <BLM> columns.
  * There is a block_t structure for each dimension "BLD" (where "D" is 'N' or 'M').
  */
 typedef struct {
 	index_t BL[2];		// Number of rows/columns for this dimension in GPU memory ('BLN' or 'BLM')
 	index_t BLp[2];		// Padding for <BL[]> (if any).
-	index_t num_steps[2];	// Number of blocks of size <BL[]> to be processed.
+	index_t num_steps[2];	// Number of blocks of size <BL[]> to process.
 } block_t;
 
 // ---------------------------------------------
@@ -237,11 +221,11 @@ extern cudaStream_t stream_Vrow;		// d_Vrow
 extern cudaStream_t stream_Vcol;		// d_Vcol
 extern cudaStream_t stream_W;			// d_W
 extern cudaStream_t stream_H;			// d_H
-extern cudaStream_t *RESTRICT streams_NMF;	// Main-flow streams for blockwise processing.
+extern cudaStream_t *restrict streams_NMF;	// Main-flow streams for blockwise processing.
 extern index_t num_streams_NMF;			// Number of main-flow streams: MAX( SUM(block_N.num_steps[i]), SUM(block_M.num_steps[i]) )
 
 // Host matrices (used only with mapped host memory):
-extern real *RESTRICT h_accum;			// Accumulator. K-length vector (<Kp> with padding).
+extern real *restrict h_accum;			// Accumulator. K-length vector (<Kp> with padding).
 
 // ---------------------------------------------
 // ---------------------------------------------
@@ -249,19 +233,19 @@ extern real *RESTRICT h_accum;			// Accumulator. K-length vector (<Kp> with padd
 /* DEVICE-ONLY GLOBAL Variables */
 
 // Data matrices (device side):
-extern real *RESTRICT d_Vrow;			// Block of BLN rows from input matrix V.
-extern real *RESTRICT d_Vcol;			// Block of BLM columns from input matrix V.
-extern real *RESTRICT d_H;			// Output matrix. Note that it is transposed.
-extern real *RESTRICT d_W;			// Output matrix.
-extern real *RESTRICT d_WH;			// Temporary matrix: d_WH = d_W * d_H
-extern real *RESTRICT d_Aux;			// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
-extern real *RESTRICT d_accum;			// Accumulator. K-length vector (<Kp> with padding).
-extern index_t *RESTRICT d_classification;	// Classification vector.
-extern index_t *RESTRICT d_last_classification;	// Previous Classification vector (used only with mapped host memory).
-extern real const *RESTRICT d_scalars;		// Scalars for cuBLAS Library calls.
+extern real *restrict d_Vrow;			// Block of BLN rows from input matrix V.
+extern real *restrict d_Vcol;			// Block of BLM columns from input matrix V.
+extern real *restrict d_H;			// Output matrix. Note that it is transposed.
+extern real *restrict d_W;			// Output matrix.
+extern real *restrict d_WH;			// Temporary matrix: d_WH = d_W * d_H
+extern real *restrict d_Aux;			// Temporary matrix. Sometimes denoted as d_Waux or d_Haux.
+extern real *restrict d_accum;			// Accumulator. K-length vector (<Kp> with padding).
+extern index_t *restrict d_classification;	// Classification vector.
+extern index_t *restrict d_last_classification;	// Previous Classification vector (used only with mapped host memory).
+extern real const *restrict d_scalars;		// Scalars for cuBLAS Library calls.
 
-extern real const *RESTRICT d_zero;		// Pointer to d_scalar[0]
-extern real const *RESTRICT d_one;		// Pointer to d_scalar[1]
+extern real const *restrict d_zero;		// Pointer to d_scalar[0]
+extern real const *restrict d_one;		// Pointer to d_scalar[1]
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -372,8 +356,8 @@ int finalize_GPU_device( void );
  *
  * size: Size of data IN BYTES.
  *
- * wc: Set to 'true' to allocate the memory as 'write-combined' (WC).
- *	Useful ONLY for data to be transferred from the HOST to the DEVICE.
+ * wc: Set to 'true' to allocate memory as 'write-combined' (WC).
+ *	Useful ONLY to transfer data from the HOST to the DEVICE.
  *
  * clear: Set to 'true' to initialize the memory area with zeros.
  *
@@ -397,7 +381,7 @@ void *getHostMemory( size_t size, bool wc, bool clear );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int freeHostMemory( void *RESTRICT pHost, char const *RESTRICT pHost_name );
+int freeHostMemory( void *restrict pHost, char const *restrict pHost_name );
 
 ////////////////////////////////////////////////
 
@@ -447,15 +431,6 @@ int finalize_randomGenerator( void );
  * return EXIT_SUCCESS or EXIT_FAILURE.
  */
 int sync_GPU( cudaStream_t stream );
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif
-
-#undef RESTRICT
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

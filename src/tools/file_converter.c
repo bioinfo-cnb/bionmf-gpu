@@ -84,15 +84,10 @@
  *
  * Both types of structure are defined in "matrix_io_routines.h".
  *
- ****************
- *
- * WARNING:
- *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  **********************************************************/
 
-#include "matrix/matrix_io.h"
-#include "matrix/matrix_io_routines.h"
+#include "matrix_io/matrix_io.h"
+#include "matrix_io/matrix_io_routines.h"
 #include "common.h"
 #include "index_type.h"
 #include "real_type.h"
@@ -101,8 +96,8 @@
 	#include <sys/time.h>
 #endif
 #include <stdio.h>
-#include <errno.h>
 #include <string.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdlib.h>
 

@@ -79,39 +79,16 @@
  *
  * Both types of structure are defined in "matrix_io_routines.h".
  *
- ****************
- *
- * WARNING:
- *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  **********************************************************/
 
 #if ! NMFGPU_MATRIX_IO_H
 #define NMFGPU_MATRIX_IO_H (1)
 
-#include "matrix/matrix_io_routines.h"
-#include "real_type.h"
+#include "matrix_io/matrix_io_routines.h"
 #include "index_type.h"
+#include "real_type.h"
 
 #include <stdbool.h>
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-/* Selects the appropriate "restrict" keyword. */
-
-#undef RESTRICT
-
-#if defined(__CUDACC__)			/* CUDA source code */
-	#define RESTRICT __restrict__
-#else					/* C99 source code */
-	#define RESTRICT restrict
-#endif
-
-/* Always process this header as C code, not C++. */
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -125,7 +102,8 @@ extern "C" {
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_check_dimensions( char const *RESTRICT const function_name, index_t nrows, index_t ncols, index_t pitch, bool transpose, bool verbose );
+int matrix_check_dimensions( char const *restrict const function_name, index_t nrows, index_t ncols, index_t pitch, bool transpose,
+				bool verbose );
 
 ////////////////////////////////////////////////
 
@@ -146,8 +124,8 @@ int matrix_check_dimensions( char const *RESTRICT const function_name, index_t n
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_ascii_verb( char const *RESTRICT filename, bool numeric_hdrs, bool numeric_lbls, real *RESTRICT *RESTRICT const matrix,
-				index_t *RESTRICT nrows, index_t *RESTRICT ncols, index_t *RESTRICT pitch, struct matrix_tags_t *RESTRICT mt );
+int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bool numeric_lbls, real *restrict *restrict const matrix,
+				index_t *restrict nrows, index_t *restrict ncols, index_t *restrict pitch, struct matrix_tags_t *restrict mt );
 
 ////////////////////////////////////////////////
 
@@ -174,8 +152,8 @@ int matrix_load_ascii_verb( char const *RESTRICT filename, bool numeric_hdrs, bo
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_ascii( char const *RESTRICT filename, index_t nrows, index_t ncols, index_t pitch, bool real_data, bool hasname, bool hasheaders,
-			bool haslabels, bool transpose, void *RESTRICT *RESTRICT matrix, struct matrix_tags_t *RESTRICT mt );
+int matrix_load_ascii( char const *restrict filename, index_t nrows, index_t ncols, index_t pitch, bool real_data, bool hasname, bool hasheaders,
+			bool haslabels, bool transpose, void *restrict *restrict matrix, struct matrix_tags_t *restrict mt );
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -199,8 +177,8 @@ int matrix_load_ascii( char const *RESTRICT filename, index_t nrows, index_t nco
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_binary_verb( char const *RESTRICT filename, real *RESTRICT *RESTRICT matrix, index_t *RESTRICT nrows, index_t *RESTRICT ncols,
-				index_t *RESTRICT pitch, struct matrix_tags_t *RESTRICT mt );
+int matrix_load_binary_verb( char const *restrict filename, real *restrict *restrict matrix, index_t *restrict nrows, index_t *restrict ncols,
+				index_t *restrict pitch, struct matrix_tags_t *restrict mt );
 
 ////////////////////////////////////////////////
 
@@ -231,8 +209,8 @@ int matrix_load_binary_verb( char const *RESTRICT filename, real *RESTRICT *REST
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_binary( char const *RESTRICT filename, index_t nrows, index_t ncols, index_t pitch, bool transpose,
-			real *RESTRICT *RESTRICT matrix, struct matrix_tags_t *RESTRICT mt );
+int matrix_load_binary( char const *restrict filename, index_t nrows, index_t ncols, index_t pitch, bool transpose,
+			real *restrict *restrict matrix, struct matrix_tags_t *restrict mt );
 
 ////////////////////////////////////////////////
 
@@ -266,8 +244,8 @@ int matrix_load_binary( char const *RESTRICT filename, index_t nrows, index_t nc
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_binary_native( char const *RESTRICT filename, void *RESTRICT *RESTRICT matrix, index_t *RESTRICT nrows, index_t *RESTRICT ncols,
-				index_t *RESTRICT pitch, size_t data_size, bool verbose, struct matrix_tags_t *RESTRICT mt );
+int matrix_load_binary_native( char const *restrict filename, void *restrict *restrict matrix, index_t *restrict nrows, index_t *restrict ncols,
+				index_t *restrict pitch, size_t data_size, bool verbose, struct matrix_tags_t *restrict mt );
 
 ////////////////////////////////////////////////
 
@@ -281,8 +259,8 @@ int matrix_load_binary_native( char const *RESTRICT filename, void *RESTRICT *RE
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load( char const *RESTRICT filename, bool numeric_hdrs, bool numeric_lbls, index_t is_bin, real *RESTRICT *RESTRICT matrix,
-		index_t *RESTRICT nrows, index_t *RESTRICT ncols, index_t *RESTRICT pitch, struct matrix_tags_t *RESTRICT mt );
+int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_lbls, index_t is_bin, real *restrict *restrict matrix,
+		index_t *restrict nrows, index_t *restrict ncols, index_t *restrict pitch, struct matrix_tags_t *restrict mt );
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -303,8 +281,8 @@ int matrix_load( char const *RESTRICT filename, bool numeric_hdrs, bool numeric_
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_save_ascii( char const *RESTRICT filename, void const *RESTRICT matrix, index_t nrows, index_t ncols, index_t pitch, bool real_data,
-			bool transpose, bool append, struct matrix_tags_t const *RESTRICT mt );
+int matrix_save_ascii( char const *restrict filename, void const *restrict matrix, index_t nrows, index_t ncols, index_t pitch, bool real_data,
+			bool transpose, bool append, struct matrix_tags_t const *restrict mt );
 
 ////////////////////////////////////////////////
 
@@ -325,8 +303,8 @@ int matrix_save_ascii( char const *RESTRICT filename, void const *RESTRICT matri
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_save_combined_ascii( char const *RESTRICT filename, char const *RESTRICT input_pattern, char const *RESTRICT output_pattern,
-				index_t nmatrices, index_t nrows, index_t ncols, struct matrix_tags_t const *RESTRICT mt );
+int matrix_save_combined_ascii( char const *restrict filename, char const *restrict input_pattern, char const *restrict output_pattern,
+				index_t nmatrices, index_t nrows, index_t ncols, struct matrix_tags_t const *restrict mt );
 
 ////////////////////////////////////////////////
 
@@ -347,8 +325,8 @@ int matrix_save_combined_ascii( char const *RESTRICT filename, char const *RESTR
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_save_binary( char const *RESTRICT filename, real const *RESTRICT matrix, index_t nrows, index_t ncols, index_t pitch, bool transpose,
-			struct matrix_tags_t const *RESTRICT mt );
+int matrix_save_binary( char const *restrict filename, real const *restrict matrix, index_t nrows, index_t ncols, index_t pitch, bool transpose,
+			struct matrix_tags_t const *restrict mt );
 
 ////////////////////////////////////////////////
 
@@ -364,8 +342,8 @@ int matrix_save_binary( char const *RESTRICT filename, real const *RESTRICT matr
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_save_binary_native( char const *RESTRICT filename, void const *RESTRICT matrix, index_t nrows, index_t ncols, index_t pitch,
-				size_t data_size, struct matrix_tags_t const *RESTRICT mt );
+int matrix_save_binary_native( char const *restrict filename, void const *restrict matrix, index_t nrows, index_t ncols, index_t pitch,
+				size_t data_size, struct matrix_tags_t const *restrict mt );
 
 ////////////////////////////////////////////////
 
@@ -394,8 +372,8 @@ int matrix_save_binary_native( char const *RESTRICT filename, void const *RESTRI
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_save( char const *RESTRICT filename, index_t save_bin, real const *RESTRICT matrix, index_t nrows, index_t ncols, index_t pitch,
-		bool transpose, struct matrix_tags_t const *RESTRICT mt, bool verbose );
+int matrix_save( char const *restrict filename, index_t save_bin, real const *restrict matrix, index_t nrows, index_t ncols, index_t pitch,
+		bool transpose, struct matrix_tags_t const *restrict mt, bool verbose );
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -414,8 +392,8 @@ int matrix_save( char const *RESTRICT filename, index_t save_bin, real const *RE
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int matrix_show( void const *RESTRICT matrix, index_t nrows, index_t ncols, index_t pitch, bool real_data, bool transpose, bool all_processes,
-		struct matrix_tags_t const *RESTRICT mt );
+int matrix_show( void const *restrict matrix, index_t nrows, index_t ncols, index_t pitch, bool real_data, bool transpose, bool all_processes,
+		struct matrix_tags_t const *restrict mt );
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -437,8 +415,8 @@ int matrix_show( void const *RESTRICT matrix, index_t nrows, index_t ncols, inde
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int matrix_transpose_file( void *RESTRICT matrix, index_t *RESTRICT nrows, index_t *RESTRICT ncols, index_t *RESTRICT pitch, size_t data_size,
-				struct matrix_tags_t *RESTRICT mt, char const *RESTRICT base_filename );
+int matrix_transpose_file( void *restrict matrix, index_t *restrict nrows, index_t *restrict ncols, index_t *restrict pitch, size_t data_size,
+				struct matrix_tags_t *restrict mt, char const *restrict base_filename );
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -446,16 +424,7 @@ int matrix_transpose_file( void *RESTRICT matrix, index_t *RESTRICT nrows, index
 /*
  * Cleans name, headers, labels and matrix.
  */
-void matrix_clean( void *RESTRICT matrix, struct matrix_tags_t mt );
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif
-
-#undef RESTRICT
+void matrix_clean( void *restrict matrix, struct matrix_tags_t mt );
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

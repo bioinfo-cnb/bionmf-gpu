@@ -32,7 +32,7 @@
  *
  ***********************************************************************/
 /**********************************************************
- * nmf_routines.cuh
+ * nmf_routines.h
  *	Routines that implement the NMF algorithm.
  *
  * NOTE: The following macro constants can be defined to modify the
@@ -143,8 +143,8 @@
 #if ! NMFGPU_NMF_ROUTINES_CUH
 #define NMFGPU_NMF_ROUTINES_CUH (1)
 
-#include "real_type.h"
 #include "index_type.h"
+#include "real_type.h"
 
 #include <cuda_runtime_api.h>
 
@@ -152,24 +152,6 @@
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
-
-/* Selects the appropriate "restrict" keyword. */
-
-#undef RESTRICT
-
-#if __CUDACC__				/* CUDA source code */
-	#define RESTRICT __restrict__
-#else					/* C99 source code */
-	#define RESTRICT restrict
-#endif
-
-/* C linkage, not C++. */
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
 
 /* HOST-ONLY GLOBAL Variables */
 
@@ -221,24 +203,24 @@ int destroy_random( void );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int set_random_values( real *RESTRICT d_A, index_t height, index_t width, index_t padding,
+int set_random_values( real *restrict d_A, index_t height, index_t width, index_t padding,
 			#if NMFGPU_CPU_RANDOM
-				real *RESTRICT A,
+				real *restrict A,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF)
 				bool transpose,
 			#endif
 			#if NMFGPU_CPU_RANDOM && (NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL))
-				char const *RESTRICT const matrix_name_A,
+				char const *restrict const matrix_name_A,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF) \
 				|| ((! NMFGPU_CPU_RANDOM) && (! NMFGPU_PROFILING_GLOBAL))
-				char const *RESTRICT const matrix_name_dA,
+				char const *restrict const matrix_name_dA,
 			#endif
 			#if ( NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF )
-				timing_data_t *RESTRICT const upload_timing,
+				timing_data_t *restrict const upload_timing,
 			#endif
-			cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
+			cudaStream_t stream_A, cudaEvent_t *restrict event_A );
 
 ////////////////////////////////////////////////
 
@@ -282,7 +264,7 @@ int update_W( void );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int get_classification( index_t *RESTRICT ld_classification, index_t *RESTRICT lh_classification );
+int get_classification( index_t *restrict ld_classification, index_t *restrict lh_classification );
 
 ////////////////////////////////////////////////
 
@@ -295,16 +277,7 @@ int get_classification( index_t *RESTRICT ld_classification, index_t *RESTRICT l
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int dot_product_VWH( real *RESTRICT dot_V, real *RESTRICT dot_VWH );
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif
-
-#undef RESTRICT
+int dot_product_VWH( real *restrict dot_V, real *restrict dot_VWH );
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

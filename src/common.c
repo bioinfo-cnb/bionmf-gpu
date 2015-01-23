@@ -142,32 +142,24 @@
  *
  * This feature is disabled if NMFGPU_FORCE_BLOCKS is non-zero.
  *
- ****************
- *
- * WARNING:
- *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  *********************************************************/
 
-// Required by <stdint.h>
-#ifndef __STDC_CONSTANT_MACROS
-	#define __STDC_CONSTANT_MACROS (1)
-#endif
-
 #include "common.h"
+#include "index_type.h"
+#include "real_type.h"
 
-#include <stdlib.h>
-#include <unistd.h>		/* getopt */
-#include <errno.h>
-#include <string.h>
-#include <stdarg.h>		/* vfprintf */
-#include <stdio.h>
-#include <ctype.h>		/* isprint */
-#include <inttypes.h>		/* strtoimax, INTMAX_C, uintptr_t */
 #if ! NMFGPU_FIXED_INIT
 	#include <sys/time.h>	/* gettimeofday */
 #endif
-
+#include <ctype.h>		/* isprint */
+#include <stdarg.h>		/* vfprintf */
+#include <unistd.h>		/* getopt */
+#include <stdio.h>
+#include <inttypes.h>		/* strtoimax, INTMAX_C, uintptr_t */
+#include <string.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -205,7 +197,6 @@
 	#define DEFAULT_GPU_DEVICE ( INDEX_C(0) )
 #endif
 
-
 // ---------------------------------------------
 // ---------------------------------------------
 
@@ -216,9 +207,9 @@ index_t num_processes = 1;	// (Maximum) Number of processes on the system.
 index_t num_act_processes = 1;	//  Number of "active" (i.e., not-idle) processes (<= num_processes).
 
 // Matrix dimension limits (NOTE: they may be modified if the program is executed in a GPU device).
-index_t memory_alignment = 1;										// Data alignment on memory.
-size_t matrix_max_num_items = SIZE_MAX / ( 2 * sizeof(real) );						// Maximum number of items in a matrix.
-index_t matrix_max_pitch = (index_t) MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );		// Maximum multiple of <memory_alignment>.
+index_t memory_alignment = 1;									// Data alignment on memory.
+size_t matrix_max_num_items = SIZE_MAX / ( 2 * sizeof(real) );					// Maximum number of items in a matrix.
+index_t matrix_max_pitch = (index_t) MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );	// Maximum multiple of <memory_alignment>.
 index_t matrix_max_non_padded_dim = (index_t) MIN( (SIZE_MAX / (4* sizeof(real))), (size_t) IDX_MAX );	// Maximum non-padded dimension.
 
 // Matrix dimensions:
@@ -950,7 +941,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 	 *	-z gpu_device
 	 */
 
-	// NOTE: First colon (':') indicates to return ':' instead of '?' in case of a missing option argument.
+	// NOTE: First colon (':') indicates to return ':', instead of '?', in case of a missing option argument.
 	while ( (opt = getopt( argc, (char *const *) argv, ":B:b:CcE:e:HhI:i:J:j:K:k:RrT:t:Z:z:" ) ) != -1 ) {
 
 		switch( opt ) {

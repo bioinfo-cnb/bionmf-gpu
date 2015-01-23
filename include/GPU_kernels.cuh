@@ -33,7 +33,7 @@
  ***********************************************************************/
 /**********************************************************
  * GPU_kernels.cuh
- *	Kernel code to be executed on the device (GPU).
+ *	Kernel code to execute on the device (GPU).
  *
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
@@ -52,25 +52,52 @@
 #if ! NMFGPU_GPU_KERNELS_CUH
 #define NMFGPU_GPU_KERNELS_CUH (1)
 
-#include "real_type.h"
 #include "index_type.h"
+#include "real_type.h"
 
-#include <cuda_runtime_api.h>
+#if defined(__CUDACC__) || defined(__NVCC__)	/* CUDA/C++ header file */
+	#include <cuda_runtime.h>
+	#include <cstddef>	/* size_t */
+
+#else						/* ISO-C header file */
+	#include <cuda_runtime_api.h>
+	#include <stdbool.h>
+	#include <stddef.h>	/* size_t */
+#endif
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
-/* Constants */
+/* Conditional Qualifiers */
 
-/* Data type used for array length on the GPU (i.e., the equivalent to "size_t",
- * but in number of items, not in bytes). However, it is recommended to currently
- * keep it as an alias of 'index_t' (actually, it should be 'unsigned int', but
- * the former avoids possible signed-unsigned type-casting operations).
- *
- * NOTE: Keep in sync with the GPUSIZE_MAX constant defined at "GPU_kernels.cuh".
- */
+// Restrict
+#undef NMFGPU_RESTRICT
+#if defined(__CUDACC__) || defined(__NVCC__)	/* CUDA/C++ header file */
+	#define NMFGPU_RESTRICT __restrict__
+#else						/* ISO-C header file */
+	#define NMFGPU_RESTRICT restrict
+#endif
+
+// Host
+#undef NMFGPU_HOST
+#if defined(__CUDACC__) || defined(__NVCC__)	/* CUDA/C++ header file */
+	#define NMFGPU_HOST __host__
+#else						/* ISO-C header file */
+	#define NMFGPU_HOST
+#endif
 
 // ---------------------------------------------
+// ---------------------------------------------
+
+/* C linkage, not C++ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* Constants */
 
 // Number of items simultaneously read from global memory by each thread in reduce_to_row()
 #if REDUCE_TO_ROW__ITEMS_PER_THREAD <= 0
@@ -213,8 +240,8 @@
  * WARNING:
  *	height > 1
  */
-__host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index_t pitch, real *__restrict__ d_Tmp, index_t block_height,
-				dim3 dimGrid, cudaStream_t stream_AccA, real *__restrict__ d_accum_A );
+NMFGPU_HOST void reduce_to_row( real const *NMFGPU_RESTRICT d_A, index_t height, index_t pitch, real *NMFGPU_RESTRICT d_Tmp,
+				index_t block_height, dim3 dimGrid, cudaStream_t stream_AccA, real *NMFGPU_RESTRICT d_accum_A );
 
 ////////////////////////////////////////////////
 
@@ -231,7 +258,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
  * div_operator: 'True' if operation to perform is a floating-point division.
  *		Otherwise, a subtraction is performed.
  */
-__host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, size_t matrix_size, index_t block_size, dim3 dimGrid,
+NMFGPU_HOST void div_sub( real *NMFGPU_RESTRICT d_A, real const *NMFGPU_RESTRICT d_B, size_t matrix_size, index_t block_size, dim3 dimGrid,
 			bool div_operator, cudaStream_t stream_A );
 
 ////////////////////////////////////////////////
@@ -246,8 +273,8 @@ __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, siz
  * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
  * "pitch" must be a multiple of 'memory_alignment'.
  */
-__host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, real const *__restrict__ d_accum_b, index_t height, index_t pitch,
-			index_t block_height, dim3 dimGrid, cudaStream_t stream_A );
+NMFGPU_HOST void mul_div( real *NMFGPU_RESTRICT d_A, real const *NMFGPU_RESTRICT d_Aux, real const *NMFGPU_RESTRICT d_accum_b, index_t height,
+			index_t pitch, index_t block_height, dim3 dimGrid, cudaStream_t stream_A );
 
 ////////////////////////////////////////////////
 
@@ -262,7 +289,7 @@ __host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, r
  * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
  * "pitch" must be a multiple of 'memory_alignment'.
  */
-__host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, index_t block_height, dim3 dimGrid, cudaStream_t stream_A );
+NMFGPU_HOST void adjust( real *NMFGPU_RESTRICT d_A, index_t height, index_t pitch, index_t block_height, dim3 dimGrid, cudaStream_t stream_A );
 
 ////////////////////////////////////////////////
 
@@ -273,14 +300,21 @@ __host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, ind
  * where
  *	0 <= max_val_idx <= width <= pitch
  *
- * height <= (dimGrid.y * dimGrid.x) * dimBlock.y <= size_of( d_Idx )
- * dimBlock.x must be a power of 2, and <= maxThreadsPerBlock
- * dimBlock.y <= (maxThreadsPerBlock / pitch).
+ * height <= (dimGrid.y * dimGrid.x) * block_dim.y <= size_of( d_Idx )
+ * block_dim.x must be a power of 2, and <= maxThreadsPerBlock
+ * block_dim.y <= (maxThreadsPerBlock / pitch).
  * dimGrid.x  <= maxGridSizeX
  * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
  */
-__host__ void idx_max( real const *__restrict__ d_A, index_t height, index_t width, index_t pitch, dim3 dimBlock, dim3 dimGrid,
-			cudaStream_t stream_A, index_t *__restrict__ d_Idx );
+NMFGPU_HOST void idx_max( real const *NMFGPU_RESTRICT d_A, index_t height, index_t width, index_t pitch, dim3 block_dim, dim3 dimGrid,
+			cudaStream_t stream_A, index_t *NMFGPU_RESTRICT d_Idx );
+
+////////////////////////////////////////////////
+////////////////////////////////////////////////
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

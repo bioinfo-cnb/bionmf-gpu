@@ -32,7 +32,7 @@
  *
  ***********************************************************************/
 /**********************************************************
- * matrix_operations.cuh
+ * matrix_operations.h
  *	Routines for matrix algebraic operations and data transfers.
  *	Launches kernels on the GPU.
  *
@@ -93,31 +93,15 @@
 #define NMFGPU_MATRIX_OPERATIONS_CUH (1)
 
 #if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
-	#include "timing.cuh"
+	#include "timing.h"
 #endif
-#include "matrix/matrix_io_routines.h"	/* matrix_tags_t */
-#include "real_type.h"
+#include "matrix_io/matrix_io_routines.h"	/* matrix_tags_t */
 #include "index_type.h"
+#include "real_type.h"
 
 #include <cuda_runtime_api.h>
 
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-/* Selects the appropriate "restrict" keyword. */
-
-#undef RESTRICT
-
-#if __CUDACC__				/* CUDA source code */
-	#define RESTRICT __restrict__
-#else					/* C99 source code */
-	#define RESTRICT restrict
-#endif
-
-/* C linkage, not C++. */
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <stdbool.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -159,8 +143,8 @@ void init_kernel_params( index_t pitch );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int show_device_matrix( void const *RESTRICT dMatrix, index_t nrows, index_t ncols, index_t pitch, bool real_data, bool transpose,
-			bool all_processes, struct matrix_tags_t const *RESTRICT mt );
+int show_device_matrix( void const *restrict dMatrix, index_t nrows, index_t ncols, index_t pitch, bool real_data, bool transpose,
+			bool all_processes, struct matrix_tags_t const *restrict mt );
 
 ////////////////////////////////////////////////
 
@@ -178,14 +162,14 @@ int show_device_matrix( void const *RESTRICT dMatrix, index_t nrows, index_t nco
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_random( real *RESTRICT d_A, index_t height, index_t width, index_t padding,
+int matrix_random( real *restrict d_A, index_t height, index_t width, index_t padding,
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2
 				bool transpose,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
-				char const *RESTRICT const matrix_name,
+				char const *restrict const matrix_name,
 			#endif
-			cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
+			cudaStream_t stream_A, cudaEvent_t *restrict event_A );
 
 ////////////////////////////////////////////////
 
@@ -207,14 +191,14 @@ int matrix_random( real *RESTRICT d_A, index_t height, index_t width, index_t pa
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_to_row( real const *RESTRICT d_A, index_t height, index_t pitch,
+int matrix_to_row( real const *restrict d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG
 				index_t width,
 			#endif
 			#if NMFGPU_DEBUG_REDUCT || NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
-				char const *RESTRICT const matrix_name,
+				char const *restrict const matrix_name,
 			#endif
-			real *RESTRICT d_Tmp, real *RESTRICT d_accum_A, cudaStream_t stream_AccA );
+			real *restrict d_Tmp, real *restrict d_accum_A, cudaStream_t stream_AccA );
 
 ////////////////////////////////////////////////
 
@@ -233,16 +217,16 @@ int matrix_to_row( real const *RESTRICT d_A, index_t height, index_t pitch,
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_div_sub( real *RESTRICT d_A, real const *RESTRICT d_B, index_t height, index_t pitch,
+int matrix_div_sub( real *restrict d_A, real const *restrict d_B, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
 				index_t width,
 			#endif
 			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
-				char const *RESTRICT const matrix_name_A, char const *RESTRICT const matrix_name_B,
+				char const *restrict const matrix_name_A, char const *restrict const matrix_name_B,
 			#endif
 			bool div_operator,
 			#if NMFGPU_PROFILING_KERNELS
-				timing_data_t *RESTRICT td,
+				timing_data_t *restrict td,
 			#endif
 			cudaStream_t stream_A, cudaEvent_t event_B );
 
@@ -260,15 +244,15 @@ int matrix_div_sub( real *RESTRICT d_A, real const *RESTRICT d_B, index_t height
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_mul_div( real *RESTRICT d_A, real const *RESTRICT d_Aux, real const *RESTRICT d_accum_B, index_t height, index_t pitch,
+int matrix_mul_div( real *restrict d_A, real const *restrict d_Aux, real const *restrict d_accum_B, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
 				index_t width, bool transpose,
 			#endif
 			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
-				char const *RESTRICT const matrix_name_A,
+				char const *restrict const matrix_name_A,
 			#endif
 			#if NMFGPU_DEBUG
-				char const *RESTRICT const matrix_name_Aux, char const *RESTRICT const matrix_name_accB,
+				char const *restrict const matrix_name_Aux, char const *restrict const matrix_name_accB,
 			#endif
 			cudaStream_t stream_A );
 
@@ -284,14 +268,14 @@ int matrix_mul_div( real *RESTRICT d_A, real const *RESTRICT d_Aux, real const *
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_adjust( real *RESTRICT d_A, index_t height, index_t pitch,
+int matrix_adjust( real *restrict d_A, index_t height, index_t pitch,
 			#if NMFGPU_DEBUG
 				index_t width, bool transpose,
 			#endif
 			#if NMFGPU_DEBUG || (! NMFGPU_PROFILING_GLOBAL)
-				char const *RESTRICT const matrix_name_A,
+				char const *restrict const matrix_name_A,
 			#endif
-			cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
+			cudaStream_t stream_A, cudaEvent_t *restrict event_A );
 
 ////////////////////////////////////////////////
 
@@ -306,17 +290,17 @@ int matrix_adjust( real *RESTRICT d_A, index_t height, index_t pitch,
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_idx_max( real const *RESTRICT d_A, index_t width, index_t pitch, index_t height,
+int matrix_idx_max( real const *restrict d_A, index_t width, index_t pitch, index_t height,
 			#if NMFGPU_DEBUG
 				bool transpose,
 			#endif
 			#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
-				char const *RESTRICT const matrix_name_A,
+				char const *restrict const matrix_name_A,
 			#endif
 			#if NMFGPU_DEBUG
-				char const *RESTRICT const matrix_name_Idx,
+				char const *restrict const matrix_name_Idx,
 			#endif
-			cudaStream_t stream_A, index_t *RESTRICT d_Idx );
+			cudaStream_t stream_A, index_t *restrict d_Idx );
 
 ////////////////////////////////////////////////
 
@@ -331,20 +315,20 @@ int matrix_idx_max( real const *RESTRICT d_A, index_t width, index_t pitch, inde
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int upload_matrix( real const *RESTRICT A, index_t height, index_t pitch, real *RESTRICT d_A,
+int upload_matrix( real const *restrict A, index_t height, index_t pitch, real *restrict d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 				index_t width, bool transpose,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
-				char const *RESTRICT const matrix_name_A,
+				char const *restrict const matrix_name_A,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-				char const *RESTRICT const matrix_name_dA,
+				char const *restrict const matrix_name_dA,
 			#endif
 			#if NMFGPU_PROFILING_TRANSF
-				timing_data_t *RESTRICT const upload_timing,
+				timing_data_t *restrict const upload_timing,
 			#endif
-			cudaStream_t stream_A, cudaEvent_t *RESTRICT event_A );
+			cudaStream_t stream_A, cudaEvent_t *restrict event_A );
 
 ////////////////////////////////////////////////
 
@@ -367,25 +351,25 @@ int upload_matrix( real const *RESTRICT A, index_t height, index_t pitch, real *
  * Then, the operation is recorded using the same event object.
  *
  * It also checks that (stcol + block_pitch) <= pitch,
- * and adjusts the width of the block to be transferred, if necessary.
+ * and adjusts the width of the block to transfer, if necessary.
  *
  * NOTE: If host memory was mapped, the transfer operation and ALL event action(s) are SKIPPED.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int upload_matrix_partial( real const *RESTRICT pA, index_t height, index_t pitch, index_t strow, index_t stcol,
+int upload_matrix_partial( real const *restrict pA, index_t height, index_t pitch, index_t strow, index_t stcol,
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 					index_t block_width,
 				#endif
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL)
-					char const *RESTRICT const matrix_name_A,
+					char const *restrict const matrix_name_A,
 				#endif
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
-					char const *RESTRICT const matrix_name_dA,
+					char const *restrict const matrix_name_dA,
 				#endif
-				index_t block_pitch, real *RESTRICT d_A, cudaStream_t stream_A, cudaEvent_t event_A
+				index_t block_pitch, real *restrict d_A, cudaStream_t stream_A, cudaEvent_t event_A
 				#if NMFGPU_PROFILING_TRANSF
-					, timing_data_t *RESTRICT const upload_timing
+					, timing_data_t *restrict const upload_timing
 				#endif
 			);
 
@@ -402,28 +386,19 @@ int upload_matrix_partial( real const *RESTRICT pA, index_t height, index_t pitc
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int download_matrix( void *__restrict__ A, size_t nitems, size_t data_size, void const *RESTRICT d_A,
+int download_matrix( void *__restrict__ A, size_t nitems, size_t data_size, void const *restrict d_A,
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2
 				index_t height, index_t width, index_t pitch, bool real_data, bool transpose,
-				char const *RESTRICT const matrix_name_A,
+				char const *restrict const matrix_name_A,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 \
 				|| ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_TRANSF))
-				char const *RESTRICT const matrix_name_dA,
+				char const *restrict const matrix_name_dA,
 			#endif
 			#if NMFGPU_PROFILING_TRANSF
-				timing_data_t *RESTRICT const download_timing,
+				timing_data_t *restrict const download_timing,
 			#endif
 			cudaStream_t stream_A );
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif
-
-#undef RESTRICT
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

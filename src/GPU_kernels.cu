@@ -33,7 +33,7 @@
  ***********************************************************************/
 /**********************************************************
  * GPU_kernels.cu
- *	Kernel code to be executed on the device (GPU).
+ *	Kernel code to execute on the device (GPU).
  *
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
@@ -50,6 +50,13 @@
  *********************************************************/
 
 #include "GPU_kernels.cuh"
+#include "index_type.h"
+#include "real_type.h"
+
+// Compiled in C++ mode
+#include <cuda_runtime.h>
+
+#include <cstddef>	/* NULL, size_t */
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -94,7 +101,7 @@
 
 #if (! __CUDA_ARCH__) || (__CUDA_ARCH__ >= 120)	/* Compute Capability >= 1.2 */
 
-	// HACK: Trick to avoid useless warnings...
+	// HACK: Trick to avoid useless warnings on !__CUDA_ARCH__:
 	#if __CUDA_ARCH__ >= 120
 		static
 	#else
@@ -210,12 +217,12 @@ static __device__ real device_fdiv( real valA, real valB )
  *		NOT use this function with negative values.
  *
  *		In contrast, in "extended" mode, the integer product is performed
- *		with the regular operator "*", which on Compute Capability 1.x
+ *		with the regular operator '*', which on Compute Capability 1.x
  *		is compiled into multiple assembler instructions. However, it
  *		is required when any of the operands is greater than or equal
  *		to 2**24. In this case, the signedness is honored.
  *
- *		On Compute Capability >= 2.0, this flag is IGNORED, since "*"
+ *		On Compute Capability >= 2.0, this flag is IGNORED, since '*'
  *		already performs the fastest operation.
  */
 template < bool fast_prod >
@@ -286,7 +293,7 @@ static __device__ rp2shm_t new_rp2shm( void *__restrict__ pshm, index_t const le
  * given index. That is, returns the equivalent to '&rp2shm[ index ]'.
  *
  * volatile_mode: If 'true', loads the value from a volatile pointer. That is,
- *		  using a real load instruction, rather than reusing some
+ *		  it uses a real load instruction instead of reusing some
  *		  register. If set to 'false', lets the compiler to decide.
  *
  * Returns a real-type value.
@@ -340,7 +347,7 @@ static __device__ real load_from_rp2shm( rp2shm_t rp2shm, index_t index )
  * given index. That is, the equivalent to 'rp2shm[ index ] = value;'.
  *
  * volatile_mode: If 'true', stores "value" through a volatile pointer. That is,
- *		  using a real store instruction, rather than reusing some
+ *		  it uses a real load instruction instead of reusing some
  *		  register. If set to 'false', lets the compiler to decide.
  */
 template < bool volatile_mode >
@@ -442,13 +449,13 @@ static __device__ real real_shfl_xor( real variable, index_t laneMask )
  * gridDim.y <= gridDim.x
  *
  * ext_grid:	'True' on an "extended" grid (i.e., gridDim.y > 1).
- *		In this case, it requires "single_Blk" to be 'false'.
+ *		In this case, it requires "single_Blk" set to 'false'.
  *		Otherwise, it forces blockIdx.y = 0 and gridDim.y = 1.
  *
  * single_Blk:	'True' if there is only a single block (i.e., gridDim.x == gridDim.y == 1,
  *		and  blockIdx.y == blockIdx.x == 0).
  *		In this case, it forces blockIdx.y = blockIdx.x = 0, and gridDim.x = gridDim.y = 1.
- *		In addition, it requires "ext_grid" to be 'false'.
+ *		In addition, it requires "ext_grid" set to 'false'.
  *
  * items_per_thread: Number of loads from global memory performed by each thread at a time.
  *
@@ -457,10 +464,10 @@ static __device__ real real_shfl_xor( real variable, index_t laneMask )
  *		8 bits of both (32-bits) input operands, and returns the lower 32 bits of
  *		the 48-bits result. This mode requires input operands less than 2**24.
  *		In contrast, in "extended" mode, some integer products are performed with
- *		the regular operator "*", which on Compute Capability 1.x, is compiled into
+ *		the regular operator '*', which on Compute Capability 1.x, is compiled into
  *		multiple assembler instructions. This mode must be used when the number of
  *		blocks is greater than or equal to 2**24. In that case, only the related
- *		operations are performed with "*". The rest, are still performed in 24-bits.
+ *		operations are performed with '*'. The rest, are still performed in 24-bits.
  *
  * WARNING:
  *	- On Compute Capability 1.x:
@@ -472,7 +479,7 @@ static __device__ real real_shfl_xor( real variable, index_t laneMask )
  *
  *		On Compute Capability >= 2.0:
  *			fast_prod == false:
- *				All products are performed with "*", which is already the fastest mode.
+ *				All products are performed with '*', which is already the fastest mode.
  *
  *		On Compute Capability >= 3.0:
  *			(sizeof(index_t) == sizeof(int)) && (items_per_thread > 2) && (ext_grid == true):
@@ -845,13 +852,13 @@ static __device__ real reduce_shmem_to_row( index_t bs, index_t offset, real cur
  * (gridDim.y * gridDim.x) <= UINT_MAX
  *
  * ext_grid:	'True' on an "extended" grid (i.e., gridDim.y > 1).
- *		In this case, it requires "single_Blk" to be 'false'.
+ *		In this case, it requires "single_Blk" set to 'false'.
  *		Otherwise, it forces blockIdx.y = 0 and gridDim.y = 1.
  *
  * single_Blk:	'True' if there is only a single block (i.e., gridDim.x == gridDim.y == 1,
  *		and  blockIdx.y == blockIdx.x == 0).
  *		In this case, it forces blockIdx.y = blockIdx.x = 0, and gridDim.x = gridDim.y = 1.
- *		In addition, it requires "ext_grid" to be 'false'.
+ *		In addition, it requires "ext_grid" set to 'false'.
  *
  * block_width: Overrides blockDim.x.
  *		On Compute Capability 1.x, it is denoted as "'half-warp-size' mode" when set to 16.
@@ -870,10 +877,10 @@ static __device__ real reduce_shmem_to_row( index_t bs, index_t offset, real cur
  *		8 bits of both (32-bits) input operands, and returns the lower 32 bits of
  *		the 48-bits result. This mode requires input operands less than 2**24.
  *		In contrast, in "normal" mode, some integer products are performed with the
- *		regular operator "*", which on Compute Capability 1.x, is compiled into
+ *		regular operator '*', which on Compute Capability 1.x, is compiled into
  *		multiple assembler instructions. This mode must be used when the number of
  *		blocks is greater than or equal to 2**24. In that case, only the related
- *		operations are performed with "*". The rest, are still performed in 24-bits.
+ *		operations are performed with '*'. The rest, are still performed in 24-bits.
  *
  * Required size of shared memory:
  *	block_height != 1: block_width * block_height * sizeof(real) bytes.
@@ -903,7 +910,7 @@ static __device__ real reduce_shmem_to_row( index_t bs, index_t offset, real cur
  *
  *		On Compute Capability >= 2.0:
  *			fast_prod == false:
- *				All products are performed with "*", which is already the fastest mode.
+ *				All products are performed with '*', which is already the fastest mode.
  *
  *		On Compute Capability >= 3.0
  *			(sizeof(index_t) == sizeof(int)) && (items_per_thread > 2) && (ext_grid == true):
@@ -1152,11 +1159,11 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
 	 *
 	 * On Compute Capability 1.x, if the number of blocks is greater than
 	 * or equal to 2**24, some of the integer products must be performed
-	 * with the regular operator "*", which is slower on this architecture.
+	 * with the regular operator '*', which is slower on this architecture.
 	 * NOTE: This can happen on EXTENDED grids, only.
 	 * Otherwise (i.e., with less blocks), it uses the "fast" mode.
 	 *
-	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
+	 * On Compute Capability >= 2.0, '*' is already the "fast" mode.
 	 */
 	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 
@@ -1592,10 +1599,10 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
  *		8 bits of both (32-bits) input operands, and returns the lower 32 bits of
  *		the 48-bits result. This mode requires input operands less than 2**24.
  *		In contrast, in "normal" mode, some integer products are performed with the
- *		regular operator "*", which on Compute Capability 1.x, is compiled into
+ *		regular operator '*', which on Compute Capability 1.x, is compiled into
  *		multiple assembler instructions. This mode must be used when the number of
  *		blocks is greater than or equal to 2**24. In that case, only the related
- *		operations are performed with "*". The rest, are still performed in 24-bits.
+ *		operations are performed with '*'. The rest, are still performed in 24-bits.
  *
  * WARNING:
  *	- On Compute Capability 1.x:
@@ -1605,7 +1612,7 @@ __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index
  *
  *		On Compute Capability >= 2.0:
  *			fast_prod == false:
- *				All products are performed with "*", which is already the fastest mode.
+ *				All products are performed with '*', which is already the fastest mode.
  *
  *		On Compute Capability >= 3.0
  *			(sizeof(size_t) == sizeof(index_t)) && (ext_grid == true):
@@ -1814,11 +1821,11 @@ __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, siz
 	 *
 	 * On Compute Capability 1.x, if the number of blocks is greater than
 	 * or equal to 2**24, some of the integer products must be performed
-	 * with the regular operator "*", which is slower on this architecture.
+	 * with the regular operator '*', which is slower on this architecture.
 	 * NOTE: This can happen on EXTENDED grids, only.
 	 * Otherwise (i.e., with less blocks), it uses the "fast" mode.
 	 *
-	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
+	 * On Compute Capability >= 2.0, '*' is already the "fast" mode.
 	 */
 	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 
@@ -1907,10 +1914,10 @@ __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, siz
  *		8 bits of both (32-bits) input operands, and returns the lower 32 bits of
  *		the 48-bits result. This mode requires input operands less than 2**24.
  *		In contrast, in "normal" mode, some integer products are performed with the
- *		regular operator "*", which on Compute Capability 1.x, is compiled into
+ *		regular operator '*', which on Compute Capability 1.x, is compiled into
  *		multiple assembler instructions. This mode must be used when the number of
  *		blocks is greater than or equal to 2**24. In that case, only the related
- *		operations are performed with "*". The rest, are still performed in 24-bits.
+ *		operations are performed with '*'. The rest, are still performed in 24-bits.
  *
  * Required size of shared memory:
  *	Multi-rows blocks:	  blockDim.x * sizeof(real) bytes.
@@ -1924,7 +1931,7 @@ __host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, siz
  *
  *		On Compute Capability >= 2.0:
  *			fast_prod == false:
- *				All products are performed with "*", which is already the fastest mode.
+ *				All products are performed with '*', which is already the fastest mode.
  *
  *		On Compute Capability >= 3.0:
  *			(sizeof(index_t) == sizeof(int)) && (items_per_thread > 2) && (ext_grid == true):
@@ -2141,11 +2148,11 @@ __host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, r
 	 *
 	 * On Compute Capability 1.x, if the number of blocks is greater than
 	 * or equal to 2**24, some of the integer products must be performed
-	 * with the regular operator "*", which is slower on this architecture.
+	 * with the regular operator '*', which is slower on this architecture.
 	 * NOTE: This can happen on EXTENDED grids, only.
 	 * Otherwise (i.e., with less blocks), it uses the "fast" mode.
 	 *
-	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
+	 * On Compute Capability >= 2.0, '*' is already the "fast" mode.
 	 */
 	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 
@@ -2247,10 +2254,10 @@ __host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, r
  *		8 bits of both (32-bits) input operands, and returns the lower 32 bits of
  *		the 48-bits result. This mode requires input operands less than 2**24.
  *		In contrast, in "normal" mode, some integer products are performed with the
- *		regular operator "*", which on Compute Capability 1.x, is compiled into
+ *		regular operator '*', which on Compute Capability 1.x, is compiled into
  *		multiple assembler instructions. This mode must be used when the number of
  *		blocks is greater than or equal to 2**24. In that case, only the related
- *		operations are performed with "*". The rest, are still performed in 24-bits.
+ *		operations are performed with '*'. The rest, are still performed in 24-bits.
  *
  * WARNING:
  *	- On Compute Capability 1.x:
@@ -2260,7 +2267,7 @@ __host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, r
  *
  *		On Compute Capability >= 2.0:
  *			fast_prod == false:
- *				All products are performed with "*", which is already the fastest mode.
+ *				All products are performed with '*', which is already the fastest mode.
  *
  *		On Compute Capability >= 3.0:
  *			(sizeof(index_t) == sizeof(int)) && (items_per_thread > 2) && (ext_grid == true):
@@ -2454,11 +2461,11 @@ __host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, ind
 	 *
 	 * On Compute Capability 1.x, if the number of blocks is greater than
 	 * or equal to 2**24, some of the integer products must be performed
-	 * with the regular operator "*", which is slower on this architecture.
+	 * with the regular operator '*', which is slower on this architecture.
 	 * NOTE: This can happen on EXTENDED grids, only.
 	 * Otherwise (i.e., with less blocks), it uses the "fast" mode.
 	 *
-	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
+	 * On Compute Capability >= 2.0, '*' is already the "fast" mode.
 	 */
 	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 
@@ -2531,10 +2538,10 @@ __host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, ind
  *		8 bits of both (32-bits) input operands, and returns the lower 32 bits of
  *		the 48-bits result. This mode requires input operands less than 2**24.
  *		In contrast, in "extended" mode, some integer products are performed with
- *		the regular operator "*", which on Compute Capability 1.x, is compiled into
+ *		the regular operator '*', which on Compute Capability 1.x, is compiled into
  *		multiple assembler instructions. This mode must be used when the number of
  *		blocks is greater than or equal to 2**24. In that case, only the related
- *		operations are performed with "*". The rest, are still performed in 24-bits.
+ *		operations are performed with '*'. The rest, are still performed in 24-bits.
  *
  * WARNING:
  *	- On Compute Capability 1.x:
@@ -2546,7 +2553,7 @@ __host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, ind
  *
  *		On Compute Capability >= 2.0:
  *			fast_prod == false:
- *				All products are performed with "*", which is already the fastest mode.
+ *				All products are performed with '*', which is already the fastest mode.
  *
  *		On Compute Capability >= 3.0:
  *			(sizeof(index_t) == sizeof(int)) && (items_per_thread > 2) && (ext_grid == true):
@@ -2612,7 +2619,7 @@ static __device__ void idx_max_gmem( real const *__restrict__ d_A, index_t width
 		/* Each threads processes <num_items> elements from d_A[]
 		 * which have a distance equal to the block width ("bdx").
 		 *
-		 * Magnitudes computed with "pitch" (rather than "bdx"),
+		 * Magnitudes computed with "pitch" (rather than with "bdx"),
 		 * are named "active".
 		 */
 
@@ -3192,10 +3199,10 @@ static __device__ void idx_max_shmem( real *__restrict__ max_val, index_t *__res
  *		8 bits of both (32-bits) input operands, and returns the lower 32 bits of
  *		the 48-bits result. This mode requires input operands less than 2**24.
  *		In contrast, in "extended" mode, some integer products are performed with
- *		the regular operator "*", which on Compute Capability 1.x, is compiled into
+ *		the regular operator '*', which on Compute Capability 1.x, is compiled into
  *		multiple assembler instructions. This mode must be used when the number of
  *		blocks is greater than or equal to 2**24. In that case, only the related
- *		operations are performed with "*". The rest, are still performed in 24-bits.
+ *		operations are performed with '*'. The rest, are still performed in 24-bits.
  *
  * Size of shared-memory block: bs * ( sizeof(index_t) + sizeof(real) ),
  * where bs = (blockDim.x * blockDim.y).
@@ -3215,7 +3222,7 @@ static __device__ void idx_max_shmem( real *__restrict__ max_val, index_t *__res
  *
  *		On Compute Capability >= 2.0:
  *			fast_prod == false:
- *				All products are performed with "*", which is already the fastest mode.
+ *				All products are performed with '*', which is already the fastest mode.
  *
  *		On Compute Capability >= 3.0:
  *			(sizeof(index_t) == sizeof(int)) && (items_per_thread > 2) && (ext_grid == true):
@@ -3330,19 +3337,19 @@ static __global__ void kernel_idx_max( real const *__restrict__ d_A, index_t wid
  * where
  *	0 <= max_val_idx <= width <= pitch
  *
- * height <= (dimGrid.y * dimGrid.x) * dimBlock.y <= size_of( d_Idx )
- * dimBlock.x must be a power of 2, and <= maxThreadsPerBlock
- * dimBlock.y <= (maxThreadsPerBlock / pitch).
+ * height <= (dimGrid.y * dimGrid.x) * block_dim.y <= size_of( d_Idx )
+ * block_dim.x must be a power of 2, and <= maxThreadsPerBlock
+ * block_dim.y <= (maxThreadsPerBlock / pitch).
  * dimGrid.x  <= maxGridSizeX
  * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
  */
-__host__ void idx_max( real const *__restrict__ d_A, index_t height, index_t width, index_t pitch, dim3 dimBlock, dim3 dimGrid,
+__host__ void idx_max( real const *__restrict__ d_A, index_t height, index_t width, index_t pitch, dim3 block_dim, dim3 dimGrid,
 			cudaStream_t stream_A, index_t *__restrict__ d_Idx )
 {
 
 	// Block dimensions:
-	index_t const block_width = dimBlock.x;
-	index_t const block_height = dimBlock.y;
+	index_t const block_width = block_dim.x;
+	index_t const block_height = block_dim.y;
 
 	// Grid dimensions:
 	index_t const grid_length = dimGrid.x;
@@ -3358,11 +3365,11 @@ __host__ void idx_max( real const *__restrict__ d_A, index_t height, index_t wid
 	 *
 	 * On Compute Capability 1.x, if the number of blocks is greater than
 	 * or equal to 2**24, some of the integer products must be performed
-	 * with the regular operator "*", which is slower on this architecture.
+	 * with the regular operator '*', which is slower on this architecture.
 	 * NOTE: This can happen on EXTENDED grids, only.
 	 * Otherwise (i.e., with less blocks), it uses the "fast" mode.
 	 *
-	 * On Compute Capability >= 2.0, "*" is already the "fast" mode.
+	 * On Compute Capability >= 2.0, '*' is already the "fast" mode.
 	 */
 	bool const fast_product = (computeCapability > 1) + (((size_t) grid_extension * (size_t) grid_length) < (1 << 24));
 

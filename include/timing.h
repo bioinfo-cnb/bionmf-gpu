@@ -32,7 +32,7 @@
  *
  ***********************************************************************/
 /**********************************************************
- * timing.cuh
+ * timing.h
  *	Routines for timing.
  *
  * NOTE: The following macro constants can be defined to modify the
@@ -55,27 +55,10 @@
 #include <cuda_runtime_api.h>
 
 #include <stdint.h>	/* uint_fast32_t, uintmax_t */
+#include <stdbool.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
-
-/* Selects the appropriate "restrict" keyword. */
-
-#undef RESTRICT
-
-#if __CUDACC__				/* CUDA source code */
-	#define RESTRICT __restrict__
-#else					/* C99 source code */
-	#define RESTRICT restrict
-#endif
-
-/* C linkage, not C++. */
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
 
 /* Data types */
 
@@ -229,7 +212,7 @@ float stop_cuda_timer( void );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *RESTRICT td, size_t nitems, index_t counter );
+int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *restrict td, size_t nitems, index_t counter );
 
 ////////////////////////////////////////////////
 
@@ -243,7 +226,7 @@ int stop_cuda_timer_cnt_ev( cudaEvent_t start_timing_event, timing_data_t *RESTR
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int stop_cuda_timer_cnt( timing_data_t *RESTRICT td, size_t nitems, index_t counter );
+int stop_cuda_timer_cnt( timing_data_t *restrict td, size_t nitems, index_t counter );
 
 ////////////////////////////////////////////////
 
@@ -255,7 +238,7 @@ int stop_cuda_timer_cnt( timing_data_t *RESTRICT td, size_t nitems, index_t coun
  *
  * data_size: Size in bytes of the processed data type.
  */
-void print_elapsed_time( char const *RESTRICT const op, timing_data_t *RESTRICT td, size_t data_size, bool show_secs, bool all_processes );
+void print_elapsed_time( char const *restrict const op, timing_data_t *restrict td, size_t data_size, bool show_secs, bool all_processes );
 
 ////////////////////////////////////////////////
 
@@ -270,15 +253,6 @@ void show_kernel_times( void );
  * Shows time elapsed on data transfers.
  */
 void show_transfer_times( void );
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-#ifdef __cplusplus
-}
-#endif
-
-#undef RESTRICT
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

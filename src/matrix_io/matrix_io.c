@@ -79,32 +79,23 @@
  *
  * Both types of structure are defined in "matrix_io_routines.h".
  *
- ****************
- *
- * WARNING:
- *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  **********************************************************/
 
-// Required by <inttypes.h>
-#ifndef __STDC_FORMAT_MACROS
-	#define __STDC_FORMAT_MACROS (1)
-#endif
-#ifndef __STDC_CONSTANT_MACROS
-	#define __STDC_CONSTANT_MACROS (1)
-#endif
-#include "matrix/matrix_io.h"
+#include "matrix_io/matrix_io.h"
+#include "matrix_io/matrix_io_routines.h"
 #include "common.h"
+#include "index_type.h"
+#include "real_type.h"
 
-#include <stdlib.h>
-#include <errno.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>	/* unlink */
-#include <ctype.h>	/* isprint */
-#include <inttypes.h>	/* PRIxxx, xxx_C, uintxxx_t */
 #include <math.h>	/* isless */
-
+#include <ctype.h>	/* isprint */
+#include <unistd.h>	/* unlink */
+#include <stdio.h>
+#include <inttypes.h>	/* PRIxxx, xxx_C, uintxxx_t */
+#include <string.h>
+#include <errno.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -163,7 +154,8 @@ static bool const error_shown_by_all = false;		// Error messages on invalid argu
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_check_dimensions( char const *restrict const function_name, index_t nrows, index_t ncols, index_t pitch, bool transpose, bool verbose )
+int matrix_check_dimensions( char const *restrict const function_name, index_t nrows, index_t ncols, index_t pitch, bool transpose,
+				bool verbose )
 {
 
 	// Limits on matrix dimensions
@@ -366,9 +358,9 @@ static int matrix_read_line( FILE *restrict file, index_t current_line, char con
 	// First ncols-1 columns
 	for ( index_t col = 0 ; col < (ncols-1) ; col++, pmatrix_r += (incr_ncols * data_size) ) {
 
-		char c[2] = { 0, 0 };			// Delimiter to be read.
+		char c[2] = { 0, 0 };			// Delimiter to read.
 		int conv = 0;				// Number of matched items.
-		data_t value;				// Value to be read.
+		data_t value;				// Value to read.
 		value.r = REAL_C( 0.0 );		// Initialized as real-type, since sizeof(real) >= sizeof(index_t)
 
 		/* Reads a value.
@@ -449,9 +441,9 @@ static int matrix_read_line( FILE *restrict file, index_t current_line, char con
 	{
 		index_t const col = ncols - 1;
 
-		char c[3] = { 0, 0, 0 };		// Newline to be read ("\r\n" or "\n"), followed by '\0'.
+		char c[3] = { 0, 0, 0 };		// Newline to read ("\r\n" or "\n"), followed by '\0'.
 		int conv = 0;				// Number of matched items.
-		data_t value;				// Value to be read.
+		data_t value;				// Value to read.
 		value.r = REAL_C( 0.0 );		// Initialized as real-type, since sizeof(real) >= sizeof(index_t)
 
 		/* Reads a value.
@@ -619,7 +611,7 @@ static int check_blank_lines( FILE *restrict file, index_t current_line )
 	char last_char = 0;
 
 	do {
-		char chr[3] = { 0, 0, 0 };	// Newline to be read ("\r\n" or "\n"), followed by '\0'.
+		char chr[3] = { 0, 0, 0 };	// Newline to read ("\r\n" or "\n"), followed by '\0'.
 		errno = 0;
 
 		#if NMFGPU_DEBUG_READ_MATRIX2
@@ -669,7 +661,7 @@ static int check_blank_lines( FILE *restrict file, index_t current_line )
 					current_line + num_bl );
 		else if ( num_bl >= MAX_NUM_BLANK_LINES )
 			print_error( error_shown_by_all, "Warning: There are more than %d blank lines starting at file line %" PRI_IDX
-					". It does NOT seem to be a valid file. Aborting...\n", MAX_NUM_BLANK_LINES, current_line+1);
+					". It seems NOT to be a valid file. Aborting...\n", MAX_NUM_BLANK_LINES, current_line+1);
 		else
 			print_error( error_shown_by_all, "Error in input file: No matrix data at line %" PRI_IDX "\n"
 					"Invalid file format.\n\n", current_line + 1 );
@@ -1535,8 +1527,8 @@ int matrix_load_ascii_verb( char const *restrict filename, bool numeric_hdrs, bo
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load_ascii( char const *restrict filename, index_t nrows, index_t ncols, index_t pitch, bool real_data, bool hasname, bool hasheaders,
-			bool haslabels, bool transpose, void *restrict *restrict matrix, struct matrix_tags_t *restrict mt )
+int matrix_load_ascii( char const *restrict filename, index_t nrows, index_t ncols, index_t pitch, bool real_data, bool hasname,
+			bool hasheaders, bool haslabels, bool transpose, void *restrict *restrict matrix, struct matrix_tags_t *restrict mt )
 {
 
 	// Format string for fscanf(3).
@@ -1563,7 +1555,7 @@ int matrix_load_ascii( char const *restrict filename, index_t nrows, index_t nco
 	// Delimiter character (TAB by default).
 	int delimiter = (int) '\t';
 
-	// Line number to be read.
+	// Line number to read.
 	index_t nlines = 1;
 
 	////////////////////////////////
@@ -2196,7 +2188,7 @@ static int matrix_read_binary_native( FILE *restrict file, index_t nrows, index_
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-static int matrix_read_tags( FILE *restrict file, index_t nrows, index_t ncols, bool transpose, bool verbose, struct matrix_tags_t *restrict mt )
+static int matrix_read_tags( FILE *restrict file, index_t nrows, index_t ncols, bool transpose, bool verbose, struct matrix_tags_t *restrict mt)
 {
 
 	index_t const major_dim = ( transpose ? ncols : nrows );
@@ -3500,8 +3492,8 @@ int matrix_save_combined_ascii( char const *restrict filename, char const *restr
 			// Writes that row: prefixes only if there are labels.
 			status = matrix_write_line( out_file, data, ncols, delimiter, haslabels );
 			if ( status != EXIT_SUCCESS ) {
-				print_error( error_shown_by_all, "Error in matrix_save_combined_ascii() writing row %" PRI_IDX " from file 0 of %"
-						PRI_IDX " (ncols=%" PRI_IDX ").\n", i, nmatrices, ncols );
+				print_error( error_shown_by_all, "Error in matrix_save_combined_ascii() writing row %" PRI_IDX
+						" from file 0 of %" PRI_IDX " (ncols=%" PRI_IDX ").\n", i, nmatrices, ncols );
 				free(data); fclose(out_file);
 				for ( index_t j = 0 ; j < nmatrices ; j++ ) fclose(input_files[j]);
 				free((void *)input_files);
@@ -4039,7 +4031,7 @@ int matrix_show( void const *restrict matrix, index_t nrows, index_t ncols, inde
 	index_t const full_major_dim = ( transpose ? ncols : nrows );
 	index_t const full_minor_dim = ( transpose ? nrows : ncols );
 
-	// Portion of input matrix to be printed.
+	// Portion of input matrix to print.
 	#if NMFGPU_TESTING
 		// Testing mode: prints the whole matrix.
 		index_t const short_major_dim = full_major_dim;

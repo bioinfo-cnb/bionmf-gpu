@@ -142,11 +142,6 @@
  *
  * This feature is disabled if NMFGPU_FORCE_BLOCKS is non-zero.
  *
- ****************
- *
- * WARNING:
- *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  *********************************************************/
 
 #if ! NMFGPU_COMMON_H
@@ -160,28 +155,12 @@
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
-// Selects the appropriate "restrict" keyword.
-#undef RESTRICT
-#if __CUDACC__				/* CUDA source code */
-	#define RESTRICT __restrict__
-#else					/* C99 source code */
-	#define RESTRICT restrict
-#endif
-
-/* Always process this header as C code, not C++. */
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
-
 /* Data types */
 
 // Structure for arguments
 struct input_arguments {
 
-	char const *RESTRICT filename;
+	char const *restrict filename;
 	bool numeric_hdrs;		// Input matrix has numeric columns headers (ignored for binary files).
 	bool numeric_lbls;		// Input matrix has numeric row labels (ignored for binary files).
 
@@ -236,16 +215,14 @@ extern index_t Kp;	// <K> rounded up to the next multiple of <memory_alignment>.
 extern index_t MpPp;	// <MpP> rounded up to the next multiple of <memory_alignment> (MpPp <= Mp).
 
 // Classification vectors.
-extern index_t *RESTRICT classification;
-extern index_t *RESTRICT last_classification;
+extern index_t *restrict classification;
+extern index_t *restrict last_classification;
 
 // HOST matrices
-extern real *RESTRICT W;
-extern real *RESTRICT H;
-extern real *RESTRICT Vcol;	// Block of NpP rows from input matrix V.
+extern real *restrict W;
+extern real *restrict H;
+extern real *restrict Vcol;	// Block of NpP rows from input matrix V.
 extern real *Vrow;		// Block of MpP columns from input matrix V.
-
-
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -261,7 +238,7 @@ extern real *Vrow;		// Block of MpP columns from input matrix V.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_message( bool all_processes, char const *RESTRICT const fmt, ... );
+int print_message( bool all_processes, char const *restrict const fmt, ... );
 
 ////////////////////////////////////////////////
 
@@ -278,7 +255,7 @@ int print_message( bool all_processes, char const *RESTRICT const fmt, ... );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int append_printed_message( bool all_processes, char const *RESTRICT const fmt, ... );
+int append_printed_message( bool all_processes, char const *restrict const fmt, ... );
 
 ////////////////////////////////////////////////
 
@@ -294,7 +271,7 @@ int append_printed_message( bool all_processes, char const *RESTRICT const fmt, 
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_error( bool all_processes, char const *RESTRICT const fmt, ... );
+int print_error( bool all_processes, char const *restrict const fmt, ... );
 
 ////////////////////////////////////////////////
 
@@ -312,7 +289,7 @@ int print_error( bool all_processes, char const *RESTRICT const fmt, ... );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int append_printed_error( bool all_processes, char const *RESTRICT const fmt, ... );
+int append_printed_error( bool all_processes, char const *restrict const fmt, ... );
 
 ////////////////////////////////////////////////
 
@@ -332,7 +309,7 @@ int append_printed_error( bool all_processes, char const *RESTRICT const fmt, ..
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_errnum( bool all_processes, int errnum, char const *RESTRICT const fmt, ... );
+int print_errnum( bool all_processes, int errnum, char const *restrict const fmt, ... );
 
 ////////////////////////////////////////////////
 
@@ -354,7 +331,7 @@ int print_errnum( bool all_processes, int errnum, char const *RESTRICT const fmt
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int append_printed_errnum( bool all_processes, int errnum, char const *RESTRICT const fmt, ... );
+int append_printed_errnum( bool all_processes, int errnum, char const *restrict const fmt, ... );
 
 ////////////////////////////////////////////////
 
@@ -398,7 +375,7 @@ int help_nmf( void );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int print_nmf_gpu_help( char const *RESTRICT const execname );
+int print_nmf_gpu_help( char const *restrict const execname );
 
 ////////////////////////////////////////////////
 
@@ -484,7 +461,7 @@ index_t get_padding( index_t dim );
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int check_arguments( int argc, char const *RESTRICT *RESTRICT argv, bool *RESTRICT help, struct input_arguments *RESTRICT arguments );
+int check_arguments( int argc, char const *restrict *restrict argv, bool *restrict help, struct input_arguments *restrict arguments );
 
 ////////////////////////////////////////////////
 
@@ -516,7 +493,7 @@ size_t prev_power_2( size_t x );
 /*
  * Gets the difference between classification and last_classification vectors
  */
-size_t get_difference( index_t const *RESTRICT classification, index_t const *RESTRICT last_classification, index_t m );
+size_t get_difference( index_t const *restrict classification, index_t const *restrict last_classification, index_t m );
 
 ////////////////////////////////////////////////
 
@@ -526,16 +503,6 @@ size_t get_difference( index_t const *RESTRICT classification, index_t const *RE
  * If NMFGPU_FIXED_INIT is non-zero, returns <FIXED_SEED>.
  */
 index_t get_seed( void );
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-/* Always process this header as C code, not C++. */
-#ifdef __cplusplus
-}
-#endif
-
-#undef RESTRICT	/* To select the appropriate "restrict" keyword. */
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

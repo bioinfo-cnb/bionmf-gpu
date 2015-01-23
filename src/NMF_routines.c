@@ -32,7 +32,7 @@
  *
  ***********************************************************************/
 /**********************************************************
- * NMF_routines.cu
+ * NMF_routines.c
  *	Routines that implement the NMF algorithm.
  *
  * NOTE: The following macro constants can be defined to modify the
@@ -140,19 +140,23 @@
  *
  *********************************************************/
 
-#include "NMF_routines.cuh"
-#include "matrix/matrix_operations.cuh"
-#include "GPU_setup.cuh"
+#include "NMF_routines.h"
+#include "matrix_operations.h"
+#include "GPU_setup.h"
 #if NMFGPU_PROFILING_TRANSF
-	#include "timing.cuh"
+	#include "timing.h"
 #endif
 #include "common.h"
+#include "index_type.h"
+#include "real_type.h"
 
 #include <cublas_v2.h>
+#include <cuda_runtime_api.h>
 
 #include <stdio.h>
-#include <errno.h>
 #include <string.h>	/* strerror() */
+#include <errno.h>
+#include <stdbool.h>
 #include <stdlib.h>
 
 ////////////////////////////////////////////////
@@ -289,24 +293,24 @@ int destroy_random( void )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int set_random_values( real *__restrict__ d_A, index_t height, index_t width, index_t padding,
+int set_random_values( real *restrict d_A, index_t height, index_t width, index_t padding,
 			#if NMFGPU_CPU_RANDOM
-				real *__restrict__ A,
+				real *restrict A,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF)
 				bool transpose,
 			#endif
 			#if NMFGPU_CPU_RANDOM && (NMFGPU_DEBUG || NMFGPU_DEBUG_TRANSF || NMFGPU_VERBOSE_2 || (! NMFGPU_PROFILING_GLOBAL))
-				char const *__restrict__ const matrix_name_A,
+				char const *restrict const matrix_name_A,
 			#endif
 			#if NMFGPU_DEBUG || NMFGPU_VERBOSE_2 || (NMFGPU_CPU_RANDOM && NMFGPU_DEBUG_TRANSF) \
 				|| ((! NMFGPU_CPU_RANDOM) && (! NMFGPU_PROFILING_GLOBAL))
-				char const *__restrict__ const matrix_name_dA,
+				char const *restrict const matrix_name_dA,
 			#endif
 			#if ( NMFGPU_CPU_RANDOM && NMFGPU_PROFILING_TRANSF )
-				timing_data_t *__restrict__ const upload_timing,
+				timing_data_t *restrict const upload_timing,
 			#endif
-			cudaStream_t stream_A, cudaEvent_t *__restrict__ event_A )
+			cudaStream_t stream_A, cudaEvent_t *restrict event_A )
 {
 
 	int status = EXIT_SUCCESS;
@@ -437,7 +441,7 @@ static int get_H_BLM( index_t BLM, index_t BLMp )
 			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			bool const transpose = false;
-			struct matrix_tags_t const *__restrict__ mt = NULL;
+			struct matrix_tags_t const *restrict mt = NULL;
 			int const status2 = show_device_matrix( d_WH, N, BLM, BLMp, real_data, transpose, dbg_shown_by_all, mt );
 			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
 				return EXIT_FAILURE;
@@ -499,7 +503,7 @@ static int get_H_BLM( index_t BLM, index_t BLMp )
 			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			bool const transpose = true;
-			struct matrix_tags_t const *__restrict__ mt = NULL;
+			struct matrix_tags_t const *restrict mt = NULL;
 			int const status2 = show_device_matrix( d_Haux, BLM, K, Kp, real_data, transpose, dbg_shown_by_all, mt );
 			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
 				return EXIT_FAILURE;
@@ -1075,7 +1079,7 @@ static int get_W_BLN( index_t const BLN )
 			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			bool const transpose = false;
-			struct matrix_tags_t const *__restrict__ mt = NULL;
+			struct matrix_tags_t const *restrict mt = NULL;
 			int const status2 = show_device_matrix( d_WH, BLN, M, Mp, real_data, transpose, dbg_shown_by_all, mt );
 			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
 				return EXIT_FAILURE;
@@ -1137,7 +1141,7 @@ static int get_W_BLN( index_t const BLN )
 			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			bool const transpose = false;
-			struct matrix_tags_t const *__restrict__ mt = NULL;
+			struct matrix_tags_t const *restrict mt = NULL;
 			int const status2 = show_device_matrix( d_Waux, BLN, K, Kp, real_data, transpose, dbg_shown_by_all, mt );
 			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
 				return EXIT_FAILURE;
@@ -1664,7 +1668,7 @@ int update_W( void )
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-int get_classification( index_t *__restrict__ ld_classification, index_t *__restrict__ lh_classification )
+int get_classification( index_t *restrict ld_classification, index_t *restrict lh_classification )
 {
 
 	#if NMFGPU_VERBOSE_2
@@ -1776,7 +1780,7 @@ int get_classification( index_t *__restrict__ ld_classification, index_t *__rest
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V )
+static int get_dot_VWH_BLN( index_t const BLN, real *restrict d_dot_VWH, real *restrict d_dot_V )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
@@ -1819,7 +1823,7 @@ static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, rea
 			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			bool const transpose = false;
-			struct matrix_tags_t const *__restrict__ mt = NULL;
+			struct matrix_tags_t const *restrict mt = NULL;
 			int const status2 = show_device_matrix( d_WH, BLN, M, Mp, real_data, transpose, dbg_shown_by_all, mt );
 			if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
 				return EXIT_FAILURE;
@@ -1966,7 +1970,7 @@ static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, rea
 		int const status1 = check_cuda_status();
 		bool const real_data = true;
 		bool const transpose = false;
-		struct matrix_tags_t const *__restrict__ mt = NULL;
+		struct matrix_tags_t const *restrict mt = NULL;
 		int const status2 = show_device_matrix( &d_dot_VWH[ rowIdx ], 1, BLN, BLN, real_data, transpose, dbg_shown_by_all, mt );
 		if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
 			return EXIT_FAILURE;
@@ -2059,7 +2063,7 @@ static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, rea
 		int const status1 = check_cuda_status();
 		bool const real_data = true;
 		bool const transpose = false;
-		struct matrix_tags_t const *__restrict__ mt = NULL;
+		struct matrix_tags_t const *restrict mt = NULL;
 		int const status2 = show_device_matrix( &d_dot_V[ rowIdx ], 1, BLN, BLN, real_data, transpose, dbg_shown_by_all, mt );
 		if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
 			return EXIT_FAILURE;
@@ -2083,7 +2087,7 @@ static int get_dot_VWH_BLN( index_t const BLN, real *__restrict__ d_dot_VWH, rea
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static int get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V )
+static int get_dot_VWH_loop( index_t num_steps, index_t BLN, real *restrict d_dot_VWH, real *restrict d_dot_V )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
@@ -2244,7 +2248,7 @@ static int get_dot_VWH_loop( index_t num_steps, index_t BLN, real *__restrict__ 
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static int get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V )
+static int get_dot_VWH_N( real *restrict d_dot_VWH, real *restrict d_dot_V )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
@@ -2530,7 +2534,7 @@ static int get_dot_VWH_N( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static int get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V, real *__restrict__ d_scalars_VWH )
+static int get_dot_VWH( real *restrict d_dot_VWH, real *restrict d_dot_V, real *restrict d_scalars_VWH )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
@@ -2629,7 +2633,7 @@ static int get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V
 		int const status1 = check_cuda_status();
 		bool const real_data = true;
 		bool const transpose = false;
-		struct matrix_tags_t const *__restrict__ mt = NULL;
+		struct matrix_tags_t const *restrict mt = NULL;
 		int const status2 = show_device_matrix( d_scalars_VWH, 1, 2, 2, real_data, transpose, dbg_shown_by_all, mt );
 		if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
 			return EXIT_FAILURE;
@@ -2698,14 +2702,14 @@ static int get_dot_VWH( real *__restrict__ d_dot_VWH, real *__restrict__ d_dot_V
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int dot_product_VWH( real *__restrict__ dot_V, real *__restrict__ dot_VWH )
+int dot_product_VWH( real *restrict dot_V, real *restrict dot_VWH )
 {
 
 	#ifdef NMFGPU_VERBOSE_2
 		print_message( verb_shown_by_all, "-----Starting dot_product_VWH( rowIdx=%" PRI_IDX " )-----\n", rowIdx);
 	#endif
 
-	/* Sets pointers to be used as data matrix. We can use "d_Aux", since we need memory for two
+	/* Sets pointers to use as data matrix. We can use "d_Aux", since we need memory for two
 	 * NpP-length vectors, and size(d_Aux) == MAX(N,M) * Kp.
 	 */
 	real *d_dot_VWH = d_Aux;

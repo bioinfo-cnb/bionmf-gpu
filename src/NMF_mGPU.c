@@ -163,35 +163,29 @@
  *
  * This feature is disabled if NMFGPU_FORCE_BLOCKS is non-zero.
  *
- ****************
- *
- * WARNING:
- *	+ This code requires support for ISO-C99 standard. It can be enabled with 'gcc -std=c99'.
- *
  *********************************************************/
 
-#include "NMF_routines.cuh"
-#include "matrix/matrix_operations.cuh"
-#include "GPU_setup.cuh"
+#include "NMF_routines.h"
+#include "matrix_operations.h"
+#include "GPU_setup.h"
 #if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS || NMFGPU_PROFILING_COMM
-	#include "timing.cuh"
+	#include "timing.h"
 #endif
-#include "matrix/matrix_io.h"
-#include "matrix/matrix_io_routines.h"
+#include "matrix_io/matrix_io.h"
+#include "matrix_io/matrix_io_routines.h"
 #include "common.h"
-#include "real_type.h"
 #include "index_type.h"
+#include "real_type.h"
 
 #include <cuda_runtime_api.h>
-
 #include <mpi.h>
 
-#include <stdlib.h>
-#include <stdbool.h>
-#include <errno.h>
-#include <string.h>
 #include <stdio.h>
-#include <stdint.h>	// uintptr_t
+#include <string.h>
+#include <errno.h>
+#include <stdint.h>	/* uintptr_t */
+#include <stdbool.h>
+#include <stdlib.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -1079,7 +1073,7 @@ static int setup_communicators( void )
 	 * Processes included: [ 0 ... (max_num_procs -1) ]
 	 *
 	 * NOTE:
-	 *	Rather than creating a new communicator with
+	 *	Rather than create a new communicator with
 	 *		 new_comm( 0, (max_num_procs - 1), &l_comm_active ),
 	 *	just duplicates the largest group (N or M).
 	 */
@@ -1162,7 +1156,7 @@ static int sync_with_slaves( real *restrict matrix, bool variable_size_R, index_
 				matrix_name, variable_size_R );
 	#endif
 
-	// Items in portion of data to be sent by this process.
+	// Number of items sent by this process.
 	size_t const nitems = nitems_pP[ (variable_size_R * process_id) ];	// ( variable_size_R ? [process_id] : [0] )
 
 	#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_COMM))
@@ -1320,7 +1314,7 @@ static int broadcast_to_slaves( void *restrict matrix, index_t nrows, index_t pi
 		print_message( verb_shown_by_all, "Broadcasting '%s' (real_data: %i) to slaves...\n", matrix_name, real_data );
 	#endif
 
-	// MPI data type to be transferred
+	// Type of MPI data to transfer
 	MPI_Datatype const datatype = ( real_data ? MPIREALT : MPI_INDEXT );
 
 	size_t const nitems = (size_t) nrows * (size_t) pitch;
@@ -1695,7 +1689,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
 		 * Otherwise, it just initializes the corresponding portion.
 		 */
 
-		// Offset to portion of data to be initialized by this process.
+		// Offset to portion of data initialized by this process.
 		#if NMFGPU_DEBUG || NMFGPU_FIXED_INIT	// The entire matrix
 			size_t const offset = 0;
 		#else	// Just the corresponding portion (i.e., bM * pitch)
