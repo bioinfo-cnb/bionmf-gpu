@@ -95,16 +95,16 @@ Finally, *NMF-mGPU* also provides a *multi-GPU* version that makes use of multip
 
 The main system requirements for *NMF-mGPU* are the following:
 
-   * **UNIX System (GNU/Linux or Darwin/Mac OS X)**. *NMF-mGPU* has not been tested on Microsoft Windows yet.
+   * **UNIX System** (GNU/Linux or Darwin/Mac OS X). *NMF-mGPU* has not been tested on Microsoft Windows yet.
 
-   * One or more **CUDA-capable GPU device(s)**: A detailed list of compatible hardware can be found at <http://developer.nvidia.com/cuda-gpus>  
+   * **One or more CUDA-capable GPU devices**: A detailed list of compatible hardware can be found at <http://developer.nvidia.com/cuda-gpus>  
      Please note that **all** devices must be of the same architecture (i.e., heterogeneous GPU clusters are not supported yet).
 
    * **CUDA Toolkit and CUDA Driver**: They are freely available at the [CUDA Downloads Page][CUDA-Download]. Nevertheless, for *deprecated* GPU devices and/or OS platforms, you can download a previous CUDA release (e.g., version 5.5) from the [CUDA Archive Page][CUDA-OR-Download]. Please note that *NMF-mGPU* requires, at least, the version 4.2.
 
-   * A C compiler **conforming to the ISO-C99 standard**, such as [GNU GCC](https://gcc.gnu.org) or [LLVM Clang](http://llvm.org/).
+   * **A C compiler** conforming to the **ISO-C99 standard**, such as [GNU GCC](https://gcc.gnu.org) or [LLVM Clang](http://llvm.org/).
 
-   * The ***optional* multi-GPU version** also requires an *MPI-2.0* (or greater) software library, such as [OpenMPI](http://www.open-mpi.org/) or [MPICH](http://www.mpich.org/).
+   * The ***optional* multi-GPU version** also requires an **MPI-2.0** (or greater) software library, such as [OpenMPI](http://www.open-mpi.org/) or [MPICH](http://www.mpich.org/).
 
 
 [CUDA-Download]: <http://developer.nvidia.com/cuda-downloads/> "CUDA Download Page"
@@ -119,17 +119,17 @@ Further system requirements and installation steps for CUDA software, vary accor
 
    * **GNU/Linux**: For instance, on **Ubuntu 14.04**:
 
-      + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section, and check the "*Using NVIDIA binary driver*" option.  
+      + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section and check the option "*Using NVIDIA binary driver*".  
         Alternatively, you can open a terminal and type:
 
-               sudo apt-get install nvidia-current
+               $>  sudo  apt-get  install  nvidia-current
 
         You may have to reboot the system in order to use this driver after installing it.
 
       + **Additional packages**: The following packages are required: `build-essential`, `nvidia-cuda-dev` and `nvidia-cuda-toolkit`.  
-         They can be installed through the *Ubuntu Software Center*, or via a terminal by typing: 
+        They can be installed through the *Ubuntu Software Center*, or via a terminal by typing: 
 
-               sudo apt-get install build-essential nvidia-cuda-dev nvidia-cuda-toolkit
+               $>  sudo  apt-get  install  build-essential  nvidia-cuda-dev  nvidia-cuda-toolkit
 
       + **Multi-GPU version (optional)**: This version also requires any of the following packages: `openmpi` or `mpich`.
 
@@ -147,14 +147,14 @@ Further system requirements and installation steps for CUDA software, vary accor
      We highly recommend to read the [Getting Starting Guide for Darwin/Mac OS X](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-mac-os-x/index.html) for detailed instructions.
 
 
-Finally, we also recommend to read the [Release Notes][CRN] contain important information about [unsupported][CRN-unsupported] and [deprecated][CRN-deprecated] features, as well as [known issues][CRN-issues].
+Finally, we also recommend to read the [Release Notes][CRN], which contain important information about [unsupported][CRN-unsupported] and [deprecated][CRN-deprecated] features, as well as [known issues][CRN-issues].
 
 
 ### Warning:
 
-   * **Folder names containing whitespace characters are *NOT* supported by *NMF-mGPU***. Please avoid them in the path to your *CUDA Toolkit* installation directory. A (soft) link can be used as a workaround. For instance:
+   * **Folder names containing whitespace characters are *NOT* supported by *NMF-mGPU***. Please avoid them in the path to your *CUDA Toolkit* installation directory. A soft link can be used as a workaround. For instance:
 
-            ln  -s   /Developer/Whitespaced\ foldername/cuda     /Developer/cuda
+            $>  ln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit
 
    * **The [LLVM Clang](http://llvm.org/) compiler is *NOT* supported on *32-bits* system** since it does not recognize the `-malign-double` switch. Please read the [CUDA Release Notes on compilers][CRN-compiler] for details.
 
@@ -180,16 +180,16 @@ This section lists the files and folders you should find after downloading and d
 
 After extraction of the compressed file, you should see the following folders:
 
-   * `doc/`        ─ Installation and User guides.
-   * `src/`        ─ Source code.
-   * `include/`    ─ Header files.
+   * `doc/`     ─ Installation and User guides.
+   * `src/`     ─ Source code.
+   * `include/` ─ Header files.
    * `test/`    ─ Examples of a valid input file.
 
 
 In addition, there are some important files that should be customized *before* the compilation process:
 
-   * `Makefile`    ─ Compilation directives for UNIX platforms.
-   * `env.sh`    ─ Required environment variables (see [*NMF-mGPU Execution Setup*](#setup)).
+   * `Makefile` ─ Compilation directives for UNIX platforms.
+   * `env.sh`   ─ Required environment variables (see [*NMF-mGPU Execution Setup*](#setup)).
 
 
 <!-- ==================== -->
@@ -239,45 +239,44 @@ The `include/` folder is similarly organized:
 
 ## 4. <a id="compilation">Compiling *NMF-mGPU*</a>
 
-This section describes all supported options provided by our `Makefile`, which allow to customize the compilation process.
+This section describes all supported options provided by `Makefile` to customize the compilation process.
 
 Note: All the information contained in the following subsections can be printed on the screen by executing:
 
-         $> make help
+         $>  make  help
 
 
 ### 4.1. `Makefile` Targets:
 
- List of (main) available actions:
+ List of available goals:
 
-   * `all`: *DEFAULT target*. Compiles all programs **except** the multi-GPU version. It is equivalent to: `single_gpu tools`.
+   * `all`: *DEFAULT target*. Compiles all programs, **except** the multi-GPU version.
 
-   * `all_programs`: Compiles all programs **including** the multi-GPU version. It is equivalent to: `all multi_gpu`.
+   * `all_programs`: Compiles all programs, including the multi-GPU version.
 
-   * `single_gpu`: Compiles *NMF-mGPU* (single-GPU version) only.
+   * `multi_gpu`: Compiles multi-GPU version. Target *not* compiled by default.
 
-   * `multi_gpu`: Compiles *bioNMF-mGPU* (multi-GPU version) only. Target *NOT* compiled by default.
+   * `single_gpu`: Compiles the single-GPU version.
 
-   * `tools`: Compiles some utility programs (see [*Utility Programs*](#tools) for details).  
-     Currently, this target does *not* require any CUDA-related configuration or software. In particular, it is *not* necessary to specify  `CUDA_HOME` or `SM_VERSIONS` parameters.
+   * `tools`: Compiles some [*utility programs*](#tools).  
+     This target does *not* require any CUDA-related software or configuration. In addition, it is *not* necessary to specify the [*`Makefile` parameters*](#mkparams): `CUDA_HOME` or `SM_VERSIONS`.
 
-   * `help`: Prints a help message with all this information.
 
-   * `help_sm_versions`: Prints a detailed description of valid values for the `SM_VERSIONS` parameter.
+ Other useful targets:
+
+   * `clean`: Removes the folder containing all object (`.o`) files. Executable code is not affected.
+
+   * `clean_single_gpu`, `clean_multi_gpu`, `clean_tools`: Removes object files generated by the corresponding target. Executable code is not affected.
+
+   * `clobber`, `distclean`, `realclean`: Removes all directories containing executable and object (`.o`) files.
+
+   * `clobber_single_gpu`, `clobber_multi_gpu`, `clobber_tools`: Removes executable and object files generated by the corresponding target.
+
+   * `help`: Prints this help message.
+
+   * `help_sm_versions`: Prints a detailed description of the `SM_VERSIONS` parameter (shown [*below*](#smversions)).
 
    * `help_tools`: Prints a short description of available [*utility programs*](#tools).
-
-   * `clobber`: Removes code generated by the 'all' target. It is equivalent to `clobber_single_gpu clobber_tools`.
-
-   * `clobber_all`: Removes the entire binary directory, with all executable and object files.
-
-   * `clobber_single_gpu`, `clobber_multi_gpu`, `clobber_tools`: Removes the specified executable and its associated object files.
-
-   * `clean`: Removes object files (i.e., `*.o`) generated by the 'all' target. It is equivalent to `clean_single_gpu clean_tools`
-
-   * `clean_all`: Removes all object files (i.e., `*.o`).
-
-   * `clean_single_gpu`, `clean_multi_gpu`, `clean_tools`: Removes all object files associated to the specified program.
 
 
 <!-- ==================== -->
@@ -287,14 +286,13 @@ Note: All the information contained in the following subsections can be printed 
 
 The compilation process can be customized with the following parameters:
 
-   * `CUDA_HOME`: Path to your CUDA Toolkit.  
-     It may be an environment variable or an argument.  
-     If not specified, it will be derived by looking for `<NVCC>` in all folders stored in your `PATH` environment variable.  
-     Please note that **folder names containing whitespace characters are NOT supported**. In that case, either use a (soft) link, or rename your CUDA installation directory.  
-     This parameter is currently ignored on the `tools` target.
+   * `CUDA_HOME`: CUDA Toolkit installation path. It may be an environment variable or an argument. If not specified, it will be derived from your `PATH` environment variable by looking for `nvcc`, or the compiler specified in `NVCC` (see below a list of parameters to override default compilers).  
+     **Warning**: Folder names containing whitespace characters are **not** supported. In that case, please set a soft link. For instance:
 
-   * `SM_VERSIONS`: Target GPU architecture(s).  
-     This parameter may be an environment variable or an argument.  
+            $>  `ln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit`
+     This parameter is ignored by target `tools`.
+
+   * `SM_VERSIONS`: Target GPU architecture(s). This parameter may be an environment variable or an argument.  
      Device code will be generated for the specified *Compute Capability(-ies)* (CC).  
      For instance, `SM_VERSIONS="10-13  30  PTX35"`:
       + Generates device-specific executable code for CC **1.3**, using only the basic functionality present on CC **1.0**.
@@ -302,12 +300,14 @@ The compilation process can be customized with the following parameters:
       + Emits `PTX` code for CC **3.5**, which can be later dynamically compiled and executed by any current or future device, with a similar or higher Compute Capability.
 
      To generate device-specific executable code for CC **2.1**, please specify it as: `20-21`.  
-     See a more detailed description of this parameter below, or by executing: `make help_sm_versions`.  
-     This parameter is currently ignored on the `tools` target.  
-     Default value(s): `SM_VERSIONS="13  20  30  20-21  PTX35"`
+     See a more detailed description of this parameter [below](#smversions), or by executing:
 
-   * `SINGLE`: If set to `1`, uses single-precision data (i.e., `float`). Else, uses double-precision data (i.e., `double`).  
-     Note, however, that in Compute Capability 1.2 and lower, all double-precision operations are *demoted* to single-precision arithmetic, or are not supported.  
+            `$>  make  help_sm_versions`
+     This parameter is ignored by target `tools`.  
+     Default value(s): `SM_VERSIONS="20  30  20-21  PTX35"`
+
+   * `SINGLE`: If set to `1`, uses single-precision data (i.e., `float`). Otherwise, uses double-precision (i.e., `double`).  
+     **Warning**: On Compute Capability < **1.3**, double-precision operations are demoted to single precision. In addition, accesses to shared memory will be split into two requests with 2-way bank conflicts.  
      Default value: `1`.
 
    * `UNSIGNED`: Uses *unsigned* integers for matrix dimensions, which may generate faster code. Nevertheless, please note that *CUBLAS* library functions use *signed*-integer parameters. Therefore, matrix dimensions must *not* overflow such data type. An error message will be shown if this happens.  
@@ -365,92 +365,91 @@ Default compilers can be *overridden* with following parameters or environment v
    * `NVCC`: Compiler for CUDA device code.  
      Default value: `nvcc`.
 
-   * `MPICC`: Compiler for `MPI` code.  
+   * `MPICC`: Compiler for MPI code.  
      Default value: `mpicc`
 
 
 Additional flags, not affected by other input parameters, can be specified through the following parameters or environment variables:
 
    * `CPPFLAGS`, `CFLAGS`, `INCLUDES`, `LDFLAGS`, `LDLIBS`: Additional flags included in all targets.  
-     *Note:* "`CFLAGS`" is **ignored** by `NVCC`. Instead, please make use of `CXXFLAGS` and/or `NVCC_CFLAGS` (see below).
+     *Note:* `CFLAGS` is **ignored** by `NVCC`. Instead, please make use of `CXXFLAGS` and/or `NVCC_CFLAGS` (see below).
 
-   * `CXXFLAGS`: Additional options controlling the `NVCC`s internal compiler. Each word is automatically prefixed by `--compiler-options` in the command line. Ignored on files not compiled with `NVCC`.
+   * `CXXFLAGS`: Additional options controlling the `NVCC`s internal compiler. Each word is automatically prefixed by `--compiler-options` in the command line. parameter ignored on files not compiled with `NVCC`.
 
    * `NVCC_CPPFLAGS`, `NVCCFLAGS`, `NVCC_INCLUDES`: Additional options for `NVCC`.
 
-   * `OPENCC_FLAGS`: Additional flags for `nvopencc`, which generates `PTX` (intermediate) code on devices of *Compute Capability 1.x*. Ignored on newer GPU architectures.
+   * `OPENCC_FLAGS`: Additional flags for `nvopencc`, which generates PTX (intermediate) code on devices of *Compute Capability 1.x*. Parameter ignored on newer GPU architectures.
 
-   * `PTXAS_FLAGS`: Additional flags for `PTX` code compilation, which generates the actual GPU assembler.
+   * `PTXAS_FLAGS`: Additional flags for PTX code compilation, which generates the actual GPU assembler.
 
    * `MPICC_CPPFLAGS`, `MPICC_CFLAGS`, `MPICC_INCLUDES`, `MPICC_LDFLAGS`, `MPICC_LDLIBS`: Additional flags for `MPICC`.
 
 
-#### The `SM_VERSIONS` parameter:
+#### The <a id="smversions">`SM_VERSIONS` parameter:
 
-Device code is compiled in two stages. First, the compiler emits an assembler code (named `PTX`) for a *virtual* device that represents a *class* of GPU models with similar features and/or functionality. In the second stage, such `PTX` code is then compiled in order to generate executable code for a particular (*real*) device from the former GPU class.
+Device code is compiled in two stages. First, the compiler emits an assembler code (named "PTX") for a *virtual* device that represents a *class* of GPU models with similar features and/or functionality. In the second stage, such PTX code is then compiled in order to generate executable code for a particular (*real*) device from the former GPU class.
 
-*Virtual* architectures are named "`compute_`*XY*", while *real* GPU models are denoted as "`sm_`*XY*". In both terms, the value "*XY*" represents the *Compute Capability* (*CC*) "*X.Y*".
+*Virtual* architectures are named "compute\_*XY*", while *real* GPU models are denoted as "sm\_*XY*". In both terms, the value "*XY*" represents the *Compute Capability* (*CC*) "*X.Y*".
 
-Note that both architectures must be compatible. That is, `PTX` code emitted for a `compute_`*XY* GPU class can be compiled and executed on a `sm_`*WZ* device, if and only if, *X.Y* <= *W.Z*. For instance, `compute_13` is *not* compatible with `sm_10`, because the former architecture assumes the availability of features that are not present on devices of CC **1.0**, but only on **1.3** and greater.
+Note that both architectures must be compatible. That is, PTX code emitted for a compute_*XY* GPU class can be compiled and executed on a sm_*WZ* device, if and only if, *X.Y* <= *W.Z*. For instance, `compute_13` is *not* compatible with `sm_10`, because the former architecture assumes the availability of features that are not present on devices of CC **1.0**, but only on **1.3** and greater.
 
-For a detailed description of concepts above, please see chapter *GPU Compilation* in the *"CUDA Compiler Driver NVCC" reference guide*, which can be found in the `doc` folder of your CUDA Toolkit, or at the URL <http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#gpu-compilation>.
+For a detailed description of concepts above, please see *GPU Compilation* in the *"CUDA Compiler Driver NVCC" reference guide*, which can be found in the `doc/` folder of your CUDA Toolkit, or at URL: <http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#gpu-compilation>
 
 
 There are three ways to specify target architecture(s) in the `SM_VERSIONS` parameter:
 
-   1. **Device-specific features & code** (i.e., `PTX` and executable code with **similar** Compute Capability):
+   1. **Device-specific features & code** (i.e., PTX and executable code with **similar** Compute Capability):
 
-      Emits `PTX` assembler code, which is then compiled into executable instructions, just for the given *Compute Capability(-ies)* (CC). Since the former is just an intermediate code (i.e., it is *not* retained in the output file), and the latter is generated with a device-specific binary format, the program may not be compatible with other GPU architectures. That is, any given CC value, "*XY*", is translated to the following `NVCC` option: "`--generate-code=arch=compute_`*XY*`,code=sm_`*XY*".
+      Emits PTX assembler code, which is then compiled into executable instructions, just for the given *Compute Capability(-ies)* (*CC*). Since the former is just an intermediate code (i.e., it is *not* retained in the output file), and the latter is generated with a device-specific binary format, the program may not be compatible with other GPU architectures. That is, any given CC value, "*XY*", is translated to the following NVCC option: "`--generate-code=arch=compute_<XY>,code=sm_<XY>`
 
       For instance, `SM_VERSIONS="13  35"` generates executable code just for devices of Compute Capability **1.3** and **3.5**, respectively. GPU devices with other CC values, such as 1.1 or 2.0, may not be able to execute the program.
 
-      *Note:* For devices, such as CC **2.1**, that do not have a similar `PTX` CC number, please specify the nearest lower value ("***2.0***", for the previous example) by using the dashed-separated form below.
+      *Note:* For devices, such as CC **2.1**, that do not have a similar PTX CC number, please specify the nearest lower value ("***2.0***", for the previous example) by using the dashed-separated form below.
 
 
-   2. **Generic features, device-specific code** (i.e., `PTX` and executable code, with **different** Compute Capabilities):
+   2. **Generic features, device-specific code** (i.e., PTX and executable code, with **different** Compute Capabilities):
 
-      This is a generalization of the previous form. Here, different *Compute Capabilities* (CC) values can be specified for both, `PTX` and executable code, separated by a dash. That is, "*XY*-*WZ*" (with *XY* <= *WZ*), emits `PTX` assembler code for CC "*X.Y*", which is then compiled into executable instructions for a device of CC "*W.Z*". The former, determines the target *architecture* (i.e., the available hardware/software features and functionality). The latter, specifies the target *device* in terms of binary code format.
+      This is a generalization of the previous form. Here, different *Compute Capabilities* (CC) values can be specified for both, PTX and executable code, separated by a dash. That is, "*XY-WZ*" (with *XY* <= *WZ*), emits PTX assembler code for CC "*X.Y*", which is then compiled into executable instructions for a device of CC "*W.Z*". The former, determines the target *architecture* (i.e., the available hardware/software features and functionality). The latter, specifies the target *device* in terms of binary code format.
 
-      Similarly as the previous form, no `PTX` code is embedded in the output file, so the program may not be compatible with other GPU device models. That is, the previous expression is translated to the `NVCC` option: "`--generate-code=arch=compute_`*XY*`,code=sm_`*WZ*"
+      Similarly as the previous form, no PTX code is embedded in the output file, so the program may not be compatible with other GPU device models. That is, the previous expression is translated to the NVCC option: `--generate-code=arch=compute_<XY>,code=sm_<WZ>`
 
-      Note that "*XY*`-`*XY*" is equivalent to just specify "*XY*" as in the previous form. On the other hand, if *XY* < *WZ*, the program is still compiled for the target device (i.e., CC "*W.Z*"), but it will only make use of features available on CC "*X.Y*", discarding any functionality introduced since.
+      Note that "*XY-XY*" is equivalent to just specify "*XY*" as in the previous form. On the other hand, if *XY* < *WZ*, the program is still compiled for the target device (i.e., CC "*W.Z*"), but it will only make use of features available on CC "*X.Y*", discarding any functionality introduced since.
 
-      *Note:* As stated above, please use this form to specify target devices, such as CC **2.1**, that do not have a similar `PTX` CC number (so, a lower value must also be given). Example: `20-21`.
+      *Note:* As stated above, please use this form to specify target devices, such as CC **2.1**, that do not have a similar PTX CC number (so, a lower value must also be given). Example: `20-21`.
 
       For instance, `SM_VERSIONS="10-13  20-21"`:
        * Generates executable code for a device of CC **1.3**, with the basic features that are available on CC **1.0**. In particular, it *discards* all support for double-precision floating-point data, introduced on CC **1.3**.
        * Compiles the algorithm with the features and functionality available on CC **2.0**, and generates a binary image for a device of CC **2.1**.
-       * Since no `PTX` code is retained in the output file, the program may not compatible with other GPU devices (e.g., CC 3.0).
+       * Since no PTX code is retained in the output file, the program may not compatible with other GPU devices (e.g., CC 3.0).
 
 
    3. **Generic features and "*code*"**:
 
-      Emits `PTX` assembler code for the given *Compute Capability* (CC), which is then embedded into the output file. No executable code is generated. Instead, the former is dynamically compiled at runtime according to the actual GPU device. Such process is known as *Just-in-Time compilation* (*JIT*).
+      Emits PTX assembler code for the given *Compute Capability* (*CC*), which is then embedded into the output file. No executable code is generated. Instead, the former is dynamically compiled at runtime according to the actual GPU device. Such process is known as *Just-in-Time compilation* (*JIT*).
 
-      To specify a target architecture in a such way, please use the word `PTX` followed by the target Compute Capability. That is, "`PTX`*wz*", generates `PTX` code for Compute Capability "*w.z*", and embeds it into the output file. Such code can be later compiled and executed on any device, with a similar or greater CC value. Similarly as previous forms, the expression above is translated to the following `nvcc` option: "`--generate-code=arch=compute_`*wz*`,code=compute_`*wz*".
+      To specify a target architecture in a such way, please use the word `PTX` followed by the target Compute Capability. That is, "PTX*wz*", generates PTX code for Compute Capability "*w.z*", and embeds it into the output file. Such code can be later compiled and executed on any device, with a similar or greater CC value. Similarly as previous forms, the expression above is translated to the following NVCC option: `--generate-code=arch=compute_<wz>,code=compute_<wz>`
 
       Note, however, that JIT compilation increases the startup delay. In addition, the final executable code will use just those architectural features that are available on CC "*w.z*", discarding any functionality introduced since.
 
       For instance, `SM_VERSIONS="PTX10  PTX35"`:
-       * Emits `PTX` code for the first CUDA-capable architecture (i.e., CC **1.0**). Therefore, the program can be later dynamically compiled and executed on *any* current or future GPU device. Nevertheless, it will only use the (very) basic features present on such architecture.
-       * Generates `PTX` code that can be later compiled and executed on devices of CC **3.5**, or higher.
+       * Emits PTX code for the first CUDA-capable architecture (i.e., CC **1.0**). Therefore, the program can be later dynamically compiled and executed on *any* current or future GPU device. Nevertheless, it will only use the (very) basic features present on such architecture.
+       * Generates PTX code that can be later compiled and executed on devices of CC **3.5**, or higher.
        * Any device prior to CC **3.5** (e.g., 1.3, 2.1, or 3.0), will execute the basic CC **1.0** version.
 
 
-*Notes*:
+**Warnings**:
 
-   * Double-precision floating-point data are **NOT** supported on Compute Capability 1.2 and lower. The compilation process may fail if any of them is specified and the parameter `SINGLE` is set to `0`.
-   * By default, **no code is compiled for Compute Capabilities 1.2 and lower**, since they are being deprecated on newer versions of the CUDA Toolkit. Code for such architectures must be explicitly requested as shown in the examples above.
+   * On Compute Capability *< 1.3*, double-precision arithmetic operations are *demoted* to single precision. In addition, accesses to shared memory will be split into *two requests with bank conflicts*.
+   * Compute Capabilities *1.x* are *deprecated* since CUDA Toolkit version 7.0 (Compute Capability 1.0 since CUDA version 6.0).
    * This parameter is currently ignored on the `tools` target.
 
 
 Current default value(s):
 
-         "13  20  30  35  20-21  PTX35"
+         "20  30  35  20-21  PTX35"
 
-which will be translated into the following argument(s) for `NVCC`:
+which will be translated into the following argument(s) for NVCC:
 
-         --generate-code=arch=compute_13,code=sm_13
          --generate-code=arch=compute_20,code=sm_20
          --generate-code=arch=compute_30,code=sm_30
          --generate-code=arch=compute_35,code=sm_35
@@ -552,17 +551,17 @@ After compilation, you should find the following files and folders (among others
    * `bin/tools/`   ─ [Utility Programs](#tools).
    * `bin/obj/`     ─ All object files.
 
-The `obj/` folder contains all object files following a tree structure similar to `src/` (see [*Directory Structure*](#folders)). This folder can be safety deleted after compilation by executing:
+The `bin/obj/` folder contains all object files following a directory structure similar to `src/` (see [*Directory Structure*](#folders)). This folder can be safety deleted after compilation by executing:
 
-         $> make clean_all
+         $> make clean
 
 
 <!-- ==================== -->
 
 
-### 4.5. Performance Fine-Tuning:
+### 4.5. Fine-Tuning:
 
-*NMF-mGPU* has been designed to take advantage of different architecture-specific features among existing GPU models. Nevertheless, device code can be further optimized for modern devices by customizing some constants in the source code. For instance, in most GPU kernels, each CUDA thread processes multiple items from global memory in order to increase the thread-level parallelism. For each kernel, the number of such operations is specified by a constant named "*\<kernel_name\>*`__ITEMS_PER_THREAD`", which is defined in `include/GPU_kernels.cuh`. The default value is set to ensure a 100% of occupancy on devices of *Compute Capability 1.x*, so it can be increased if the program will be compiled for newer GPU architectures.
+*NMF-mGPU* has been designed to take advantage of different architecture-specific features among existing GPU models. Nevertheless, device code can be further optimized for modern devices by customizing some constants in the source code. For instance, in most GPU kernels, each CUDA thread processes multiple items from global memory in order to increase the thread-level parallelism. For each kernel, the number of such operations is specified by a constant named `<kernel_name>__ITEMS_PER_THREAD`, which is defined in `include/GPU_kernels.cuh`. The default value is set to ensure a 100% of occupancy on devices of *Compute Capability 1.x*, so it can be increased if the program will be compiled for newer GPU architectures.
 
 
 *****************************
@@ -570,7 +569,7 @@ The `obj/` folder contains all object files following a tree structure similar t
 
 ## 5. <a id="tools">Utility Programs</a>
 
-In addition to *NMF-mGPU*, there are some utility programs to make easier working with input files. It includes a program for binary-text file conversion, and another to generate input matrices with random data (useful for testing *NMF-mGPU*).
+In addition to *NMF-mGPU*, there are some utility programs to make easier working with input files. It includes a program for binary-text file conversion, and another to generate input matrices with random data (useful for testing).
 
 To compile such programs, just execute:
 
@@ -578,19 +577,19 @@ To compile such programs, just execute:
 
 which will generate the following files:
 
-   * `bin/tools/file_converter`        ─ Binary-text file conversions.
-   * `bin/tools/generate_matrix`    ─ Program to generate a synthetic-data matrix.
+   * `bin/tools/file_converter`  ─ Binary-text file conversions.
+   * `bin/tools/generate_matrix` ─ Program to generate a synthetic-data matrix.
 
-***Note:*** These programs do *not* make use of any GPU device. They are implemented in pure-ISO-C99 language, and all operations are performed on the *host* (i.e., the CPU). Therefore, they do *not* require any CUDA-related option, configuration or software. In particular, it is *not* necessary to specify the `Makefile` parameters "`CUDA_HOME`" and/or "`SM_VERSIONS`".
+***Note:*** Tool programs do *not* make use of any GPU device. They have been implemented in pure ISO-C language, so all operations are performed on the *host* (i.e., the CPU). Therefore, they do *not* require any CUDA-related option, configuration or software. In addition, it is *not* necessary to specify the [*`Makefile` parameters*](#mkparams): "`CUDA_HOME`" or "`SM_VERSIONS`".
 
 
 ### 5.1. Binary-text File Converter
 
-Since *NMF-mGPU* accepts input matrices stored in a binary or text file, this program allows file conversion between both formats. For binary files there are two sub-formats: "*native*" and "*non-native*".
+Since *NMF-mGPU* accepts input matrices stored in a binary or ASCII-text file, this program allows file conversion between both formats. For binary files there are two sub-formats: "*native*" and "*non-native*".
 
-   * "***Non-native***" **mode**: matrix data are stored using *double*-precision values, and 32-bits *unsigned* integers for matrix dimensions. If necessary, all values must be converted to little-endian format before the writing operation. Finally, the file contains a binary "*signature*", which will be checked when reading.
+   * "***Non-native***" **mode**: Matrix data are stored using *double*-precision values, and 32-bits *unsigned* integers for matrix dimensions. If necessary, all values must be converted to little-endian format before writing to file. Finally, the file also contains a "*binary signature*", which will be checked when reading to make sure it is a valid input file.
 
-   * "***native***" **mode**: matrix data are stored in *raw* format according to the selected compilation parameters. That is, `float` values if the program was compiled in *single*-precision mode (i.e., the parameter "`SINGLE`" in `Makefile` was set to `1`), and `double` otherwise. Matrix dimensions are stored in a similar way: `unsigned int` if "`UNSIGNED`" was set to `1`, and '[`signed`] `int` otherwise. All data is stored with the native endianness.
+   * "***native***" **mode**: Matrix data are stored in *raw* format according to the selected compilation parameters. That is, `float` values if the program was compiled in *single*-precision mode (i.e., if the [*`Makefile` parameter*](#mkparams) "`SINGLE`" was set to `1`), and `double` otherwise. Matrix dimensions are stored in a similar way: `unsigned int` if "`UNSIGNED`" was set to `1`, and '\[`signed`\] `int` otherwise. Finally, all data is stored with the native endianness.
 
 <!-- ALERT: TODO: -->
 <!-- All file formats accepted by *NMF-mGPU* are detailed in [*Data-file format*](user_guide.txt.md#fileformat) in the [User guide](user_guide.txt.md), similarly for program usage (section *6 "Utility programs"*). Finally, there are some examples of valid input files in the `test/` folder. -->
@@ -601,11 +600,9 @@ Since *NMF-mGPU* accepts input matrices stored in a binary or text file, this pr
 
 ### 5.2. Matrix Generator
 
-This program generates a data matrix with non-negative random values. The output file can be used as a valid input dataset for NMF-(m)GPU.
+This program generates a data matrix with non-negative random values. The output file can be used as a valid input dataset for NMF-mGPU. You can specify the output matrix dimensions, as well as the highest possible random number (i.e., all values will be generated in the closed range between 0.0 and the selected value, both inclusive). The output matrix can be written as ASCII text, or in a binary file (in any of the binary modes described above).
 
-You can select the output matrix dimensions, as well as the highest possible random number (i.e., all values will be generated in the closed range between 0.0 and the selected value, both inclusive). The output matrix can be written as ASCII text, or in a binary file (in any of the binary modes described above).
-
-**Warning:** Output matrix will ***not*** contain any tag (i.e., row labels, column headers or description string), just numeric data.
+**Warning:** Output matrix will ***not*** contain any tag (i.e., neither of row labels, column headers nor a description string), just numeric data.
 
 <!-- ALERT: TODO: -->
 <!--   * Please, see program usage in section *6 "Utility programs"* in the *User guide*. -->
@@ -651,7 +648,7 @@ On *Mac OS X*, please replace `LD_LIBRARY_PATH` by `DYLD_LIBRARY_PATH`. That is,
 
 **Warnings**:
 
-   * **Folder names containing whitespace characters are *NOT* supported**. Please avoid them in the path to your *CUDA Toolkit* installation directory. A (soft) link can be used as a workaround. For instance:
+   * **Folder names containing whitespace characters are *NOT* supported**. Please avoid them in the path to your *CUDA Toolkit* installation directory. A soft link can be used as a workaround. For instance:
 
             $>  ln  -s   /Developer/Whitespaced\ foldername/cuda   /Developer/cuda
 
@@ -744,7 +741,7 @@ The rest of arguments denote that:
 
 On the screen, you should see something similar to:
 
-               <<< bioNMF-GPU: Non-negative Matrix Factorization on GPU >>>
+               <<< NMF-GPU: Non-negative Matrix Factorization on GPU >>>
                                        Single-GPU version
          Loading input file...
                File selected as ASCII text. Loading...

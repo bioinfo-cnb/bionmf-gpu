@@ -91,16 +91,16 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 
 ### 1.1 System Requirements
 
-   * **UNIX System (GNU/Linux or Darwin/Mac OS X)**. *NMF-mGPU* has not been tested on Microsoft Windows yet.
+   * **UNIX System** (GNU/Linux or Darwin/Mac OS X). *NMF-mGPU* has not been tested on Microsoft Windows yet.
 
-   * One or more **CUDA-capable GPU device(s)**: A detailed list of compatible hardware can be found at <http://developer.nvidia.com/cuda-gpus>  
+   * **One or more CUDA-capable GPU devices**: A detailed list of compatible hardware can be found at <http://developer.nvidia.com/cuda-gpus>  
      Please note that **all** devices must be of the same architecture (i.e., heterogeneous GPU clusters are not supported yet).
 
-   * **CUDA Toolkit and CUDA Driver**: They are freely available at the [CUDA Downloads Page][CUDA-Download]. Nevertheless, for *deprecated* GPU devices and/or OS platforms, you can download a previous CUDA release (e.g., version `5.5`) from the [CUDA Archive Page][CUDA-OR-Download]. Please note that *NMF-mGPU* requires, at least, the version `4.2`.
+   * **CUDA Toolkit and CUDA Driver**: They are freely available at the [CUDA Downloads Page][CUDA-Download]. Nevertheless, for *deprecated* GPU devices and/or OS platforms, you can download a previous CUDA release (e.g., version 5.5) from the [CUDA Archive Page][CUDA-OR-Download]. Please note that *NMF-mGPU* requires, at least, the version 4.2.
 
-   * A `C` compiler **conforming to the `C99` standard**, such as [GNU GCC](https://gcc.gnu.org) or [LLVM Clang](http://llvm.org/).
+   * **A C compiler** conforming to the **ISO-C99 standard**, such as [GNU GCC](https://gcc.gnu.org) or [LLVM Clang](http://llvm.org/).
 
-   * The ***optional* multi-GPU version** also requires an *MPI-2.0* (or greater) software library, such as [OpenMPI](http://www.open-mpi.org/) or [MPICH](http://www.mpich.org/).
+   * The ***optional* multi-GPU version** also requires an **MPI-2.0** (or greater) software library, such as [OpenMPI](http://www.open-mpi.org/) or [MPICH](http://www.mpich.org/).
 
 
 [CUDA-Download]: <http://developer.nvidia.com/cuda-downloads/> "CUDA Download Page"
@@ -116,8 +116,8 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 
      Instructions vary among different distributions. For instance, on **Ubuntu 14.04**:
 
-      + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section and check the *Using NVIDIA binary driver* option.  
-         Alternatively, you can open a terminal and type:
+      + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section and check the option "*Using NVIDIA binary driver*".  
+        Alternatively, you can open a terminal and type:
 
                sudo  apt-get  install  nvidia-current
 
@@ -130,25 +130,25 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 
       + **Multi-GPU version (optional)**: This version also requires any of the following packages: `openmpi` or `mpich`.
 
-     For other GNU/Linux distribution, we recommend to read the [Getting Starting Guide for GNU/Linux](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-linux/index.html#package-manager-installation).
+     For other GNU/Linux distributions, we recommend to read the [Getting Starting Guide for GNU/Linux](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-linux/index.html#package-manager-installation).
 
 
    * For **Darwin/Mac OS X**:
 
-      + **`C`/`C++` compiler**: Please install the Apple's [Xcode](https://developer.apple.com/xcode/downloads/) toolset. Some versions may require to explicitly add the *Command Line Developer Tools* plug-in in order to make available the required commands on the Terminal.
+      + **C/C++ compiler**: Please install the Apple's [Xcode](https://developer.apple.com/xcode/downloads/) toolset. Some versions may require to explicitly add the *Command Line Developer Tools* plug-in in order to make available the required commands on the Terminal.
 
       + **CUDA Toolkit and Drivers**: Just download and execute the proper `.dmg` file from the [CUDA Download Page][CUDA-Download] (or the [Archive Page][CUDA-OR-Download] for previous releases), and follow the instructions.
 
-      + **Multi-GPU version (optional)**: Most MPI libraries are available on package managers, such as [MacPorts](http://www.macports.org/) or [Homebrew](http://brew.sh/).
+      + **Multi-GPU version (optional)**: Most MPI libraries are available on package managers, such as [MacPorts](http://www.macports.org/) or [Homebrew](http://brew.sh/). Otherwise, you can download the source code and compile it.
 
      We highly recommend to read the [Getting Starting Guide for Darwin/Mac OS X](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-mac-os-x/index.html) for detailed instructions.
 
 
 ### Warning:
 
-**Folder names containing whitespace characters are *NOT* supported**. Please avoid them in the path to your *CUDA Toolkit* installation directory. A (soft) link can be used as a workaround. For instance:
+**Folder names containing whitespace characters are *NOT* supported**. Please avoid them in the path to your *CUDA Toolkit* installation directory. A soft link can be used as a workaround. For instance:
 
-         $>  ln  -s   /Developer/Whitespaced\ foldername/cuda   /Developer/cuda
+         $>  ln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit
 
 
 *****************************
@@ -167,18 +167,18 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 Once the file has been unzipped, please open a Terminal in the generated folder and execute the following command:
 
          $>  source  env.sh  <CUDA_PATH>
-where "`<CUDA_PATH>`" denotes the path to your CUDA Toolkit (e.g., `/usr/local/cuda-5.5` or `/Developer/NVIDIA/cuda-5.5`).
+where "*\<CUDA_PATH>*" denotes the path to your CUDA Toolkit (e.g., `/usr/local/cuda-5.5` or `/Developer/NVIDIA/cuda-5.5`).
 
 
 To compile the program, just execute:
 
-         $>  make 
+         $>  make
 
 
 The compilation process may take some time since different versions of the software (one per GPU model) will be generated into the executable file. To compile code for just a particular GPU architecture (e.g., for *Compute Capability 1.3*), you can use the following command:
 
          $>  make  SM_VERSIONS=13
-Please note that by default, **no code is compiled for *Compute Capabilities* 1.2 and lower**, since they are being deprecated on newer versions of the CUDA Toolkit. Code for such GPU models must be explicitly requested as shown in the example above.  
+Please note that by default, **no code is compiled for *Compute Capabilities 1.x***, since they are being deprecated on newer versions of the CUDA Toolkit. Code for such GPU models must be explicitly requested as shown in the example above.  
 &nbsp;
 
 
@@ -214,7 +214,7 @@ The rest of arguments denote that:
 
 On the screen, you should see something similar to:
 
-               <<< bioNMF-GPU: Non-negative Matrix Factorization on GPU >>>
+               <<< NMF-GPU: Non-negative Matrix Factorization on GPU >>>
                                        Single-GPU version
          Loading input file...
                File selected as ASCII text. Loading...
