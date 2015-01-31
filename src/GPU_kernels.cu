@@ -66,31 +66,45 @@
 /*
  * Floating-point data on GPU shared memory:
  *
- * On devices of Compute Capability 1.x, accesses to 'double'-type data
- * are compiled into two separated 32-bit requests with a stride of two.
- * This results in a 2-way bank conflict.
+ * On devices of Compute Capability 1.x, any memory access to a (64-bits)
+ * 'double' variable is compiled into two sequential 32-bit requests. In an
+ * array of doubles, each of the two requests is simultaneously served to the 16
+ * threads in a warp. Both operations result in eight 2-way bank conflicts each,
+ * since the corresponding 32-bits values are accessed with a stride of two.
  *
- * To avoid this, (64-bits) doubles are stored as two independent
- * (32-bits) integers on different regions of the shared memory.
- * Every load/store operation consists, then, in a "gather"/"scatter"
- * process.
+ * On devices of Compute Capability 1.3 or greater, this can be avoided by
+ * explicitly storing all 32-bits values of each request in a contiguous memory
+ * region. This way, they are accessed with a stride of one.
  *
- * In order to hide the resulting different types (and number) of pointer
- * to shared memory, a new data type is defined below. Note that it will
- * be used just for local variables in kernel code. The shared memory
- * will still being a simple array of real- or int-type data.
+ * In order to hide the resulting different types (and number) of pointers to
+ * shared memory, a new data type is defined below. Note that it will be used
+ * only for local variables in kernel code. In particular, the "primary" pointer
+ * to shared memory is still a simple array of real- or int-type data.
  */
-#if ( __CUDA_ARCH__ < 200 ) && ( ! NMFGPU_SINGLE_PREC )
+#if ( ! NMFGPU_SINGLE_PREC ) && ( __CUDA_ARCH__ >= 130 ) && ( __CUDA_ARCH__ < 200 )
 
-	/* Double-precision data on Compute Capability 1.x */
+	/* Double-precision data on Compute Capability [1.3 ... 2.0) */
+
 	typedef struct rp2shm {
 		int *__restrict__ hi;	// Pointer to an 'int' containing the higher 32 bits of a double value.
 		int *lo;		// Pointer to an 'int' containing the lower  32 bits of a double value.
 	} rp2shm_t;
 
-#else	/* single-precision data <OR> Compute Capability >= 2.0 */
+#else
+
+	/* Single-precision Data  <OR>  Host code  <OR>  Compute Capability < 1.3 or >= 2.0 */
 
 	typedef real * rp2shm_t;
+
+
+	#if ( ! NMFGPU_SINGLE_PREC ) && ( __CUDA_ARCH__ >= 100 ) && ( __CUDA_ARCH__ < 130 )
+
+		/* Double-precision data on Compute Capability < 1.3 */
+
+		// NOTE: This message may be hidden according to compilation flags and/or parameters (e.g., NVCC_WARN_VERBOSE).
+		#warning "WARNING: Compute Capability < 1.3: Double-precision arithmetic will be demoted to single precision. In addition, accesses to shared memory will be split into two requests with 2-way bank conflicts. This architecture should be used for single-precision only."
+
+	#endif
 
 #endif
 
@@ -99,9 +113,9 @@
 
 /* DEVICE-ONLY GLOBAL Variables */
 
-#if (! __CUDA_ARCH__) || (__CUDA_ARCH__ >= 120)	/* Compute Capability >= 1.2 */
+#if (! __CUDA_ARCH__) || (__CUDA_ARCH__ >= 120)	/* Host code  <OR>  Compute Capability >= 1.2 */
 
-	// HACK: Trick to avoid useless warnings on !__CUDA_ARCH__:
+	// HACK: Trick to avoid useless warnings when !__CUDA_ARCH__:
 	#if __CUDA_ARCH__ >= 120
 		static
 	#else
@@ -270,15 +284,20 @@ static __device__ rp2shm_t new_rp2shm( void *__restrict__ pshm, index_t const le
 
 	rp2shm_t rp2shm;
 
-	#if ( __CUDA_ARCH__ < 200 ) && ( ! NMFGPU_SINGLE_PREC )
+	#if ( ! NMFGPU_SINGLE_PREC ) && ( __CUDA_ARCH__ >= 130 ) && ( __CUDA_ARCH__ < 200 )
 
-		/* Double-precision data on Compute Capability 1.x */
+		/* Double-precision data on Compute Capability [1.3 ... 2.0) */
+
 		rp2shm.hi = (int *) pshm;
 		rp2shm.lo = &rp2shm.hi[ length ];
 
-	#else	/* Single-precision data <OR> Compute Capability >= 2.0 */
+	#else
+		/* Single-precision Data  <OR>  Compute Capability < 1.3 or >= 2.0 */
+
 		rp2shm = (rp2shm_t) pshm;
+
 	#endif
+
 
 	return rp2shm;
 
@@ -305,9 +324,10 @@ static __device__ real load_from_rp2shm( rp2shm_t rp2shm, index_t index )
 
 	#if __CUDA_ARCH__	/* Reduces work on cudafe(++) when looking for HOST code.*/
 
-		#if ( __CUDA_ARCH__ < 200 ) && ( ! NMFGPU_SINGLE_PREC )
+		#if ( ! NMFGPU_SINGLE_PREC ) && ( __CUDA_ARCH__ >= 130 ) && ( __CUDA_ARCH__ < 200 )
 
-			/* Double-precision data on Compute Capability 1.x */
+			/* Double-precision data on Compute Capability [1.3 ... 2.0) */
+
 			int val_hi, val_lo;
 
 			if ( volatile_mode ) {
@@ -323,7 +343,9 @@ static __device__ real load_from_rp2shm( rp2shm_t rp2shm, index_t index )
 
 			val = __hiloint2double( val_hi, val_lo );
 
-		#else	/* Single-precision data <OR> Compute Capability >= 2.0 */
+		#else
+
+			/* Single-precision Data  <OR>  Compute Capability < 1.3 or >= 2.0 */
 
 			if ( volatile_mode ) {
 				real volatile *const vp_val = (real *) rp2shm;
@@ -356,9 +378,9 @@ static __device__ void store_into_rp2shm( real value, rp2shm_t rp2shm, index_t i
 
 	#if __CUDA_ARCH__	/* Reduces work on cudafe(++) when looking for HOST code.*/
 
-		#if ( __CUDA_ARCH__ < 200 ) && ( ! NMFGPU_SINGLE_PREC )
+		#if ( ! NMFGPU_SINGLE_PREC ) && ( __CUDA_ARCH__ >= 130 ) && ( __CUDA_ARCH__ < 200 )
 
-			/* Double-precision data on Compute Capability 1.x */
+			/* Double-precision data on Compute Capability [1.3 ... 2.0) */
 
 			int const val_hi = __double2hiint( value );
 			int const val_lo = __double2loint( value );
@@ -374,7 +396,9 @@ static __device__ void store_into_rp2shm( real value, rp2shm_t rp2shm, index_t i
 				rp2shm.lo[ index ] = val_lo;
 			}
 
-		#else	/* Single-precision data <OR> Compute Capability >= 2.0 */
+		#else
+
+			/* Single-precision data  <OR>  Compute Capability < 1.3 or >= 2.0 */
 
 			if ( volatile_mode ) {
 				real volatile *const vp_val = rp2shm;
@@ -745,9 +769,9 @@ static __device__ real reduce_shmem_to_row( index_t bs, index_t offset, real cur
 
 		/* half = bdy/2 .. 32.
 		 * NOTE: It is never executed if maxThreadsPerBlock <= 1024, which is true for Compute
-		 * Capability <= 3.5 (perhaps also for newer architectures).
+		 * Capability <= 5.2 (perhaps also for newer architectures).
 		 */
-		#if __CUDA_ARCH__ > 500
+		#if __CUDA_ARCH__ > 520
 
 			for ( index_t half = half_bdy, bound = idxmul<true>( half, bdx ) ; half > 16 ; half >>= 1, bound >>= 1 ) {
 
