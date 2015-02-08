@@ -95,14 +95,15 @@ Finally, *NMF-mGPU* also provides a *multi-GPU* version that makes use of multip
 
 The main system requirements for *NMF-mGPU* are the following:
 
-   * **UNIX System** (GNU/Linux or Darwin/Mac OS X). *NMF-mGPU* has not been tested on Microsoft Windows yet.
+   * **UNIX System** (GNU/Linux or Darwin/Mac OS X). *NMF-mGPU* has not been tested yet on Microsoft Windows.
 
    * **One or more CUDA-capable GPU devices**: A detailed list of compatible hardware can be found at <http://developer.nvidia.com/cuda-gpus>  
      Please note that **all** devices must be of the same architecture (i.e., heterogeneous GPU clusters are not supported yet).
 
-   * **CUDA Toolkit and CUDA Driver**: They are freely available at the [CUDA Downloads Page][CUDA-Download]. Nevertheless, for *deprecated* GPU devices and/or OS platforms, you can download a previous CUDA release (e.g., version 5.5) from the [CUDA Archive Page][CUDA-OR-Download]. Please note that *NMF-mGPU* requires, at least, the version 4.2.
+   * **CUDA Toolkit and CUDA Driver**: They are freely available at the [CUDA Downloads Page][CUDA-Download]. Nevertheless, for *deprecated* GPU devices and/or 32-bits OS platforms, you can download a previous CUDA release (e.g., version 5.5) from the [CUDA Archive Page][CUDA-OR-Download]. Please note that *NMF-mGPU* requires, at least, the version 4.2.
 
-   * **A C compiler** conforming to the **ISO-C99 standard**, such as [GNU GCC](https://gcc.gnu.org) or [LLVM Clang](http://llvm.org/).
+   * **A C compiler** conforming to the **ISO-C99 standard**, such as [GNU GCC](https://gcc.gnu.org) or [LLVM Clang](http://llvm.org/).  
+     Note, however, that the latter is *not* supported on 32-bits systems, since it does not recognize the `-malign-double` switch. Please read the [CUDA Release Notes on compilers][CRN-compiler] for details.
 
    * The ***optional* multi-GPU version** also requires an **MPI-2.0** (or greater) software library, such as [OpenMPI](http://www.open-mpi.org/) or [MPICH](http://www.mpich.org/).
 
@@ -117,7 +118,7 @@ Please note that *no* CUDA driver, or even a GPU device, is required to *just* c
 
 Further system requirements and installation steps for CUDA software, vary according to your operating system:
 
-   * **GNU/Linux**: For instance, on **Ubuntu 14.04**:
+   * **GNU/Linux**: For instance, on **Ubuntu 14.04 LTS (*Trusty Tahr*)**:
 
       + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section and check the option "*Using NVIDIA binary driver*".  
         Alternatively, you can open a terminal and type:
@@ -149,14 +150,6 @@ Further system requirements and installation steps for CUDA software, vary accor
 
 Finally, we also recommend to read the [Release Notes][CRN], which contain important information about [unsupported][CRN-unsupported] and [deprecated][CRN-deprecated] features, as well as [known issues][CRN-issues].
 
-
-### Warning:
-
-   * **Folder names containing whitespace characters are *NOT* supported by *NMF-mGPU***. Please avoid them in the path to your *CUDA Toolkit* installation directory. A soft link can be used as a workaround. For instance:
-
-            $>  ln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit
-
-   * **The [LLVM Clang](http://llvm.org/) compiler is *NOT* supported on *32-bits* system** since it does not recognize the `-malign-double` switch. Please read the [CUDA Release Notes on compilers][CRN-compiler] for details.
 
 
 [CRN]: <http://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html> "CUDA Release Notes"
@@ -259,7 +252,7 @@ Note: All the information contained in the following subsections can be printed 
    * `single_gpu`: Compiles the single-GPU version.
 
    * `tools`: Compiles some [*utility programs*](#tools).  
-     This target does *not* require any CUDA-related software or configuration. In addition, it is *not* necessary to specify the [*`Makefile` parameters*](#mkparams): `CUDA_HOME` or `SM_VERSIONS`.
+     This target does *not* require any CUDA-related software or configuration. In addition, it is *not* necessary to specify the [*`Makefile` parameter*](#mkparams) `SM_VERSIONS`.
 
 
  Other useful targets:
@@ -286,12 +279,6 @@ Note: All the information contained in the following subsections can be printed 
 
 The compilation process can be customized with the following parameters:
 
-   * `CUDA_HOME`: CUDA Toolkit installation path. It may be an environment variable or an argument. If not specified, it will be derived from your `PATH` environment variable by looking for `nvcc`, or the compiler specified in `NVCC` (see below a list of parameters to override default compilers).  
-     **Warning**: Folder names containing whitespace characters are **not** supported. In that case, please set a soft link. For instance:
-
-            $>  `ln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit`
-     This parameter is ignored by target `tools`.
-
    * `SM_VERSIONS`: Target GPU architecture(s). This parameter may be an environment variable or an argument.  
      Device code will be generated for the specified *Compute Capability(-ies)* (CC).  
      For instance, `SM_VERSIONS="10-13  30  PTX35"`:
@@ -302,7 +289,7 @@ The compilation process can be customized with the following parameters:
      To generate device-specific executable code for CC **2.1**, please specify it as: `20-21`.  
      See a more detailed description of this parameter [below](#smversions), or by executing:
 
-            `$>  make  help_sm_versions`
+               $>  make  help_sm_versions
      This parameter is ignored by target `tools`.  
      Default value(s): `SM_VERSIONS="20  30  20-21  PTX35"`
 
@@ -358,12 +345,15 @@ The compilation process can be customized with the following parameters:
 
 Default compilers can be *overridden* with following parameters or environment variables:
 
-   * `CC`: Compiler for ISO-C and CUDA-host code. Used also in the linking stage of targets "`single_gpu`" and "`tools`".
+   * `CC`: Compiler for ISO-C and CUDA-host code. Used also in the linking stage of targets `single_gpu` and `tools`.
      Supported compilers: `gcc` and `clang`.  
      Default value: `clang` for Darwin (i.e., Mac OS X); `gcc`, otherwise.
 
    * `NVCC`: Compiler for CUDA device code.  
-     Default value: `nvcc`.
+     Default value: `nvcc`  
+     ***Warning:*** Paths containing whitespace characters must be surrounded by single or double quotes, ***and*** be properly escaped with `\`. For instance:  
+
+               NVCC:="/opt/cuda\ toolkit/bin/nvcc"
 
    * `MPICC`: Compiler for MPI code.  
      Default value: `mpicc`
@@ -378,7 +368,7 @@ Additional flags, not affected by other input parameters, can be specified throu
 
    * `NVCC_CPPFLAGS`, `NVCCFLAGS`, `NVCC_INCLUDES`: Additional options for `NVCC`.
 
-   * `OPENCC_FLAGS`: Additional flags for `nvopencc`, which generates PTX (intermediate) code on devices of *Compute Capability 1.x*. Parameter ignored on newer GPU architectures.
+   * `OPENCC_FLAGS`: Additional flags for `nvopencc`, which generates PTX (intermediate) code on devices of *Compute Capability 1.x*. This parameter is *ignored* on newer GPU architectures.
 
    * `PTXAS_FLAGS`: Additional flags for PTX code compilation, which generates the actual GPU assembler.
 
@@ -460,43 +450,25 @@ which will be translated into the following argument(s) for NVCC:
 <!-- ==================== -->
 
 
-### 4.3. Other compiling options
-
-The compilation process can be further customized by editing section "*Compiler Options*" in `Makefile`. There, you can adjust `CC`-specific flags, and/or options for the `NVCC` compiler, as well as its internal tools (e.g., `nvopencc`, `ptx`, etc).
-
-#### `CC` options:
-Since host (i.e., non-device) code in CUDA source files is internally compiled by `NVCC` as C++, options for `CC` are distributed into two groups: common- C/C++ flags, and options for C-only source files. Within each group, some flags may, or may not be applied according to `Makefile` input parameters. For instance, `common_fast_CFLAGS` and `c_only_fast_CFLAGS`, specify which flags are applied when the input parameter `FAST_MATH` is set to `1`.
-
-*Notes:*
-
-   * Further options may apply according to the selected `CC` compiler (`gcc` or `clang`) and the current OS (`darwin` or `linux`).  
-   * C-only source files require support for ISO-C99 standard. Therefore, flags for C-only code include the option `-std=c99`.  
-   * Some (optional) useful features for processing single-precision floating-point data are only available when `_GNU_SOURCE` is defined.
-     Such option is included for C-only source files when the input parameter `SINGLE` is set to `1`.  
+### 4.3. Compilation process and generated files
 
 
-#### `NVCC` options:
-Variables containing flags for `NVCC`, follow a similar naming scheme as for `CC` options. Most of options for `NVCC` are those specified as common C/C++ flags, prefixed with `--compiler-options`.
+To compile the default programs, just execute at the prompt:
 
-<!--**Note for Windows CygWin/Mingw users**: It may be necessary to uncomment the `--drive-prefix` option in order to correctly handle filenames and paths in Windows native format. -->
+         $>  make
 
-In this section of the `Makefile`, you can also find options for `nvopencc`, which is a tool internally used by `nvcc` to generate `PTX` assembler code on devices of Compute Capability *1.x* only. You can ignore them for newer architectures.
- 
-Finally, there are flags to control `PTX` code compilation.
+   * **Important note:** A path to the CUDA compiler (`nvcc` by default) is required to compile any GPU program. If it is *not* set in your `PATH` environment variable, it must be explicitly specified through the argument `NVCC`. For instance,
 
-See a detailed description of these flags on the *"CUDA Compiler Driver NVCC" reference guide*, which can be found at folder `<CUDA_HOME>/doc/`, or at URL <http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html>.
+            $>  make  NVCC:=/opt/cuda-toolkit/bin/nvcc
+
+     If such path contains whitespace characters, it must be surrounded by single or double quotes, ***and*** be properly escaped with `\`. For instance:  
+
+            $>  make  NVCC:="/opt/cuda\ toolkit/bin/nvcc"
+  
+&nbsp;
 
 
-<!-- ==================== -->
-
-
-### 4.4. Compilation process and generated files
-
-To compile the default programs, you just need to execute at the prompt:
-
-         $> make  CUDA_HOME="/path/to/CUDA-Toolkit"
-
-Nevertheless, as previously stated, the multi-GPU version is *not* compiled by default, so it must be explicitly requested:
+As previously stated, the multi-GPU version is *not* compiled by default, so it must be explicitly requested:
 
          $> make  multi_gpu
 
@@ -505,13 +477,13 @@ or, to compile all programs:
          $> make  all_programs
 
 
-Options for `Makefile` can be specified as arguments,
+Options for `Makefile` can be specified either as arguments,
 
-         $> make SINGLE=1  FAST_MATH=1  CUDA_HOME="/path/to/CUDA-Toolkit"
+         $>  make  SINGLE=1  FAST_MATH=1  NVCC=/path/to/CUDA-Toolkit/bin/nvcc
 
 or as environment variables, for some of them:
 
-         $> export  CUDA_HOME="/path/to/CUDA-Toolkit"
+         $> export  NVCC="/opt/cuda\ toolkit/bin/nvcc"
          $> export  SM_VERSIONS="13  20-21  PTX35"
          $> make    FAST_MATH=1  SINGLE=1
 
@@ -522,17 +494,17 @@ or as environment variables, for some of them:
    * **`Makefile` arguments have priority over environment variables.**
      For instance, in:
 
-            $> export CUDA_HOME="/usr/local/cuda-5.5"
-            $> make CUDA_HOME="/usr/local/cuda-4.1"
+            $> export NVCC=/usr/local/cuda-5.5/bin/nvcc
+            $> make NVCC=/usr/local/cuda-4.1/bin/nvcc
 
      *NMF-mGPU* will be compiled with CUDA Toolkit version ***4.1***.
 
-   * Since the `env.sh` script also requires the path to your CUDA Toolkit (see [Execution Setup](#setup)), you can perform both actions in a single step by executing such script *before* compiling *NMF-mGPU*.  
+   * Since the script `env.sh` also requires the path to your CUDA Toolkit (see [Execution Setup](#setup)), you can perform both actions in a single step by executing such script *before* compiling *NMF-mGPU*.  
      That is,
 
             $> .  env.sh  "/path/to/CUDA"
             $> make  SM_VERSIONS=13   FAST_MATH=1
-     In any case, if no path to CUDA is specified, both, `env.sh` and `Makefile`, will try to derive it by looking for `nvcc` in all folders stored in your `PATH` environment variable.
+     If no path to CUDA is specified, both, `env.sh` and `Makefile`, will look for `nvcc` in all folders stored in your `PATH` environment variable.
 
 
 Finally, to show all command executed by `make`, you can use the `VERBOSE` parameter:
@@ -553,13 +525,13 @@ After compilation, you should find the following files and folders (among others
 
 The `bin/obj/` folder contains all object files following a directory structure similar to `src/` (see [*Directory Structure*](#folders)). This folder can be safety deleted after compilation by executing:
 
-         $> make clean
+         $>  make  clean
 
 
 <!-- ==================== -->
 
 
-### 4.5. Fine-Tuning:
+### 4.4. Fine-Tuning:
 
 *NMF-mGPU* has been designed to take advantage of different architecture-specific features among existing GPU models. Nevertheless, device code can be further optimized for modern devices by customizing some constants in the source code. For instance, in most GPU kernels, each CUDA thread processes multiple items from global memory in order to increase the thread-level parallelism. For each kernel, the number of such operations is specified by a constant named `<kernel_name>__ITEMS_PER_THREAD`, which is defined in `include/GPU_kernels.cuh`. The default value is set to ensure a 100% of occupancy on devices of *Compute Capability 1.x*, so it can be increased if the program will be compiled for newer GPU architectures.
 
@@ -646,11 +618,7 @@ On *Mac OS X*, please replace `LD_LIBRARY_PATH` by `DYLD_LIBRARY_PATH`. That is,
          $> set  DYLD_LIBRARY_PATH="${CUDA_HOME}/lib":${DYLD_LIBRARY_PATH}
 
 
-**Warnings**:
-
-   * **Folder names containing whitespace characters are *NOT* supported**. Please avoid them in the path to your *CUDA Toolkit* installation directory. A soft link can be used as a workaround. For instance:
-
-            $>  ln  -s   /Developer/Whitespaced\ foldername/cuda   /Developer/cuda
+**Warning**:
 
    * **Multi-GPU version**: This script does **not** setup any MPI-related environment, since it depends on your actual MPI library. Please make sure it is properly set.
 
@@ -661,8 +629,8 @@ On *Mac OS X*, please replace `LD_LIBRARY_PATH` by `DYLD_LIBRARY_PATH`. That is,
 The script `env.sh` also exports the environment variable `CUDA_HOME` containing the path to your CUDA Toolkit (either because it was specified as an argument, or because it was derived from `PATH`). As described in [*`Makefile` Parameters*](#mkparams), this variable is required for the compilation process. Therefore, you can set up both, compilation and execution environments, in a single step by executing `env.sh` ***before*** compiling *NMF-mGPU*. That is,
 
          $> .  env.sh  "/path/to/CUDA"        # Sets up the environment
-         $> make                                # Compiles NMF-mGPU
-         $> bin/NMF_GPU <input_file>  [...]    # Executes the program
+         $> make                              # Compiles NMF-mGPU
+         $> bin/NMF_GPU <input_file>  [...]   # Executes the program
 
 As previously stated, to use the multi-GPU version, please remember to properly setup the environment of your MPI-library.
 
@@ -804,7 +772,7 @@ The argument `-np 2` denotes that *two* GPU devices will be used.
 
    6. `Catastrophic error: could not set locale "" to allow processing of multibyte characters.`
 
-<!--    7.  -->
+   7. Whitespace characters in the path to the CUDA Toolkit.
 
 
 <!-- ==================== -->
@@ -861,7 +829,12 @@ Try to change your locales to `en_US.UTF-8` or `en_US.ISO-8859-15`. For instance
 
 <!-- ==================== -->
 
-<!-- #### 8.7.  -->
+#### 8.7. Whitespace characters in the path to the CUDA Toolkit.
+
+Paths containing whitespace characters must be surrounded by single or double quotes, ***and*** must have all space characters properly escaped (with `\`). For instance:  
+
+         NVCC="/opt/cuda\ toolkit/bin/nvcc"
+
 
 
 *****************************

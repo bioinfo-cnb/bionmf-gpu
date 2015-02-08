@@ -91,14 +91,14 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 
 ### 1.1 System Requirements
 
-   * **UNIX System** (GNU/Linux or Darwin/Mac OS X). *NMF-mGPU* has not been tested on Microsoft Windows yet.
+   * **UNIX System** (GNU/Linux or Darwin/Mac OS X).
 
    * **One or more CUDA-capable GPU devices**: A detailed list of compatible hardware can be found at <http://developer.nvidia.com/cuda-gpus>  
      Please note that **all** devices must be of the same architecture (i.e., heterogeneous GPU clusters are not supported yet).
 
    * **CUDA Toolkit and CUDA Driver**: They are freely available at the [CUDA Downloads Page][CUDA-Download]. Nevertheless, for *deprecated* GPU devices and/or OS platforms, you can download a previous CUDA release (e.g., version 5.5) from the [CUDA Archive Page][CUDA-OR-Download]. Please note that *NMF-mGPU* requires, at least, the version 4.2.
 
-   * **A C compiler** conforming to the **ISO-C99 standard**, such as [GNU GCC](https://gcc.gnu.org) or [LLVM Clang](http://llvm.org/).
+   * **A C compiler** conforming to the **ISO-C99 standard**, such as [GNU GCC](https://gcc.gnu.org) or [LLVM Clang](http://llvm.org/) (64-bits only).
 
    * The ***optional* multi-GPU version** also requires an **MPI-2.0** (or greater) software library, such as [OpenMPI](http://www.open-mpi.org/) or [MPICH](http://www.mpich.org/).
 
@@ -114,19 +114,19 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 
    * For **GNU/Linux**:
 
-     Instructions vary among different distributions. For instance, on **Ubuntu 14.04**:
+     Instructions vary among different distributions. For instance, on **Ubuntu 14.04 LTS (*Trusty Tahr*)**:
 
       + **NVIDIA proprietary driver**: Open the program *Software & Updates*, then go to *Additional Drivers* section and check the option "*Using NVIDIA binary driver*".  
         Alternatively, you can open a terminal and type:
 
-               sudo  apt-get  install  nvidia-current
+               $>  sudo  apt-get  install  nvidia-current
 
         You may have to reboot the system in order to use this driver after installing it.
 
       + **Additional packages**: The following packages are required: `build-essential`, `nvidia-cuda-dev` and `nvidia-cuda-toolkit`.  
         They can be installed through the *Ubuntu Software Center*, or via a terminal by typing: 
 
-               sudo  apt-get  install  build-essential  nvidia-cuda-dev  nvidia-cuda-toolkit
+               $>  sudo  apt-get  install  build-essential  nvidia-cuda-dev  nvidia-cuda-toolkit
 
       + **Multi-GPU version (optional)**: This version also requires any of the following packages: `openmpi` or `mpich`.
 
@@ -142,13 +142,6 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
       + **Multi-GPU version (optional)**: Most MPI libraries are available on package managers, such as [MacPorts](http://www.macports.org/) or [Homebrew](http://brew.sh/). Otherwise, you can download the source code and compile it.
 
      We highly recommend to read the [Getting Starting Guide for Darwin/Mac OS X](http://docs.nvidia.com/cuda/cuda-getting-started-guide-for-mac-os-x/index.html) for detailed instructions.
-
-
-### Warning:
-
-**Folder names containing whitespace characters are *NOT* supported**. Please avoid them in the path to your *CUDA Toolkit* installation directory. A soft link can be used as a workaround. For instance:
-
-         $>  ln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit
 
 
 *****************************
@@ -191,7 +184,7 @@ Finally, to compile the *multi-GPU* version (process not performed by default), 
 
          $>  make  multi_gpu  MPICC=<path_to_mpi>/bin/mpicc
 
-Please make sure your MPI Library is properly installed (e.g., environment variables, etc). Similarly as above, the resulting executable file, `NMF_mGPU` is stored in the `bin/` folder.
+Please make sure your MPI Library is properly installed (i.e., environment variables, etc). Similarly as above, the resulting executable file, `NMF_mGPU` is stored in the `bin/` folder.
 
 
 *****************************
@@ -240,6 +233,16 @@ After completion, both output matrices, **W** and **H**, are stored in the same 
 
    * `test/ALL_AML_data.txt_W.txt`
    * `test/ALL_AML_data.txt_H.txt`
+
+
+**Notes:**
+
+   * An exhaustive list of all valid parameters for `NMF_GPU` can be shown with the option `-h`. That is,
+
+         $>  bin/NMF_GPU  -h
+     In that case, any other argument will be ignored.
+
+   * On any error, please check first the [Troubleshooting section](doc/installation_guide.md#troubleshooting) in our [Installation Guide](doc/installation_guide.md), located in the `doc/` folder.
 
 
 <!-- ==================== -->

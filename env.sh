@@ -47,10 +47,6 @@
  #	set -- <path_to_CUDA_Toolkit> ; . ./env.sh
  #
  # WARNING:
- #	* Folder names containing whitespace characters are NOT supported. In
- #	  that case, either use a (soft) link, or rename your CUDA installation
- #	  directory.
- #
  #	* This script may not work on (t)csh. Please use another shell, such as
  #	  "bash", "dash", "ksh" or "zsh".
  #
@@ -61,17 +57,17 @@ nvcc_basename="nvcc"
 
 
 #############################
-# Retrieves CUDA_HOME
+# Path to CUDA
 #############################
 
 # Argument was specified:
 if [ -n "$1" ]  ; then
 
-	CUDA_HOME="$1"
+	cuda_home="$1"
 
-	if [ ! -d "${CUDA_HOME}" ] ; then
-		echo "'${CUDA_HOME}' not found. Please provide an existing path to your CUDA Toolkit." >&2
-		unset CUDA_HOME nvcc_basename
+	if [ ! -d "${cuda_home}" ] ; then
+		echo "'${cuda_home}' not found. Please provide an existing path to your CUDA Toolkit." >&2
+		unset cuda_home nvcc_basename
 		return 1
 	fi
 
@@ -84,7 +80,7 @@ else
 		echo "
 Error: no argument was specified, and could not find any path to '${nvcc_basename}' in
 your \"PATH\" environment variable. Please, either provide the path to your CUDA
-Toolkit, or add to \"PATH\" the path to '${nvcc_basename}'.
+Toolkit, or specify in \"PATH\" the path to '${nvcc_basename}'.
 
 Please note that in some shells (e.g., dash), arguments must be set as follow:
 	set -- <path_to_CUDA_Toolkit> ; . ./env.sh
@@ -94,39 +90,19 @@ Please note that in some shells (e.g., dash), arguments must be set as follow:
 	fi
 
 	# Path found:
-	CUDA_HOME="${nvcc_path%/*/${nvcc_basename}*}"
+	cuda_home="${nvcc_path%/*/${nvcc_basename}*}"
 	unset nvcc_path
 fi
 unset nvcc_basename
 
 
-# Checks for whitespace characters in folder name.
-echo "${CUDA_HOME}" | grep ' ' > /dev/null 2>&1
-if [ "$?" -eq 0 ] ; then
-	echo "
-Error: '${CUDA_HOME}'
-Folder names containing whitespace characters are NOT supported. Please,
-either use a (soft) link, or rename your CUDA installation directory.
-" >&2
-	unset CUDA_HOME
-	return 1
-fi
-
-# Removes any leading slash ('/') character
-CUDA_HOME="${CUDA_HOME%/}"
-
-
-echo "
-Setting CUDA_HOME to '${CUDA_HOME}'
-"
-export CUDA_HOME
-
+echo -e "Path to CUDA: ${cuda_home}\n"
 
 #############################
 # Updates PATH
 #############################
 
-cuda_bin="${CUDA_HOME}/bin"
+cuda_bin="${cuda_home}/bin"
 
 if [ -d "${cuda_bin}" ] ; then
 	if [ "${PATH}" = "${PATH#*${cuda_bin}}" ] ; then
@@ -138,21 +114,22 @@ fi
 
 unset cuda_bin
 
+
 #############################
 # Updates (DY)LD_LIBRARY_PATH
 #############################
 
 # Path to CUDA library.
-cuda_lib="${CUDA_HOME}/lib"
+cuda_lib="${cuda_home}/lib"
 
 if [ ! -d "${cuda_lib}" ] ; then
 
 	# 32- or 64-bits platform
 	os_size=$(uname -m | sed -e "s/i.86/32/" -e "s/x86_64/64/" -e "s/armv7l/32/")
 
-	if [ ! -d "${cuda_lib}${os_size}" ] ; then	# e.g., <CUDA_HOME>/lib64
+	if [ ! -d "${cuda_lib}${os_size}" ] ; then	# e.g., <cuda_home>/lib64
 		echo "Warning: Neither of '${cuda_lib}' or '${cuda_lib}${os_size}' were found, so not added to (DY)LD_LIBRARY_PATH." >&2
-		unset os_size cuda_lib
+		unset os_size cuda_lib cuda_home
 		return 1
 	fi
 
@@ -168,4 +145,4 @@ if [ "${DYLD_LIBRARY_PATH}" = "${DYLD_LIBRARY_PATH#*${cuda_lib}}" ] ; then
 	export DYLD_LIBRARY_PATH="${cuda_lib}":${DYLD_LIBRARY_PATH}
 fi
 
-unset cuda_lib
+unset cuda_lib cuda_home

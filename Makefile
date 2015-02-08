@@ -51,7 +51,7 @@
 #	tools:		Compiles some utility programs.
 #			This target does NOT require any CUDA-related software
 #			or configuration. In addition, it is NOT necessary to
-#			specify the parameters 'CUDA_HOME' or 'SM_VERSIONS'.
+#			specify the parameter 'SM_VERSIONS'.
 #
 #
 # Other useful targets:
@@ -81,18 +81,6 @@
 #
 #
 # List of available parameters:
-#
-#	CUDA_HOME:	CUDA Toolkit installation path. It may be an environment
-#			variable or an argument. If not specified, it will be
-#			derived from your "PATH" environment variable by looking
-#			for 'nvcc', or the compiler specified in "NVCC" (see
-#			below a list of parameters to override default
-#			compilers).
-#			WARNING: Folder names containing whitespace characters
-#			are NOT supported. In that case, please set a soft link.
-#			For instance:
-#				ln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit
-#			This parameter is ignored by target 'tools'.
 #
 #	SM_VERSIONS:	Target GPU architecture(s). This parameter may be an
 #			environment variable or an argument. Device code will be
@@ -176,6 +164,11 @@
 #			Default values: 'clang' for Darwin (i.e., Mac OS X); 'gcc', otherwise.
 #
 #	NVCC:		Compiler for CUDA device code. Default value: 'nvcc'.
+#			WARNING: Paths containing whitespace characters must be
+#			surrounded by single/double quotes, *AND* be properly
+#			escaped with '\\'.
+#			For instance:
+#				NVCC:="/opt/cuda\ toolkit/bin/nvcc"
 #
 #	MPICC:		Compiler for MPI code. Default value: 'mpicc'.
 #
@@ -219,7 +212,7 @@
 # implemented in pure ISO-C language, so all operations are performed on the HOST
 # (i.e., the CPU). Therefore, they do NOT require any CUDA-related option,
 # configuration or software. In addition, it is NOT necessary to specify the
-# Makefile parameters: 'CUDA_HOME' or 'SM_VERSIONS'.
+# Makefile parameter "SM_VERSIONS".
 #
 # 1) Binary-text file converter:
 #    Since "NMF-mGPU" accepts input matrices stored in a binary or ASCII-text
@@ -387,20 +380,6 @@ ifeq ($(SM_VERSIONS),)
 	SM_VERSIONS += PTX35
 endif
 
-########################################
-
-# Shell
-SHELL := /bin/sh
-
-# OS Name
-os_lower := $(strip $(shell uname -s 2>/dev/null | tr "[:upper:]" "[:lower:]"))
-
-# Flags to detect 32-bits or 64-bits OS platform
-os_size := $(strip $(shell uname -m | sed -e "s/i.86/32/" -e "s/x86_64/64/" -e "s/armv7l/32/"))
-
-# Whitespace
-empty :=
-space := $(empty) $(empty)
 
 ########################################
 # Source code directory and filenames
@@ -410,8 +389,7 @@ space := $(empty) $(empty)
 srcdir	   := src
 includedir := include
 bindir	   := bin
-objdir	   := obj
-# objdir	   := $(bindir)/obj
+objdir	   := $(bindir)/obj
 
 # Matrix I/O Operations directory name
 matrix_io_dir := matrix_io
@@ -431,6 +409,93 @@ iso_c_FILES	  := common.c $(matrix_io_dir)/matrix_io_routines.c $(matrix_io_dir)
 
 
 ########################################
+# Miscellaneous Utilities and Variables
+########################################
+
+# Shell
+SHELL := /bin/sh
+
+# OS Name
+os_lower := $(strip $(shell uname -s 2>/dev/null | tr "[:upper:]" "[:lower:]"))
+
+# Flags to detect 32-bits or 64-bits OS platform
+os_size := $(strip $(shell uname -m | sed -e "s/i.86/32/" -e "s/x86_64/64/" -e "s/armv7l/32/"))
+
+# Whitespace
+empty :=
+space := $(empty) $(empty)
+
+# Always keeps all intermediate files (unless the 'clean' target is explicitly requested)
+.SECONDARY:
+
+.SUFFIXES:
+.SUFFIXES: .c .o .h .cu .cu.o .cuh
+
+###########
+
+# Miscellaneous function for file and directory searches:
+
+
+# Replaces whitespace characters by a "weird" string.
+weird_string := '\$\%\&'
+subst_whitespaces = $(subst $(space),$(weird_string),$(1))
+
+
+# Restores whitespace characters.
+restore_whitespaces = $(subst $(weird_string),\ ,$(1))
+
+
+# Escapes whitespace characters.
+escape_whitespaces = $(subst $(space),\ ,$(strip $(1)))
+
+
+# Returns all directories in PATH.
+# Replaces any existing whitespace in folder names by a "weird" string.
+# Then, replaces colons (:) by spaces.
+dirs_in_PATH = $(subst :, ,$(call subst_whitespaces,${PATH}))
+
+
+# Checks if the file $(1) exists in the folder $(2)
+# Restores any previous whitespace before checking for existence.
+# NOTE:
+#	We use "wildcard", since other similar functions (e.g., realpath) ignore
+#	escaped characters. However, "wildcard" removes the escapes sequences from
+#	the result, so they have to be escaped again...
+check_existence = $(call escape_whitespaces,$(wildcard $(call restore_whitespaces,$(2))/$(1)))
+
+
+# Searches for the first instance of $(1) in PATH.
+# Folder names with spaces ARE supported. The result is returned in $(2).
+# This is similar to '$(shell which $(1))', but that function is not portable.
+#
+define whitespace_pathsearch
+
+	# This temporary variable is used to ignore other existing instances of $(1).
+	$(eval tmp := $(empty))
+
+	# Once tmp is non-empty, no more calls to "check_if_exists" are performed.
+	$(foreach folder,$(call dirs_in_PATH),$(if $(value tmp),,$(eval tmp := $(call check_existence,$(1),$(folder)))))
+
+	# Sets the result
+	$(eval $(2) := $(tmp))
+
+	# Removes the temporary variable
+	undefine tmp
+endef
+
+# Searches for the first instance of $(1) in PATH.
+# WARNING: It does NOT support whitespace characters.
+fast_pathsearch = $(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,${PATH}))))
+
+####
+
+# Applies the given function (e.g., dir(), notdir()) to a path with whitespace characters:
+# Substitutes any space, applies the function, and restores remaining spaces.
+# Usage: $(call whitespaced_path,$(function),$(path))
+whitespaced_path = $(call restore_whitespaces,$(call $(2),$(call subst_whitespaces,$(1))))
+
+
+########################################
 # Compiler options
 ########################################
 
@@ -441,20 +506,11 @@ else
 	default_CC := gcc
 endif
 
-# Previous selection can be overridden with the parameter, or environment variable, "CC"
-
-ifneq ($(filter default undefined,$(origin CC)),)
-	CC := $(default_CC)
-else
-	# Just in case the user tried to undefine CC by assigning an empty value
-	# (rather than use the "unset" command).
-	ifeq ($(CC),)
-		override CC := $(default_CC)
-		overriden_compiler := CC
-	endif
+ifeq (${CC},)
+	override CC := $(default_CC)
 endif
 
-cc_name := $(or $(findstring gcc,$(CC)),$(findstring clang,$(CC)),$(strip $(notdir $(CC))))
+cc_name := $(or $(findstring gcc,${CC}),$(findstring clang,${CC}),$(strip $(notdir ${CC})))
 
 
 #######
@@ -517,16 +573,8 @@ clang_darwin_cc_fast_CFLAGS	:=
 # MPI compiler
 default_MPICC := mpicc
 
-# Previous selection can be overridden with the parameter or environment variable "MPICC"
-ifneq ($(filter default undefined,$(origin MPICC)),)
-	MPICC := $(default_MPICC)
-else
-	# Just in case the user tried to undefine MPICC by assigning an empty value
-	# (rather than use the "unset" command).
-	ifeq ($(MPICC),)
-		override MPICC := $(default_MPICC)
-		overriden_compiler += MPICC
-	endif
+ifeq (${MPICC},)
+	override MPICC := $(default_MPICC)
 endif
 
 ########################################
@@ -534,19 +582,66 @@ endif
 # CUDA compiler
 default_NVCC := nvcc
 
-NVCC ?= $(default_NVCC)
-nvcc_basename := $(notdir $(NVCC))
+ifeq (${NVCC},)
+	override NVCC := $(default_NVCC)
+endif
 
+user_cuda_compiler := ${NVCC}
+
+# File not found, searches in PATH.
+ifeq ($(wildcard ${NVCC}),)
+
+	# No folder names in PATH with whitespace characters. Uses the fast version.
+	ifeq ($(words ${PATH}),1)
+		new_nvcc := $(call fast_pathsearch,${NVCC})
+
+	else	# Slower version that supports whitespace characters in folder names.
+		do_not_care := $(call whitespace_pathsearch,${NVCC},new_nvcc)
+	endif
+
+	# Overrides the old value. Empty string if not found in PATH.
+	override NVCC := $(new_nvcc)
+endif
+
+
+# Path to the CUDA Toolkit
+cuda_home := $(call whitespaced_path,dir,${NVCC})/..
+
+
+nvcc_includedir := $(cuda_home)/include
+
+nvcc_libdir := $(wildcard $(cuda_home)/lib$(os_size))
+ifeq ($(nvcc_libdir),)	# Previous path not found. Sets a new one.
+	nvcc_libdir := $(wildcard $(cuda_home)/lib)
+endif
+
+
+# Error message to show if no path to CUDA Toolkit was found.
+nvcc_not_found_message := "\n\
+	ERROR:\n\
+	Could not find: '$(user_cuda_compiler)'.\n\
+	\n\
+	Please specify a path to a CUDA compiler, either by using the argument \"NVCC\",\n\
+	or by adding it to your PATH environment variable. In addition, please remember\n\
+	that paths with whitespace characters must be surrounded by single or double\n\
+	quotes, *AND* be properly escaped with '\\'.\n\
+	\n\
+	For instance:\n\
+		\tmake  NVCC:=\"/opt/cuda\ toolkit/bin/$(default_NVCC)\"\n"
+
+
+#########
 
 # Flags for NVCC (may be modified later according to input parameters).
 nvcc_CFLAGS	 := --restrict --optimize 3 --disable-warnings
 nvcc_fast_CFLAGS := --use_fast_math
 nvcc_CPPFLAGS	 :=
 
+
 # Internal compiler for HOST code (e.g., kernels launch).
 #	Useful to make NVCC to follow a customized CC variable (e.g., CC='gcc-4.2').
 #	Otherwise, CC is ignored and the default C/C++ compiler is invoked ('gcc' for Linux, 'clang' for Darwin, and 'cl.exe' for Windows).
-nvcc_CFLAGS	 += --compiler-bindir $(CC)
+nvcc_CFLAGS	 += --compiler-bindir ${CC}
 
 
 ## Useful options for CygWin and Mingw, respectively, under MS Windows platforms.
@@ -557,55 +652,6 @@ nvcc_CFLAGS	 += --compiler-bindir $(CC)
 
 ## To specify the version of Microsoft Visual Studio installation (e.g., 2012).
 # nvcc_CFLAGS += --use-local-env --cl-version 2008
-
-
-#########
-
-
-# Path to CUDA Toolkit:
-#	If CUDA_HOME was specified, uses that path regardless any other parameter or environment variable.
-#	Otherwise, searches for <nvcc_basename> in all folders stored in "PATH".
-#
-# WARNING:
-#	Folder names with whitespace characters are *NOT* supported. In that case, please set a soft link.
-#	For instance:
-#			ln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit\n
-#
-ifeq ($(CUDA_HOME),)
-
-	# There was no CUDA_HOME explicitly given, so tries to determine it from locating <nvcc_basename> in PATH:
-
-	pathsearch = $(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,$(PATH)))))
-	# Note: Same effect using the "which" shell command: $(shell which $(1))
-
-	nvcc_path := $(dir $(call pathsearch,$(nvcc_basename)))
-
-	ifneq ($(nvcc_path),)
-		CUDA_HOME := $(realpath $(nvcc_path)/..)
-	endif
-endif
-
-
-# Updates NVCC
-NVCC := $(CUDA_HOME)/bin/$(nvcc_basename)
-
-nvcc_includedir := $(CUDA_HOME)/include
-nvcc_libdir := $(firstword $(wildcard $(CUDA_HOME)/lib$(os_size) $(CUDA_HOME)/lib))
-
-# Error message to show if no path to CUDA Toolkit was found.
-# NOTE:
-#	* Literal tabs and newline characters are ignored. Only '\t' and '\n' are printed.
-#	* Only double quotes (") need to be escaped, if any.
-cuda_home_not_found_message := "\n\
-	ERROR:\n\n\
-		'CUDA_HOME' was not set, and could not find any path to '$(nvcc_basename)' in your\n\
-		\"PATH\" environment variable. Please, either specify the CUDA-Toolkit installation\n\
-		path in CUDA_HOME, or add the path to '$(nvcc_basename)' to your \"PATH\" environment\n\
-		variable.\n\
-		\n\
-		Finally, please remember that folders with whitespace characters are NOT\n\
-		supported. In that case, please set a soft link. For instance:\n\
-			\tln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit\n"
 
 
 #########
@@ -716,7 +762,8 @@ unsupported_sm_versions_message := "\n\
 #	* Only double quotes (") need to be escaped, if any.
 unknown_sm_version_message := "\n\
 	Error:\n\
-	Unknown parameter \"SM_VERSION\". Did you mean 'SM_VERSIONS' (i.e., the plural form) ?\n"
+	Unknown parameter \"SM_VERSION\".\n\
+	Did you mean 'SM_VERSIONS' (i.e., in the plural form) ?\n"
 
 
 
@@ -956,8 +1003,8 @@ cuda_cc_INCLUDES := -I$(nvcc_includedir)
 
 
 # Tools
-tools_TARGETS	:= $(patsubst $(tools_dir)/%.c,$(tools_bindir)/%,$(tools_FILES))
-tools_OBJS	:= $(patsubst $(tools_dir)/%,$(tools_objdir)/%.o,$(tools_FILES))
+tools_TARGETS	:= $(addprefix $(tools_bindir)/,$(basename $(notdir $(tools_FILES))))
+tools_OBJS	:= $(addprefix $(tools_objdir)/,$(addsuffix .o,$(notdir $(tools_FILES))))
 tools_DEPS	:= $(iso_c_OBJS)
 tools_CPPFLAGS	:= $(c_CPPFLAGS)
 tools_CFLAGS	:= $(c_CFLAGS)
@@ -993,9 +1040,6 @@ multi_gpu_LDLIBS	:= $(MPICC_LDLIBS) $(single_gpu_LDLIBS)
 # Goals
 ########################################
 
-# Always keeps all intermediate files (unless the 'clean' target is explicitly requested)
-.SECONDARY:
-
 
 # Compiles default programs
 .PHONY: all
@@ -1008,13 +1052,13 @@ all_programs : multi_gpu all
 
 
 # Compiles the single-GPU version
-.PHONY: single_gpu
-single_gpu : $(single_gpu_TARGETS)
+.PHONY: single_gpu single_GPU
+single_gpu single_GPU : $(single_gpu_TARGETS)
 
 
 # Compiles the multi-GPU version
-.PHONY: multi_gpu
-multi_gpu : $(multi_gpu_TARGETS)
+.PHONY: multi_gpu multi_GPU
+multi_gpu multi_GPU : $(multi_gpu_TARGETS)
 
 
 # Compiles the utility programs
@@ -1027,21 +1071,21 @@ tools : $(tools_TARGETS)
 ########################################
 
 # Main Program (multi-GPU version, C++ code)
-$(multi_gpu_TARGETS) : $(multi_gpu_DEPS) $(multi_gpu_OBJS) | check_compiler check_cuda_path check_sm_versions
+$(multi_gpu_TARGETS) : $(multi_gpu_DEPS) $(multi_gpu_OBJS) | check_sm_versions check_cuda_path
 	-$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(MPICC) $(multi_gpu_CPPFLAGS) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) $(multi_gpu_LDFLAGS) $^ $(multi_gpu_LDLIBS) -o $@
+	$(cmd_prefix)${MPICC} $(multi_gpu_CPPFLAGS) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) $(multi_gpu_LDFLAGS) $^ $(multi_gpu_LDLIBS) -o $@
 
 
 # Main Program (single-GPU version, C++ code)
-$(single_gpu_TARGETS) : $(single_gpu_DEPS) $(single_gpu_OBJS) | check_compiler check_cuda_path check_sm_versions
+$(single_gpu_TARGETS) : $(single_gpu_DEPS) $(single_gpu_OBJS) | check_sm_versions check_cuda_path
 	-$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(CC) $(single_gpu_CPPFLAGS) $(single_gpu_CFLAGS) $(single_gpu_INCLUDES) $(single_gpu_LDFLAGS) $^ $(single_gpu_LDLIBS) -o $@
+	$(cmd_prefix)${CC} $(single_gpu_CPPFLAGS) $(single_gpu_CFLAGS) $(single_gpu_INCLUDES) $(single_gpu_LDFLAGS) $^ $(single_gpu_LDLIBS) -o $@
 
 
 # Tools
-$(tools_bindir)/% : $(tools_DEPS) $(tools_objdir)/%.c.o | check_compiler
+$(tools_bindir)/% : $(tools_DEPS) $(tools_objdir)/%.c.o
 	-$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(CC) $(tools_CPPFLAGS) $(tools_CFLAGS) $(tools_INCLUDES) $(tools_LDFLAGS) $^ $(tools_LDLIBS) -o $@
+	$(cmd_prefix)${CC} $(tools_CPPFLAGS) $(tools_CFLAGS) $(tools_INCLUDES) $(tools_LDFLAGS) $^ $(tools_LDLIBS) -o $@
 
 
 ########################################
@@ -1049,34 +1093,33 @@ $(tools_bindir)/% : $(tools_DEPS) $(tools_objdir)/%.c.o | check_compiler
 ########################################
 
 # MPI code
-$(multi_gpu_OBJS) : $(multi_gpu_SRC) | check_compiler
+$(multi_gpu_OBJS) : $(multi_gpu_SRC)
 	-$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(MPICC) $(multi_gpu_CPPFLAGS) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) -o $@ -c $<
+	$(cmd_prefix)${MPICC} $(multi_gpu_CPPFLAGS) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) -o $@ -c $<
 
 
 # ISO-C and CUDA-host code
 $(cuda_host_OBJS) $(single_gpu_OBJS) : c_INCLUDES += $(cuda_cc_INCLUDES)
-$(objdir)/%.c.o : $(srcdir)/%.c | check_compiler
+$(objdir)/%.c.o : $(srcdir)/%.c
 	-$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(CC) $(c_CPPFLAGS) $(c_CFLAGS) $(c_INCLUDES) -o $@ -c $<
+	$(cmd_prefix)${CC} $(c_CPPFLAGS) $(c_CFLAGS) $(c_INCLUDES) -o $@ -c $<
 
 
 # CUDA device code
-$(objdir)/%.cu.o : $(srcdir)/%.cu | check_sm_versions check_compiler
+$(objdir)/%.cu.o : $(srcdir)/%.cu | check_sm_versions check_cuda_path
 	-$(cmd_prefix)mkdir -p $(@D)
-	$(cmd_prefix)$(NVCC) $(cuda_nvcc_CPPFLAGS) $(cuda_nvcc_CFLAGS) $(cuda_nvcc_INCLUDES) --output-file $@ --compile $<
+	$(cmd_prefix)${NVCC} $(cuda_nvcc_CPPFLAGS) $(cuda_nvcc_CFLAGS) $(cuda_nvcc_INCLUDES) --output-file $@ --compile $<
 
 
 ########################################
 # Error-checking rules
 ########################################
 
-
-# Some targets require "CUDA_HOME"
+# NVCC not found in PATH
 .PHONY: check_cuda_path
 check_cuda_path :
-ifeq ($(CUDA_HOME),)
-	@echo $(cuda_home_not_found_message) >&2
+ifeq (${NVCC},)
+	@echo $(nvcc_not_found_message) >&2
 	@exit 1
 endif
 
@@ -1095,14 +1138,6 @@ endif
 endif
 
 
-# Notifies if any of the main compilers was specified as empty.
-PHONY: check_compiler
-check_compiler :
-ifneq ($(overriden_compiler),)
-	@echo $(overriden_compiler_message) >&2
-endif
-
-
 ########################################
 # Cleaning-up rules
 ########################################
@@ -1110,7 +1145,7 @@ endif
 # Removes all directories containing executable and object files
 .PHONY: clobber distclean realclean
 clobber distclean realclean : clean
-	-$(cmd_prefix)$(RM) -r $(bindir)
+	-$(cmd_prefix)${RM} -r $(bindir)
 
 
 # Removes executable and object files generated by the corresponding target.
@@ -1119,20 +1154,20 @@ clobber_multi_gpu clobber_single_gpu clobber_tools : clobber_target=$(patsubst c
 clobber_multi_gpu : clean_multi_gpu
 clobber_single_gpu : clean_single_gpu
 clobber_tools : clean_tools
-	-$(cmd_prefix)$(RM) $($(clobber_target)_TARGETS)
+	-$(cmd_prefix)${RM} $($(clobber_target)_TARGETS)
 
 
 # Removes the folder containing all object (".o") files. Executable code is not affected.
 .PHONY: clean
 clean :
-	-$(cmd_prefix)$(RM) -r $(objdir)
+	-$(cmd_prefix)${RM} -r $(objdir)
 
 
 # Removes object files generated by the corresponding target. Executable code is not affected.
 .PHONY: clean_multi_gpu clean_single_gpu clean_tools
 clean_multi_gpu clean_single_gpu clean_tools : clean_target=$(patsubst clean_%,%,$@)
 clean_multi_gpu clean_single_gpu clean_tools :
-	-$(cmd_prefix)$(RM) $($(clean_target)_OBJS) $($(clean_target)_DEPS)
+	-$(cmd_prefix)${RM} $($(clean_target)_OBJS) $($(clean_target)_DEPS)
 
 
 ########################################
@@ -1152,22 +1187,14 @@ help_sm_versions help_SM_Versions help_SM_VERSIONS :
 
 
 # Help for utility programs
-.PHONY: help_tools
-help_tools :
+.PHONY: help_tools help_Tools
+help_tools help_Tools :
 	@echo $(help_tools_message)
 
 
 ########################################
 # Messages
 ########################################
-
-# Some compiler variables were overridden.
-
-overriden_compiler_message := "\n\
-	Warning:\n\
-	The following compiler definitions were reset to their default values: $(overriden_compiler)\n"
-
-####################
 
 # Main help message
 
@@ -1219,18 +1246,6 @@ help_message := "\n\
 	\n\
 	\n\
  List of available parameters:\n\
-	\n\
-	\tCUDA_HOME:\tCUDA Toolkit installation path. It may be an environment\n\
-		\t\t\tvariable or an argument. If not specified, it will be\n\
-		\t\t\tderived from your \"PATH\" environment variable by looking\n\
-		\t\t\tfor '$(default_NVCC)', or the compiler specified in \"NVCC\" (see\n\
-		\t\t\tbelow a list of parameters to override default\n\
-		\t\t\tcompilers).\n\
-		\t\t\tWARNING: Folder names containing whitespace characters\n\
-		\t\t\tare NOT supported. In that case, please set a soft link.\n\
-		\t\t\tFor instance:\n\
-		\t\t\t\tln  -s  /opt/cuda\ toolkit   /opt/cudaToolkit\n\
-		\t\t\tThis parameter is ignored by target 'tools'.\n\
 	\n\
 	\tSM_VERSIONS:\tTarget GPU architecture. This parameter may be an\n\
 		\t\t\tenvironment variable or an argument. Device code will be\n\
@@ -1319,7 +1334,12 @@ help_message := "\n\
 		\t\t\tlinking stage of targets \"single_gpu\" and \"tools\".\n\
 		\t\t\tSupported compilers: 'gcc' and 'clang'. Default: '$(default_CC)'.\n\
 	\n\
-	\tNVCC:\t\tCompiler for CUDA device code. Default value: '$(nvcc_basename)'.\n\
+	\tNVCC:\t\tCompiler for CUDA device code. Default value: '$(default_NVCC)'.\n\
+		\t\t\tWARNING: Paths containing whitespace characters must be\n\
+		\t\t\tsurrounded by double/single quotes, *AND* be properly\n\
+		\t\t\tescaped with '\\'.\n\
+		\t\t\tFor instance:\n\
+		\t\t\t\tNVCC:=\"/opt/cuda\ toolkit/bin/$(default_NVCC)\"\n\
 	\n\
 	\tMPICC:\t\tCompiler for MPI code. Default value: '$(default_MPICC)'.\n\
 	\n\
@@ -1546,4 +1566,3 @@ help_tools_message := "\n\
 
 
 ########################################
-
