@@ -286,6 +286,18 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 	bN = 0;
 	bM = 0;
 
+	// --------------------------------
+
+	// Output values.
+
+	*mt = l_mt;
+
+	// --------------------------------
+
+	#if NMFGPU_VERBOSE_2
+		print_message( verb_shown_by_all, "Initializing input matrix from file %s... Done.\n", filename );
+	#endif
+
 	return EXIT_SUCCESS;
 
 } // init_V
