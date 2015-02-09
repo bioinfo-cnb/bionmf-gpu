@@ -53,10 +53,7 @@
 #include "index_type.h"
 #include "real_type.h"
 
-// Compiled in C++ mode
-#include <cuda_runtime.h>
-
-#include <cstddef>	/* NULL, size_t */
+#include <cuda_runtime_api.h>
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -1153,25 +1150,24 @@ static __global__ void kernel_reduce_to_row( real const *__restrict__ d_A, size_
 /*
  * d_accum_A[j] = SUM( d_A[...][j] )
  *
- * height <= (dimGrid.y * dimGrid.x) * REDUCE_TO_ROW__ITEMS_PER_THREAD * block_height
+ * height <= (grid_extension * grid_length) * REDUCE_TO_ROW__ITEMS_PER_THREAD * block_height
  * d_Tmp: Temporary storage. Ignored if grid_length == 1.
- * size_of( d_Tmp ) >= (dimGrid.y * dimGrid.x) * pitch
+ * size_of( d_Tmp ) >= (grid_extension * grid_length) * pitch
  * length( d_accum_A ) >= pitch
  *
  * block_height <= (maxThreadsPerBlock / pitch), and must be a power of 2.
- * (gridDim.y * gridDim.x) <= UINT_MAX
+ * (grid_extension * grid_length) <= UINT_MAX
  * "pitch" must be a multiple of 'memory_alignment'.
  *
  * WARNING:
  *	height > 1
  */
 __host__ void reduce_to_row( real const *__restrict__ d_A, index_t height, index_t pitch, real *__restrict__ d_Tmp, index_t block_height,
-				dim3 dimGrid, cudaStream_t stream_AccA, real *__restrict__ d_accum_A )
+				index_t grid_length, index_t grid_extension, cudaStream_t stream_AccA, real *__restrict__ d_accum_A )
 {
 
-	// Grid dimensions:
-	index_t const grid_length = dimGrid.x;
-	index_t const grid_extension = dimGrid.y;
+	// Grid dimensions
+	dim3 const dimGrid( grid_length, grid_extension );
 
 	// Matrix size
 	size_t const matrix_size = (size_t) height * (size_t) pitch;
@@ -1822,21 +1818,20 @@ static __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__res
  *
  * <op> is "./" or "-"
  *
- * matrix_size <= (dimGrid.y * dimGrid.x * DIV_SUB__ITEMS_PER_THREAD * block_size)
+ * matrix_size <= (grid_extension * grid_length * DIV_SUB__ITEMS_PER_THREAD * block_size)
  * block_size <= maxThreadsPerBlock
- * dimGrid.x  <= maxGridSizeX
- * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
+ * grid_length  <= maxGridSizeX
+ * grid_extension <= MIN( grid_length, maxGridSizeY )
  *
  * div_operator: 'True' if operation to perform is a floating-point division.
  *		Otherwise, a subtraction is performed.
  */
-__host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, size_t matrix_size, index_t block_size, dim3 dimGrid,
-			bool div_operator, cudaStream_t stream_A )
+__host__ void div_sub( real *__restrict__ d_A, real const *__restrict__ d_B, size_t matrix_size, index_t block_size, index_t grid_length,
+			index_t grid_extension, bool div_operator, cudaStream_t stream_A )
 {
 
-	// Grid dimensions:
-	index_t const grid_length = dimGrid.x;
-	index_t const grid_extension = dimGrid.y;
+	// Grid dimensions
+	dim3 const dimGrid( grid_length, grid_extension );
 
 	// Number of loads from global memory performed by each thread at a time.
 	index_t const num_items = DIV_SUB__ITEMS_PER_THREAD;
@@ -2147,20 +2142,19 @@ static __global__ void kernel_mul_div( real *__restrict__ d_A, real const *__res
 /*
  * d_A[i][j] = d_A[i][j] .* d_Aux[i][j] ./ d_accum_b[j]
  *
- * height <= (dimGrid.y * dimGrid.x) * MUL_DIV__ITEMS_PER_THREAD * block_height
+ * height <= (grid_extension * grid_length) * MUL_DIV__ITEMS_PER_THREAD * block_height
  * Size_of(d_accum_b) >= pitch
  * block_height <= (maxThreadsPerBlock / pitch)
- * dimGrid.x  <= maxGridSizeX
- * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
+ * grid_length  <= maxGridSizeX
+ * grid_extension <= MIN( grid_extension, maxGridSizeY )
  * "pitch" must be a multiple of 'memory_alignment'.
  */
 __host__ void mul_div( real *__restrict__ d_A, real const *__restrict__ d_Aux, real const *__restrict__ d_accum_b, index_t height, index_t pitch,
-			index_t block_height, dim3 dimGrid, cudaStream_t stream_A )
+			index_t block_height, index_t grid_length, index_t grid_extension, cudaStream_t stream_A )
 {
 
-	// Grid dimensions:
-	index_t const grid_length = dimGrid.x;
-	index_t const grid_extension = dimGrid.y;
+	// Grid dimensions
+	dim3 const dimGrid( grid_length, grid_extension );
 
 	// Matrix size
 	size_t const matrix_size = (size_t) height * (size_t) pitch;
@@ -2462,18 +2456,18 @@ static __global__ void kernel_adjust( real *__restrict__ d_A, size_t matrix_size
  *
  * Adjusts d_A[ height ][ pitch ] to avoid underflow.
  *
- * height <= (dimGrid.y * dimGrid.x) * ADJUST__ITEMS_PER_THREAD * block_height
+ * height <= (grid_extension * grid_length) * ADJUST__ITEMS_PER_THREAD * block_height
  * block_height <= (maxThreadsPerBlock / pitch)
- * dimGrid.x  <= maxGridSizeX
- * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
+ * grid_length  <= maxGridSizeX
+ * grid_extension <= MIN( grid_length, maxGridSizeY )
  * "pitch" must be a multiple of 'memory_alignment'.
  */
-__host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, index_t block_height, dim3 dimGrid, cudaStream_t stream_A )
+__host__ void adjust( real *__restrict__ d_A, index_t height, index_t pitch, index_t block_height, index_t grid_length,
+			index_t grid_extension, cudaStream_t stream_A )
 {
 
-	// Grid dimensions:
-	index_t const grid_length = dimGrid.x;
-	index_t const grid_extension = dimGrid.y;
+	// Grid dimensions
+	dim3 const dimGrid( grid_length, grid_extension );
 
 	// Matrix size
 	size_t const matrix_size = (size_t) height * (size_t) pitch;
@@ -3361,23 +3355,18 @@ static __global__ void kernel_idx_max( real const *__restrict__ d_A, index_t wid
  * where
  *	0 <= max_val_idx <= width <= pitch
  *
- * height <= (dimGrid.y * dimGrid.x) * block_dim.y <= size_of( d_Idx )
- * block_dim.x must be a power of 2, and <= maxThreadsPerBlock
- * block_dim.y <= (maxThreadsPerBlock / pitch).
- * dimGrid.x  <= maxGridSizeX
- * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
+ * height <= (grid_extension * grid_length) * block_height <= size_of( d_Idx )
+ * block_width must be a power of 2, and <= maxThreadsPerBlock
+ * block_height <= (maxThreadsPerBlock / pitch).
+ * grid_length  <= maxGridSizeX
+ * grid_extension <= MIN( grid_length, maxGridSizeY )
  */
-__host__ void idx_max( real const *__restrict__ d_A, index_t height, index_t width, index_t pitch, dim3 block_dim, dim3 dimGrid,
-			cudaStream_t stream_A, index_t *__restrict__ d_Idx )
+__host__ void idx_max( real const *__restrict__ d_A, index_t height, index_t width, index_t pitch, index_t block_width, index_t block_height,
+			index_t grid_length, index_t grid_extension, cudaStream_t stream_A, index_t *__restrict__ d_Idx )
 {
 
-	// Block dimensions:
-	index_t const block_width = block_dim.x;
-	index_t const block_height = block_dim.y;
-
-	// Grid dimensions:
-	index_t const grid_length = dimGrid.x;
-	index_t const grid_extension = dimGrid.y;
+	// Grid dimensions
+	dim3 const dimGrid( grid_length, grid_extension );
 
 	// Matrix size
 	size_t const matrix_size = (size_t) height * (size_t) pitch;

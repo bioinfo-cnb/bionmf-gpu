@@ -436,9 +436,10 @@ void init_kernel_params( index_t pitch )
 /*
  * Setups the given matrix operation.
  *
- * That is, computes grid dimensions, and timing index (on NMFGPU_PROFILING_KERNELS, only).
+ * That is, computes grid dimensions (and timing index on NMFGPU_PROFILING_KERNELS).
  */
-static void setup_matrix_operation( struct kernel_params *restrict p_kparams, size_t magnitude, dim3 *restrict p_dimGrid,
+static void setup_matrix_operation( struct kernel_params *restrict p_kparams, size_t magnitude, index_t *restrict grid_length,
+					index_t *restrict grid_extension,
 					#if NMFGPU_PROFILING_KERNELS
 						index_t *restrict p_timing_index,
 					#endif
@@ -455,8 +456,8 @@ static void setup_matrix_operation( struct kernel_params *restrict p_kparams, si
 	uint_fast64_t const max_magnitude = p_kparams->max_magnitude;	// It may be greater than IDX_MAX on Compute Capability >= 3.0
 
 	// Grid dimensions
-	index_t grid_length = 1;	// <= maxGridSizeX
-	index_t grid_extension = 1;	// <= MIN( maxGridSizeY, grid_length )
+	index_t l_grid_length = 1;	// <= maxGridSizeX
+	index_t l_grid_extension = 1;	// <= MIN( maxGridSizeY, grid_length )
 
 	// -------------------------------------
 
@@ -469,7 +470,7 @@ static void setup_matrix_operation( struct kernel_params *restrict p_kparams, si
 	// No "grid extension" required
 	if ( (uint_fast64_t) magnitude <= max_magnitude ) {
 
-		grid_length = (magnitude / abm) + ((magnitude % abm) != 0);
+		l_grid_length = (magnitude / abm) + ((magnitude % abm) != 0);
 
 		#if NMFGPU_PROFILING_KERNELS
 			l_timing_index = INDEX_C( 0 );	// Non-extended grid.
@@ -502,11 +503,11 @@ static void setup_matrix_operation( struct kernel_params *restrict p_kparams, si
 
 		// Grid "extension"
 		size_t const gh = max_magnitude;				// max_magnitude < magnitude
-		grid_extension = (magnitude / gh) + ((magnitude % gh) != 0);	// << maxGridSizeY
+		l_grid_extension = (magnitude / gh) + ((magnitude % gh) != 0);	// << maxGridSizeY
 
 		// Grid "length"
-		size_t const gw = (size_t) grid_extension * (size_t) abm;
-		grid_length = (magnitude / gw) + ((magnitude % gw) != 0);	// <= maxGridSizeX
+		size_t const gw = (size_t) l_grid_extension * (size_t) abm;
+		l_grid_length = (magnitude / gw) + ((magnitude % gw) != 0);	// <= maxGridSizeX
 
 		#if NMFGPU_PROFILING_KERNELS
 			l_timing_index = INDEX_C(1);	// Extended grid
@@ -518,9 +519,8 @@ static void setup_matrix_operation( struct kernel_params *restrict p_kparams, si
 
 	// Output values
 
-	// Final grid dimensions
-	p_dimGrid->x = grid_length;
-	p_dimGrid->y = grid_extension;
+	*grid_length = l_grid_length;
+	*grid_extension = l_grid_extension;
 
 	#if NMFGPU_PROFILING_KERNELS
 		*p_timing_index = l_timing_index;
@@ -797,13 +797,13 @@ int matrix_to_row( real const *restrict d_A, index_t height, index_t pitch,
 		 *
 		 *	This condition will be checked on kernel compilation.
 		 */
-		index_t block_height;
-		dim3 dimGrid;
+		index_t block_height, grid_length, grid_extension;
+
 		#if NMFGPU_PROFILING_KERNELS
 			index_t timing_index;		// Non-extended grid (0), extended grid (1), single block (2), copy (3)
 		#endif
 
-		setup_matrix_operation( &matrix_to_row_kparams, height, &dimGrid,
+		setup_matrix_operation( &matrix_to_row_kparams, height, &grid_length, &grid_extension,
 					#if NMFGPU_PROFILING_KERNELS
 						&timing_index,
 					#endif
@@ -814,7 +814,7 @@ int matrix_to_row( real const *restrict d_A, index_t height, index_t pitch,
 		 * If there is not enough work for more than two blocks, overrides the kernel setup
 		 * and uses just one block, which will iteratively read data from global memory.
 		 */
-		if ( dimGrid.x <= 2 ) {	// dimGrid.y == 1
+		if ( grid_length <= 2 ) {	// grid_extension == 1
 
 			// Tries to use a block height as large as possible.
 
@@ -825,7 +825,7 @@ int matrix_to_row( real const *restrict d_A, index_t height, index_t pitch,
 
 			block_height = prev_power_2( MIN( max_block_height1, max_block_height2 ) );	// A power of 2 > 0
 
-			dimGrid.x = 1;
+			grid_length = 1;
 
 			#if NMFGPU_PROFILING_KERNELS
 				timing_index = 2;	// Single-block mode.
@@ -835,9 +835,9 @@ int matrix_to_row( real const *restrict d_A, index_t height, index_t pitch,
 
 		///////////////////////////////
 		#if NMFGPU_DEBUG_REDUCT
-			print_message( verb_shown_by_all, "matrix_to_row(height=%" PRI_IDX "pitch=%" PRI_IDX ",block_height=%" PRI_IDX
+			print_message( verb_shown_by_all, "matrix_to_row(height=%" PRI_IDX ",pitch=%" PRI_IDX ",block_height=%" PRI_IDX
 					",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX ", abh=%" PRI_IDX ")...\n",
-					height, pitch, block_height, dimGrid.y, dimGrid.x, matrix_to_row_kparams.abm );
+					height, pitch, block_height, grid_extension, grid_length, matrix_to_row_kparams.abm );
 		#endif
 		///////////////////////////////
 
@@ -851,7 +851,7 @@ int matrix_to_row( real const *restrict d_A, index_t height, index_t pitch,
 			 *
 			 * d_Tmp[ grid_extension*grid_length ][ pitch ] is used as a temporary storage.
 			 */
-			reduce_to_row( d_A, height, pitch, d_Tmp, block_height, dimGrid, stream_AccA, d_accum_A );
+			reduce_to_row( d_A, height, pitch, d_Tmp, block_height, grid_length, grid_extension, stream_AccA, d_accum_A );
 
 			#if NMFGPU_DEBUG || NMFGPU_DEBUG_REDUCT || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
 			{
@@ -874,7 +874,7 @@ int matrix_to_row( real const *restrict d_A, index_t height, index_t pitch,
 		 * d_Tmp[ grid_extension*grid_length ][ pitch ].
 		 * Such call is performed in "single-block" mode.
 		 */
-		if ( (computeCapability == 1) * (computeCapability_minor < 2) * (dimGrid.x > 1) ) {
+		if ( (computeCapability == 1) * (computeCapability_minor < 2) * (grid_length > 1) ) {
 
 			///////////////////////////////
 			#if NMFGPU_DEBUG_REDUCT
@@ -882,23 +882,23 @@ int matrix_to_row( real const *restrict d_A, index_t height, index_t pitch,
 				// Resulting d_Tmp from previous stage:
 				print_message( verb_shown_by_all, "---Resulting d_Tmp (height=%" PRI_IDX ",width=%" PRI_IDX ",pitch=%" PRI_IDX
 						",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%" PRI_IDX "):---\n",
-						height, width, pitch, block_height, dimGrid.y, dimGrid.x );
+						height, width, pitch, block_height, grid_extension, grid_length );
 				int const status1 = check_cuda_status();
 				bool const real_data = true;
 				bool const transpose = false;
 				struct matrix_tags_t const *mt = NULL;
-				int const status2  = show_device_matrix( d_Tmp, (dimGrid.y * dimGrid.x), width, pitch, real_data, transpose,
-									verb_shown_by_all, mt );
+				int const status2  = show_device_matrix( d_Tmp, (grid_extension * grid_length), width, pitch,
+									real_data, transpose, verb_shown_by_all, mt );
 				if ( (status1 != EXIT_SUCCESS) + (status2 != EXIT_SUCCESS) )
 					return EXIT_FAILURE;
 			}
 			#endif
 			///////////////////////////////
 
-			index_t const d_Tmp_height = (dimGrid.y * dimGrid.x);
+			index_t const d_Tmp_height = (grid_extension * grid_length);
 
 			// New grid dimensions
-			dimGrid.x = dimGrid.y = 1;
+			grid_length = grid_extension = 1;
 
 			// ---------------------------
 
@@ -909,7 +909,8 @@ int matrix_to_row( real const *restrict d_A, index_t height, index_t pitch,
 				/* d_Tmp[ grid_extension*grid_length ][ pitch ] is reduced with a single block.
 				 * No temporary storage is required.
 				 */
-				reduce_to_row( d_Tmp, d_Tmp_height, pitch, NULL, block_height, dimGrid, stream_AccA, d_accum_A );
+				reduce_to_row( d_Tmp, d_Tmp_height, pitch, NULL, block_height, grid_length, grid_extension,
+						stream_AccA, d_accum_A );
 
 				#if NMFGPU_DEBUG || NMFGPU_DEBUG_REDUCT || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
 				{
@@ -1058,13 +1059,13 @@ int matrix_div_sub( real *restrict d_A, real const *restrict d_B, index_t height
 
 	size_t const matrix_size = (size_t) height * (size_t) pitch;
 
-	index_t block_size;
-	dim3 dimGrid;
+	index_t block_size, grid_length, grid_extension;
+
 	#if NMFGPU_PROFILING_KERNELS
 		index_t timing_index;		// Non-extended grid (0), extended grid (1).
 	#endif
 
-	setup_matrix_operation( &matrix_div_sub_kparams, matrix_size, &dimGrid,
+	setup_matrix_operation( &matrix_div_sub_kparams, matrix_size, &grid_length, &grid_extension,
 				#if NMFGPU_PROFILING_KERNELS
 					&timing_index,
 				#endif
@@ -1100,7 +1101,7 @@ int matrix_div_sub( real *restrict d_A, real const *restrict d_B, index_t height
 		start_cuda_timer();
 	#endif
 
-		div_sub( d_A, d_B, matrix_size, block_size, dimGrid, div_operator, stream_A );
+		div_sub( d_A, d_B, matrix_size, block_size, grid_length, grid_extension, div_operator, stream_A );
 
 		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
 		{
@@ -1119,7 +1120,7 @@ int matrix_div_sub( real *restrict d_A, real const *restrict d_B, index_t height
 			print_message( dbg_shown_by_all, "--- Resulting %s = %s %s %s (height=%" PRI_IDX ", width=%" PRI_IDX
 					", pitch=%" PRI_IDX ",block_size=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%"
 					PRI_IDX "): ---\n", matrix_name_A, matrix_name_B, operator_str, matrix_name_A, height,
-					width, pitch, block_size, dimGrid.y, dimGrid.x );
+					width, pitch, block_size, grid_extension, grid_length );
 			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			bool const transpose = false;
@@ -1215,13 +1216,13 @@ int matrix_mul_div( real *restrict d_A, real const *restrict d_Aux, real const *
 	 *
 	 *	This condition will be checked on kernel compilation.
 	 */
-	index_t block_height;
-	dim3 dimGrid;
+	index_t block_height, grid_length, grid_extension;
+
 	#if NMFGPU_PROFILING_KERNELS
 		index_t timing_index;		// Non-extended grid (0), extended grid (1).
 	#endif
 
-	setup_matrix_operation( &matrix_mul_div_kparams, height, &dimGrid,
+	setup_matrix_operation( &matrix_mul_div_kparams, height, &grid_length, &grid_extension,
 				#if NMFGPU_PROFILING_KERNELS
 					&timing_index,
 				#endif
@@ -1252,7 +1253,7 @@ int matrix_mul_div( real *restrict d_A, real const *restrict d_Aux, real const *
 		start_cuda_timer();
 	#endif
 
-		mul_div( d_A, d_Aux, d_accum_B, height, pitch, block_height, dimGrid, stream_A );
+		mul_div( d_A, d_Aux, d_accum_B, height, pitch, block_height, grid_length, grid_extension, stream_A );
 
 		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
 		{
@@ -1271,7 +1272,7 @@ int matrix_mul_div( real *restrict d_A, real const *restrict d_Aux, real const *
 			print_message( dbg_shown_by_all, "--- Resulting %s = %s .* %s ./ %s (height=%" PRI_IDX ",width=%" PRI_IDX
 					", pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX ",grid_length=%"
 					PRI_IDX ", transpose=%i ): ---\n", matrix_name_A, matrix_name_A, matrix_name_Aux,
-					matrix_name_accB, height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
+					matrix_name_accB, height, width, pitch, block_height, grid_extension, grid_length, transpose );
 			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			struct matrix_tags_t const *mt = NULL;
@@ -1332,13 +1333,13 @@ int matrix_adjust( real *restrict d_A, index_t height, index_t pitch,
 	 *
 	 *	This condition will be checked on kernel compilation.
 	 */
-	index_t block_height;
-	dim3 dimGrid;
+	index_t block_height, grid_length, grid_extension;
+
 	#if NMFGPU_PROFILING_KERNELS
 		index_t timing_index;		// Non-extended grid (0), extended grid (1).
 	#endif
 
-	setup_matrix_operation( &matrix_adjust_kparams, height, &dimGrid,
+	setup_matrix_operation( &matrix_adjust_kparams, height, &grid_length, &grid_extension,
 				#if NMFGPU_PROFILING_KERNELS
 					&timing_index,
 				#endif
@@ -1370,7 +1371,7 @@ int matrix_adjust( real *restrict d_A, index_t height, index_t pitch,
 		start_cuda_timer();
 	#endif
 
-		adjust( d_A, height, pitch, block_height, dimGrid, stream_A );
+		adjust( d_A, height, pitch, block_height, grid_length, grid_extension, stream_A );
 
 		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
 		{
@@ -1389,7 +1390,7 @@ int matrix_adjust( real *restrict d_A, index_t height, index_t pitch,
 			print_message( dbg_shown_by_all, "--- Resulting %s = MAX( %s, R_MIN ), (height=%" PRI_IDX ",width=%"
 					PRI_IDX ", pitch=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX
 					",grid_length=%" PRI_IDX ", transpose=%i ): ---\n", matrix_name_A, matrix_name_A,
-					height, width, pitch, block_height, dimGrid.y, dimGrid.x, transpose );
+					height, width, pitch, block_height, grid_extension, grid_length, transpose );
 			int const status1 = check_cuda_status();
 			bool const real_data = true;
 			bool const transpose = false;
@@ -1483,13 +1484,13 @@ int matrix_idx_max( real const *restrict d_A, index_t width, index_t pitch, inde
 	 *
 	 *	This condition will be checked on kernel compilation.
 	 */
-	index_t block_height;
-	dim3 dimGrid;
+	index_t block_height, grid_length, grid_extension;
+
 	#if NMFGPU_PROFILING_KERNELS
 		index_t timing_index;		// Non-extended grid (0), extended grid (1).
 	#endif
 
-	setup_matrix_operation( &matrix_idx_max_kparams, height, &dimGrid,
+	setup_matrix_operation( &matrix_idx_max_kparams, height, &grid_length, &grid_extension,
 				#if NMFGPU_PROFILING_KERNELS
 					&timing_index,
 				#endif
@@ -1498,18 +1499,13 @@ int matrix_idx_max( real const *restrict d_A, index_t width, index_t pitch, inde
 	// HACK: Extracts block_width from matrix_idx_max_kparams.abm.
 	index_t const block_width = matrix_idx_max_kparams.abm;
 
-	// Final block dimensions.
-	dim3 dimBlock;
-	dimBlock.x = block_width;
-	dimBlock.y = block_height;
-
 	// ---------------------------------------------
 
 	#if NMFGPU_PROFILING_KERNELS
 		start_cuda_timer();
 	#endif
 
-		idx_max( d_A, height, width, pitch, dimBlock, dimGrid, stream_A, d_Idx );
+		idx_max( d_A, height, width, pitch, block_width, block_height, grid_length, grid_extension, stream_A, d_Idx );
 
 		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_KERNELS))
 		{
@@ -1528,7 +1524,7 @@ int matrix_idx_max( real const *restrict d_A, index_t width, index_t pitch, inde
 			print_message( dbg_shown_by_all, "--- Resulting %s[i] = max(%s[i][..]) (height=%" PRI_IDX ",width=%" PRI_IDX
 					", pitch=%" PRI_IDX ",block_width=%" PRI_IDX ",block_height=%" PRI_IDX ",grid_extension=%" PRI_IDX
 					",grid_length=%" PRI_IDX ",transpose=%i): ---\n", matrix_name_Idx, matrix_name_A, height,
-					width, pitch, block_width, block_height, dimGrid.y, dimGrid.x, transpose );
+					width, pitch, block_width, block_height, grid_extension, grid_length, transpose );
 			int const status1 = check_cuda_status();
 			bool const real_data = false;
 			struct matrix_tags_t const *mt = NULL;

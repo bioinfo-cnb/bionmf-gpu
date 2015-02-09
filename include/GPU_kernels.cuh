@@ -55,12 +55,9 @@
 #include "index_type.h"
 #include "real_type.h"
 
-#if defined(__CUDACC__) || defined(__NVCC__)	/* CUDA/C++ header file */
-	#include <cuda_runtime.h>
-	#include <cstddef>	/* size_t */
+#include <cuda_runtime_api.h>
 
-#else						/* ISO-C header file */
-	#include <cuda_runtime_api.h>
+#if ! ( defined(__CUDACC__) || defined(__NVCC__) || defined(__cplusplus) )	/* ISO-C header file */
 	#include <stdbool.h>
 	#include <stddef.h>	/* size_t */
 #endif
@@ -72,7 +69,7 @@
 
 // Restrict
 #undef NMFGPU_RESTRICT
-#if defined(__CUDACC__) || defined(__NVCC__)	/* CUDA/C++ header file */
+#if defined(__CUDACC__) || defined(__NVCC__)	/* CUDA header file */
 	#define NMFGPU_RESTRICT __restrict__
 #else						/* ISO-C header file */
 	#define NMFGPU_RESTRICT restrict
@@ -80,18 +77,10 @@
 
 // Host
 #undef NMFGPU_HOST
-#if defined(__CUDACC__) || defined(__NVCC__)	/* CUDA/C++ header file */
+#if defined(__CUDACC__) || defined(__NVCC__)	/* CUDA header file */
 	#define NMFGPU_HOST __host__
 #else						/* ISO-C header file */
 	#define NMFGPU_HOST
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
-
-/* C linkage, not C++ */
-#ifdef __cplusplus
-extern "C" {
 #endif
 
 // ---------------------------------------------
@@ -222,26 +211,34 @@ extern "C" {
 	#define IDX_MAX__ITEMS_PER_THREAD (3)
 #endif
 
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* C linkage, not C++ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
 /*
  * d_accum_A[j] = SUM( d_A[...][j] )
  *
- * height <= (dimGrid.y * dimGrid.x) * REDUCE_TO_ROW__ITEMS_PER_THREAD * block_height
+ * height <= (grid_extension * grid_length) * REDUCE_TO_ROW__ITEMS_PER_THREAD * block_height
  * d_Tmp: Temporary storage. Ignored if grid_length == 1.
- * size_of( d_Tmp ) >= (dimGrid.y * dimGrid.x) * pitch
+ * size_of( d_Tmp ) >= (grid_extension * grid_length) * pitch
  * length( d_accum_A ) >= pitch
  *
  * block_height <= (maxThreadsPerBlock / pitch), and must be a power of 2.
- * (dimGrid.y * dimGrid.x) <= UINT_MAX
+ * (grid_extension * grid_length) <= UINT_MAX
  * "pitch" must be a multiple of 'memory_alignment'.
  *
  * WARNING:
  *	height > 1
  */
-NMFGPU_HOST void reduce_to_row( real const *NMFGPU_RESTRICT d_A, index_t height, index_t pitch, real *NMFGPU_RESTRICT d_Tmp,
-				index_t block_height, dim3 dimGrid, cudaStream_t stream_AccA, real *NMFGPU_RESTRICT d_accum_A );
+NMFGPU_HOST void reduce_to_row( real const *NMFGPU_RESTRICT d_A, index_t height, index_t pitch, real *NMFGPU_RESTRICT d_Tmp, index_t block_height,
+				index_t grid_length, index_t grid_extension, cudaStream_t stream_AccA, real *NMFGPU_RESTRICT d_accum_A );
 
 ////////////////////////////////////////////////
 
@@ -250,31 +247,31 @@ NMFGPU_HOST void reduce_to_row( real const *NMFGPU_RESTRICT d_A, index_t height,
  *
  * <op> is "./" or "-"
  *
- * matrix_size <= (dimGrid.y * dimGrid.x * DIV_SUB__ITEMS_PER_THREAD * block_size)
+ * matrix_size <= (grid_extension * grid_length * DIV_SUB__ITEMS_PER_THREAD * block_size)
  * block_size <= maxThreadsPerBlock
- * dimGrid.x  <= maxGridSizeX
- * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
+ * grid_length  <= maxGridSizeX
+ * grid_extension <= MIN( grid_length, maxGridSizeY )
  *
  * div_operator: 'True' if operation to perform is a floating-point division.
  *		Otherwise, a subtraction is performed.
  */
-NMFGPU_HOST void div_sub( real *NMFGPU_RESTRICT d_A, real const *NMFGPU_RESTRICT d_B, size_t matrix_size, index_t block_size, dim3 dimGrid,
-			bool div_operator, cudaStream_t stream_A );
+NMFGPU_HOST void div_sub( real *NMFGPU_RESTRICT d_A, real const *NMFGPU_RESTRICT d_B, size_t matrix_size, index_t block_size, index_t grid_length,
+			index_t grid_extension, bool div_operator, cudaStream_t stream_A );
 
 ////////////////////////////////////////////////
 
 /*
  * d_A[i][j] = d_A[i][j] .* d_Aux[i][j] ./ d_accum_b[j]
  *
- * height <= (dimGrid.y * dimGrid.x) * MUL_DIV__ITEMS_PER_THREAD * block_height
+ * height <= (grid_extension * grid_length) * MUL_DIV__ITEMS_PER_THREAD * block_height
  * Size_of(d_accum_b) >= pitch
  * block_height <= (maxThreadsPerBlock / pitch)
- * dimGrid.x  <= maxGridSizeX
- * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
+ * grid_length  <= maxGridSizeX
+ * grid_extension <= MIN( grid_length, maxGridSizeY )
  * "pitch" must be a multiple of 'memory_alignment'.
  */
 NMFGPU_HOST void mul_div( real *NMFGPU_RESTRICT d_A, real const *NMFGPU_RESTRICT d_Aux, real const *NMFGPU_RESTRICT d_accum_b, index_t height,
-			index_t pitch, index_t block_height, dim3 dimGrid, cudaStream_t stream_A );
+			index_t pitch, index_t block_height, index_t grid_length, index_t grid_extension, cudaStream_t stream_A );
 
 ////////////////////////////////////////////////
 
@@ -283,13 +280,14 @@ NMFGPU_HOST void mul_div( real *NMFGPU_RESTRICT d_A, real const *NMFGPU_RESTRICT
  *
  * Adjusts d_A[ height ][ pitch ] to avoid underflow.
  *
- * height <= (dimGrid.y * dimGrid.x) * ADJUST__ITEMS_PER_THREAD * block_height
+ * height <= (grid_extension * grid_length) * ADJUST__ITEMS_PER_THREAD * block_height
  * block_height <= (maxThreadsPerBlock / pitch)
- * dimGrid.x  <= maxGridSizeX
- * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
+ * grid_length  <= maxGridSizeX
+ * grid_extension <= MIN( grid_length, maxGridSizeY )
  * "pitch" must be a multiple of 'memory_alignment'.
  */
-NMFGPU_HOST void adjust( real *NMFGPU_RESTRICT d_A, index_t height, index_t pitch, index_t block_height, dim3 dimGrid, cudaStream_t stream_A );
+NMFGPU_HOST void adjust( real *NMFGPU_RESTRICT d_A, index_t height, index_t pitch, index_t block_height, index_t grid_length,
+			index_t grid_extension, cudaStream_t stream_A );
 
 ////////////////////////////////////////////////
 
@@ -300,14 +298,14 @@ NMFGPU_HOST void adjust( real *NMFGPU_RESTRICT d_A, index_t height, index_t pitc
  * where
  *	0 <= max_val_idx <= width <= pitch
  *
- * height <= (dimGrid.y * dimGrid.x) * block_dim.y <= size_of( d_Idx )
- * block_dim.x must be a power of 2, and <= maxThreadsPerBlock
- * block_dim.y <= (maxThreadsPerBlock / pitch).
- * dimGrid.x  <= maxGridSizeX
- * dimGrid.y <= MIN( dimGrid.x, maxGridSizeY )
+ * height <= (grid_extension * grid_length) * block_height <= size_of( d_Idx )
+ * block_width must be a power of 2, and <= maxThreadsPerBlock
+ * block_height <= (maxThreadsPerBlock / pitch).
+ * grid_length  <= maxGridSizeX
+ * grid_extension <= MIN( grid_length, maxGridSizeY )
  */
-NMFGPU_HOST void idx_max( real const *NMFGPU_RESTRICT d_A, index_t height, index_t width, index_t pitch, dim3 block_dim, dim3 dimGrid,
-			cudaStream_t stream_A, index_t *NMFGPU_RESTRICT d_Idx );
+NMFGPU_HOST void idx_max( real const *NMFGPU_RESTRICT d_A, index_t height, index_t width, index_t pitch, index_t block_width, index_t block_height,
+			index_t grid_length, index_t grid_extension, cudaStream_t stream_A, index_t *NMFGPU_RESTRICT d_Idx );
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
