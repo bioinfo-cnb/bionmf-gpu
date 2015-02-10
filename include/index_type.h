@@ -38,13 +38,20 @@
  * NOTE: The following macro constant(s) can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
- *	NMFGPU_UINDEX: Makes use of UNSIGNED integers for index type.
- *			Otherwise, uses signed integers.
+ *	Data type:
+ *		NMFGPU_UINDEX: Makes use of UNSIGNED integers for index type.
+ *				Otherwise, uses signed integers.
+ *
+ *		NMFGPU_MPI: Defines some MPI-related constants.
  *
  *********************************************************/
 
 #if ! NMFGPU_INDEX_TYPE_H
 #define NMFGPU_INDEX_TYPE_H (1)
+
+#if NMFGPU_MPI
+	#include <mpi.h> /* MPI_UNSIGNED, MPI_INT */
+#endif
 
 #include <limits.h>	/* [U]INT_MAX */
 
@@ -57,11 +64,19 @@
  *
  * NOTE: UNSIGNED integers may produce faster code.
  */
-
 #if NMFGPU_UINDEX	/* Unsigned indexes */
 	typedef unsigned int index_t;
 #else			/* Signed indexes */
 	typedef int index_t;
+#endif
+
+// Index-type data on MPI
+#if NMFGPU_MPI && (! defined(NMFGPU_MPI_INDEX_T))
+	#if NMFGPU_UINDEX		/* Unsigned indexes */
+		#define NMFGPU_MPI_INDEX_T MPI_UNSIGNED
+	#else				/* Signed indexes */
+		#define NMFGPU_MPI_INDEX_T MPI_INT
+	#endif
 #endif
 
 // ---------------------------------------------

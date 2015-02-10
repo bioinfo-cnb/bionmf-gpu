@@ -38,8 +38,9 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
- *	Data type:
+ *	Data types, functions and constants:
  *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
+ *		NMFGPU_CUDA_HOST: Defines some constants and functions related to CUDA Runtime, cuBLAS and cuRAND.
  *
  *	CPU timing:
  *		NMFGPU_PROFILING_GLOBAL: Compute total elapsed time.
@@ -140,6 +141,10 @@
  *
  *********************************************************/
 
+#if ! NMFGPU_CUDA_HOST
+	#define NMFGPU_CUDA_HOST (1)	/* CUDA runtime, cuBLAS and cuRAND, constants and functions on real_type.h */
+#endif
+
 #include "NMF_routines.h"
 #include "matrix_operations.h"
 #include "GPU_setup.h"
@@ -162,35 +167,6 @@
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
-/* Constants */
-
-// CUBLAS: General matrix-matrix product.
-#undef CUBLAS_R_GEMM
-#if NMFGPU_SINGLE_PREC		/* Single precision */
-	#define CUBLAS_R_GEMM cublasSgemm
-#else				/* Double precision */
-	#define CUBLAS_R_GEMM cublasDgemm
-#endif
-
-
-// CUBLAS: Dot product.
-#undef CUBLAS_R_DOT
-#if NMFGPU_SINGLE_PREC
-	#define CUBLAS_R_DOT cublasSdot
-#else
-	#define CUBLAS_R_DOT cublasDdot
-#endif
-
-// CUBLAS: Sum of absolute values.
-#undef CUBLAS_R_ASUM
-#if NMFGPU_SINGLE_PREC
-	#define CUBLAS_R_ASUM cublasSasum
-#else
-	#define CUBLAS_R_ASUM cublasDasum
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
 
 /* HOST-ONLY GLOBAL Variables */
 

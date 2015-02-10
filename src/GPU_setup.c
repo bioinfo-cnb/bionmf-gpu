@@ -38,8 +38,9 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
- *	Data type:
+ *	Data types, functions and constants:
  *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
+ *		NMFGPU_CUDA_HOST: Defines some constants and functions related to CUDA Runtime, cuBLAS and cuRAND.
  *
  *	Additional information:
  *		NMFGPU_VERBOSE: Shows some messages concerning the progress of the program, as well as
@@ -145,6 +146,10 @@
  *
  *********************************************************/
 
+#if ! NMFGPU_CUDA_HOST
+	#define NMFGPU_CUDA_HOST (1)	/* CUDA runtime, cuBLAS and cuRAND, constants and functions on real_type.h */
+#endif
+
 #include "GPU_setup.h"
 #include "matrix_operations.h"		/* check_matrix_dimensions(), max_num_items(), init_kernel_params() */
 #if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
@@ -167,19 +172,6 @@
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
-
-/* Constants */
-
-// cudaSharedMemConfig values used in cudaDeviceSetSharedMemConfig() function.
-#undef CUDA_SHARED_MEM_BANK_SIZE
-#if NMFGPU_SINGLE_PREC
-	#define CUDA_SHARED_MEM_BANK_SIZE ( cudaSharedMemBankSizeFourByte )
-#else
-	#define CUDA_SHARED_MEM_BANK_SIZE ( cudaSharedMemBankSizeEightByte )
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
 
 /* Macro Functions */
 

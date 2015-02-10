@@ -39,6 +39,9 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
+ *	Data types:
+ *		NMFGPU_MPI: Defines NMFGPU_MPI_REAL_T and NMFGPU_MPI_INDEX_T.
+ *
  *	Additional information:
  *		NMFGPU_VERBOSE: Shows some messages concerning the progress of the program, as well as
  *				some configuration parameters.
@@ -165,6 +168,10 @@
  *
  *********************************************************/
 
+#if (! NMFGPU_MPI)
+	#define NMFGPU_MPI (1)	/* NMFGPU_MPI_REAL_T, NMFGPU_MPI_INDEX_T on real_type.h */
+#endif
+
 #include "NMF_routines.h"
 #include "matrix_operations.h"
 #include "GPU_setup.h"
@@ -189,25 +196,6 @@
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
-
-/* Constants */
-
-// Real-type data on MPI.
-#if NMFGPU_SINGLE_PREC		/* Single precision */
-	#define MPIREALT MPI_FLOAT
-#else				/* Double precision */
-	#define MPIREALT MPI_DOUBLE
-#endif
-
-// Index-type data on MPI
-#if NMFGPU_UINDEX		/* Unsigned indexes */
-	#define MPI_INDEXT MPI_UNSIGNED
-#else
-	#define MPI_INDEXT MPI_INT
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
 
 /* Global variables */
 
@@ -284,7 +272,7 @@ static bool const shown_by_all = false;			// Information messages.
 static bool const sys_error_shown_by_all = true;	// System error messages.
 static bool const error_shown_by_all = false;		// Error messages on invalid arguments or I/O data.
 
-char error_string[ MPI_MAX_ERROR_STRING ];		// Array for MPI error messages.
+static char error_string[ MPI_MAX_ERROR_STRING ];		// Array for MPI error messages.
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -1181,7 +1169,7 @@ static int sync_with_slaves( real *restrict matrix, bool variable_size_R, index_
 			#endif
 
 				MPI_Allgatherv( MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, (void *) matrix,
-						(int *) nitems_pP, (int *) offsets_pP, MPIREALT, comm_R );
+						(int *) nitems_pP, (int *) offsets_pP, NMFGPU_MPI_REAL_T, comm_R );
 
 		} else { // nitems_pP is similar on all processes.
 
@@ -1189,7 +1177,7 @@ static int sync_with_slaves( real *restrict matrix, bool variable_size_R, index_
 				status =
 			#endif
 
-				MPI_Allgather( MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, (void *) matrix, nitems, MPIREALT, comm_R );
+				MPI_Allgather( MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, (void *) matrix, nitems, NMFGPU_MPI_REAL_T, comm_R );
 		}
 
 		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_COMM))
@@ -1263,7 +1251,7 @@ static int reduce_from_slaves( real *restrict array, index_t length,
 			int const status =
 		#endif
 
-			MPI_Reduce( input_arg, output_arg, length, MPIREALT, MPI_SUM, 0, comm );
+			MPI_Reduce( input_arg, output_arg, length, NMFGPU_MPI_REAL_T, MPI_SUM, 0, comm );
 
 		#if NMFGPU_DEBUG || ((! NMFGPU_PROFILING_GLOBAL) && (! NMFGPU_PROFILING_COMM))
 			if ( status != MPI_SUCCESS ) {
@@ -1315,7 +1303,7 @@ static int broadcast_to_slaves( void *restrict matrix, index_t nrows, index_t pi
 	#endif
 
 	// Type of MPI data to transfer
-	MPI_Datatype const datatype = ( real_data ? MPIREALT : MPI_INDEXT );
+	MPI_Datatype const datatype = ( real_data ? NMFGPU_MPI_REAL_T : NMFGPU_MPI_INDEX_T );
 
 	size_t const nitems = (size_t) nrows * (size_t) pitch;
 

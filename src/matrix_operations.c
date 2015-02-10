@@ -39,8 +39,9 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
- *	Data type:
+ *	Data types, functions and constants:
  *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
+ *		NMFGPU_CUDA_HOST: Defines some constants and functions related to CUDA Runtime, cuBLAS and cuRAND.
  *
  *	CPU timing:
  *		NMFGPU_PROFILING_GLOBAL: Compute total elapsed time.
@@ -89,6 +90,10 @@
  *
  **********************************************************/
 
+#if ! NMFGPU_CUDA_HOST
+	#define NMFGPU_CUDA_HOST (1)	/* CUDA runtime, cuBLAS and cuRAND, constants and functions on real_type.h */
+#endif
+
 #include "matrix_operations.h"
 #include "GPU_setup.h"
 #if NMFGPU_PROFILING_TRANSF || NMFGPU_PROFILING_KERNELS
@@ -123,19 +128,6 @@ struct kernel_params {
 	index_t abm;			// "Active" block magnitude (i.e., block_magnitude * <items_per_thread>)
 	uint_fast64_t max_magnitude;	// Maximum magnitude value with <number_of_blocks> (it may be > IDX_MAX on CC >= 3.0).
 };
-
-// ---------------------------------------------
-// ---------------------------------------------
-
-/* Macro Constants */
-
-// Generates uniformly distributed real data
-#undef CURAND_GENERATE_UNIFORM_REAL
-#if NMFGPU_SINGLE_PREC
-	#define CURAND_GENERATE_UNIFORM_REAL curandGenerateUniform
-#else
-	#define CURAND_GENERATE_UNIFORM_REAL curandGenerateUniformDouble
-#endif
 
 // ---------------------------------------------
 // ---------------------------------------------

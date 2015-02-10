@@ -57,7 +57,7 @@
 
 #include <cuda_runtime_api.h>
 
-#if ! ( defined(__CUDACC__) || defined(__NVCC__) || defined(__cplusplus) )	/* ISO-C header file */
+#if (! defined(__CUDACC__)) && (! defined(__NVCC__)) && (! defined(__cplusplus))	/* ISO-C header file */
 	#include <stdbool.h>
 	#include <stddef.h>	/* size_t */
 #endif

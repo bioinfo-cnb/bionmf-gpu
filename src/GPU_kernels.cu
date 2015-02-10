@@ -136,86 +136,6 @@ extern index_t computeCapability;		// Compute Capability (major).
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
 
-#if __CUDA_ARCH__	/* Helps to prevent 'unused-function' warning messages on cudafe++, when ! __CUDA_ARCH__ */
-
-/*
- * Computes the maximum of two floating-point values.
- *
- * Returns:
- *	Nan, if both arguments are NaN.
- *	The numeric argument, if the other is NaN.
- *	The maximum value, if both arguments are numeric.
- */
-static __device__ real device_fmax( real valA, real valB )
-{
-
-	real max_val = REAL_C( 0.0 );
-
-	#if __CUDA_ARCH__	/* Reduces work on cudafe(++) when looking for HOST code.*/
-
-		#if NMFGPU_SINGLE_PREC
-
-			/* Single Precision */
-			max_val = fmaxf( valA, valB );
-
-		#else	/* Double precision */
-			max_val = fmax( valA, valB );
-
-		#endif
-
-	#endif
-
-	return max_val;
-
-} // device_fmax
-
-#endif	/* __CUDA_ARCH__ */
-
-////////////////////////////////////////////////
-
-#if __CUDA_ARCH__	/* Helps to prevent 'unused-function' warning messages on cudafe++, when ! __CUDA_ARCH__ */
-
-/*
- * Divides two floating-point values: valA / valB
- *
- * On single-precision data, a faster (but less-precise) function may be employed,
- * if the compilation flags '-use_fast_math' and '-prec-div', were specified.
- *
- * WARNING:
- *	valB != 0
- *	No error checking is performed.
- */
-static __device__ real device_fdiv( real valA, real valB )
-{
-
-	real div_val = REAL_C( 0.0 );
-
-	#if __CUDA_ARCH__	/* Reduces work on cudafe(++) when looking for HOST code.*/
-
-		#if NMFGPU_SINGLE_PREC
-
-			/* Single Precision:
-			 *	This operation can be replaced by a faster less-precise
-			 *	function if the flags '-use_fast_math' and '-prec-div'
-			 *	were specified.
-			 */
-			div_val = fdividef( valA, valB );
-
-		#else	/* Double precision: just use the regular operator. */
-			div_val = valA / valB;
-
-		#endif
-
-	#endif
-
-	return div_val;
-
-} // device_fdiv
-
-#endif	/* __CUDA_ARCH__ */
-
-////////////////////////////////////////////////
-
 /*
  * Non-negative integers product:
  *
@@ -1741,8 +1661,8 @@ static __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__res
 
 				if ( div_operator ) {
 					#pragma unroll
-					for ( index_t i = 0 ; i < num_items ; i++ )
-						d_A[ elemIdx[ i ] ] = device_fdiv( d_B[ elemIdx[ i ] ], d_A[ elemIdx[ i ] ] );	// A = B / A
+					for ( index_t i = 0 ; i < num_items ; i++ )	// A = B / A
+						d_A[ elemIdx[ i ] ] = CUDA_DEVICE_FDIV( d_B[ elemIdx[ i ] ], d_A[ elemIdx[ i ] ] );
 				} else {
 					#pragma unroll
 					for ( index_t i = 0 ; i < num_items ; i++ )
@@ -1767,7 +1687,7 @@ static __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__res
 				if ( div_operator ) {
 					#pragma unroll
 					for ( index_t i = 0 ; i < num_items ; i++ )
-						value_A[ i ] = device_fdiv( value_B[ i ], value_A[ i ] );	// A = B / A
+						value_A[ i ] = CUDA_DEVICE_FDIV( value_B[ i ], value_A[ i ] );	// A = B / A
 				} else {
 					#pragma unroll
 					for ( index_t i = 0 ; i < num_items ; i++ )
@@ -1790,7 +1710,7 @@ static __global__ void kernel_div_sub( real *__restrict__ d_A, real const *__res
 					if ( elemIdx[ i ] < matrix_size ) {
 						real value_A = d_A[ elemIdx[ i ] ];
 						real const value_B = d_B[ elemIdx[ i ] ];
-						value_A = device_fdiv( value_B, value_A );	// A = B / A
+						value_A = CUDA_DEVICE_FDIV( value_B, value_A );	// A = B / A
 						d_A[ elemIdx[ i ] ] = value_A;
 					}
 			} else {
@@ -2088,7 +2008,7 @@ static __global__ void kernel_mul_div( real *__restrict__ d_A, real const *__res
 
 				#pragma unroll
 				for ( index_t i = 0 ; i < num_items ; i++ )
-					d_A[ elemIdx[ i ] ] = device_fdiv( ( d_A[ elemIdx[ i ] ] * d_Aux[ elemIdx[ i ] ] ), val_accum );
+					d_A[ elemIdx[ i ] ] = CUDA_DEVICE_FDIV( ( d_A[ elemIdx[ i ] ] * d_Aux[ elemIdx[ i ] ] ), val_accum );
 
 
 			/* Compute Capability 1.2, and beyond: "faster" code (i.e., exposes a higher degree of
@@ -2110,7 +2030,7 @@ static __global__ void kernel_mul_div( real *__restrict__ d_A, real const *__res
 
 				#pragma unroll
 				for ( index_t i = 0 ; i < num_items ; i++ )
-					value_A[ i ] = device_fdiv( value_A[ i ], val_accum );
+					value_A[ i ] = CUDA_DEVICE_FDIV( value_A[ i ], val_accum );
 
 				#pragma unroll
 				for ( index_t i = 0 ; i < num_items ; i++ )
@@ -2126,7 +2046,7 @@ static __global__ void kernel_mul_div( real *__restrict__ d_A, real const *__res
 				if ( elemIdx[ i ] < matrix_size ) {
 					real value_A = d_A[ elemIdx[ i ] ];
 					real const value_Aux = d_Aux[ elemIdx[ i ] ];
-					value_A = device_fdiv( (value_A * value_Aux), val_accum );
+					value_A = CUDA_DEVICE_FDIV( (value_A * value_Aux), val_accum );
 					d_A[ elemIdx[ i ] ] = value_A;
 				}
 		}
@@ -2398,7 +2318,7 @@ static __global__ void kernel_adjust( real *__restrict__ d_A, size_t matrix_size
 				for ( index_t i = 0 ; i < num_items ; i++ ) {
 
 					real value = d_A[ elemIdx[ i ] ];
-					value = device_fmax( value, R_MIN );	// If d_A[] is 'NaN', returns 'R_MIN'
+					value = CUDA_DEVICE_FMAX( value, R_MIN );	// If d_A[] is 'NaN', returns 'R_MIN'
 
 					// if ( isnan( value ) || (value < R_MIN) )
 					if ( value == R_MIN )
@@ -2417,7 +2337,7 @@ static __global__ void kernel_adjust( real *__restrict__ d_A, size_t matrix_size
 
 				#pragma unroll
 				for ( index_t i = 0 ; i < num_items ; i++ )
-					value[ i ] = device_fmax( value[ i ], R_MIN );	// If d_A[] is 'NaN', returns 'R_MIN'
+					value[ i ] = CUDA_DEVICE_FMAX( value[ i ], R_MIN );	// If d_A[] is 'NaN', returns 'R_MIN'
 
 				#pragma unroll
 				for ( index_t i = 0 ; i < num_items ; i++ )
@@ -2436,7 +2356,7 @@ static __global__ void kernel_adjust( real *__restrict__ d_A, size_t matrix_size
 				if ( elemIdx[ i ] < matrix_size ) {
 
 					real value = d_A[ elemIdx[ i ] ];
-					value = device_fmax( value, R_MIN );	// If d_A[] is 'NaN', returns 'R_MIN'
+					value = CUDA_DEVICE_FMAX( value, R_MIN );	// If d_A[] is 'NaN', returns 'R_MIN'
 					if ( value == R_MIN )			// if ( isnan( value ) || (value < R_MIN) )
 						d_A[ elemIdx[ i ] ] = value;
 				}

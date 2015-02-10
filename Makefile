@@ -1016,6 +1016,7 @@ c_INCLUDES := $(INCLUDES) -I$(includedir)
 
 # Additional flags for CUDA host code compiled with CC
 cuda_cc_INCLUDES := -I$(nvcc_includedir)
+cuda_cc_CPPFLAGS := -DNMFGPU_CUDA_HOST=1
 
 
 ######
@@ -1048,7 +1049,7 @@ multi_gpu_TARGETS	:= $(bindir)/$(basename $(multi_gpu_FILES))
 multi_gpu_OBJS		:= $(objdir)/$(multi_gpu_FILES).o
 multi_gpu_SRC		:= $(srcdir)/$(multi_gpu_FILES)
 multi_gpu_DEPS		:= $(single_gpu_DEPS)
-multi_gpu_CPPFLAGS	:= $(single_gpu_CPPFLAGS) $(MPICC_CPPFLAGS)
+multi_gpu_CPPFLAGS	:= -DNMFGPU_MPI=1 $(single_gpu_CPPFLAGS) $(MPICC_CPPFLAGS)
 multi_gpu_CFLAGS	:= $(single_gpu_CFLAGS) $(MPICC_CFLAGS)
 multi_gpu_INCLUDES	:= $(MPICC_INCLUDES) $(single_gpu_INCLUDES)
 multi_gpu_LDFLAGS	:= $(MPICC_LDFLAGS) $(single_gpu_LDFLAGS)
@@ -1119,6 +1120,7 @@ $(multi_gpu_OBJS) : $(multi_gpu_SRC)
 
 # ISO-C and CUDA-host code
 $(cuda_host_OBJS) $(single_gpu_OBJS) : c_INCLUDES += $(cuda_cc_INCLUDES)
+$(cuda_host_OBJS) $(single_gpu_OBJS) : c_CPPFLAGS := $(cuda_cc_CPPFLAGS) $(c_CPPFLAGS)
 $(objdir)/%.c.o : $(srcdir)/%.c
 	-$(cmd_prefix)mkdir -p $(@D)
 	$(cmd_prefix)${CC} $(c_CPPFLAGS) $(c_CFLAGS) $(c_INCLUDES) -o $@ -c $<

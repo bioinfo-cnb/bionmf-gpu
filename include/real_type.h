@@ -38,13 +38,35 @@
  * NOTE: The following macro constants can be defined to modify the
  *	behavior of routines, as well as some constant and data-type definitions.
  *
- *	Data type:
+ *	Data types, functions and constants:
  *		NMFGPU_SINGLE_PREC: Makes use of single-precision data (i.e., 'float').
+ *
+ *		NMFGPU_CUDA_HOST: Defines some constants and functions related to CUDA Runtime, cuBLAS and cuRAND.
+ *
+ *		NMFGPU_MPI: Defines some MPI-related constants.
+ *
+ *		__NVCC__, __CUDACC__, __CUDA_ARCH__: CUDA kernel code.
  *
  *********************************************************/
 
 #if ! NMFGPU_REAL_TYPE_H
 #define NMFGPU_REAL_TYPE_H (1)
+
+#if NMFGPU_CUDA_HOST
+	#include <cublas_v2.h>
+	#include <curand.h>
+#endif
+
+
+#if NMFGPU_CUDA_HOST || defined(__NVCC__) || defined(__CUDACC__) || defined(__CUDA_ARCH__)
+	#include <cuda_runtime_api.h>
+#endif
+
+
+#if NMFGPU_MPI
+	#include <mpi.h> /* MPI_FLOAT, MPI_DOUBLE */
+#endif
+
 
 #include <math.h>	/* sqrt(f) */
 #include <string.h>	/* strtof, strtod, */
@@ -60,6 +82,15 @@
 	typedef float real;
 #else	/* Double precision */
 	typedef double real;
+#endif
+
+// Real-type data on MPI.
+#if NMFGPU_MPI && (! defined(NMFGPU_MPI_REAL_T))
+	#if NMFGPU_SINGLE_PREC		/* Single precision */
+		#define NMFGPU_MPI_REAL_T MPI_FLOAT
+	#else				/* Double precision */
+		#define NMFGPU_MPI_REAL_T MPI_DOUBLE
+	#endif
 #endif
 
 // ---------------------------------------------
@@ -129,7 +160,7 @@
 // ---------------------------------------------
 // ---------------------------------------------
 
-/* C HOST Functions */
+/* ISO-C Functions */
 
 // Function to convert from string to real data type.
 #ifndef STRTOREAL
@@ -156,6 +187,106 @@
 	#else
 		#define SQRTR sqrt
 	#endif
+#endif
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* cuBLAS Functions and Constants */
+
+#if NMFGPU_CUDA_HOST
+
+	// General matrix-matrix product.
+	#undef CUBLAS_R_GEMM
+	#if NMFGPU_SINGLE_PREC		/* Single precision */
+		#define CUBLAS_R_GEMM cublasSgemm
+	#else				/* Double precision */
+		#define CUBLAS_R_GEMM cublasDgemm
+	#endif
+
+	// Dot product.
+	#undef CUBLAS_R_DOT
+	#if NMFGPU_SINGLE_PREC
+		#define CUBLAS_R_DOT cublasSdot
+	#else
+		#define CUBLAS_R_DOT cublasDdot
+	#endif
+
+	// Sum of absolute values.
+	#undef CUBLAS_R_ASUM
+	#if NMFGPU_SINGLE_PREC
+		#define CUBLAS_R_ASUM cublasSasum
+	#else
+		#define CUBLAS_R_ASUM cublasDasum
+	#endif
+
+#endif
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* cuRAND Functions and Constants */
+
+#if NMFGPU_CUDA_HOST
+
+	// Uniformly distributed real data
+	#undef CURAND_GENERATE_UNIFORM_REAL
+	#if NMFGPU_SINGLE_PREC
+		#define CURAND_GENERATE_UNIFORM_REAL curandGenerateUniform
+	#else
+		#define CURAND_GENERATE_UNIFORM_REAL curandGenerateUniformDouble
+	#endif
+
+#endif
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* CUDA Runtime Constant and Functions */
+
+#if NMFGPU_CUDA_HOST
+
+	// Argument for cudaDeviceSetSharedMemConfig() function.
+	#undef CUDA_SHARED_MEM_BANK_SIZE
+	#if NMFGPU_SINGLE_PREC
+		#define CUDA_SHARED_MEM_BANK_SIZE cudaSharedMemBankSizeFourByte
+	#else
+		#define CUDA_SHARED_MEM_BANK_SIZE cudaSharedMemBankSizeEightByte
+	#endif
+
+#endif
+
+// ---------------------------------------------
+// ---------------------------------------------
+
+/* CUDA DEVICE Functions and Constants */
+
+#if defined(__NVCC__) || defined(__CUDACC__) || defined(__CUDA_ARCH__)
+
+	/* Maximum of two floating-point values.
+	 * If one of the values is NaN, returns the other.
+	 */
+	#undef CUDA_DEVICE_FMAX
+	#if NMFGPU_SINGLE_PREC
+		#define CUDA_DEVICE_FMAX fmaxf
+	#else
+		#define CUDA_DEVICE_FMAX fmax
+	#endif
+
+	/* Division of two floating-point values.
+	 * NOTE:
+	 *	On single-precision data, a faster (but less-precise) function may be employed,
+	 *	if the compilation flags '-use_fast_math' and '-prec-div' are specified.
+	 * WARNING:
+	 *	No error checking is performed (e.g., if the second value is non-zero).
+	 */
+	#undef CUDA_DEVICE_FDIV
+	#if NMFGPU_SINGLE_PREC
+		#define CUDA_DEVICE_FDIV fdividef
+	#else
+		#define CUDA_DEVICE_FDIV( a, b ) ( a / b )
+	#endif
+
 #endif
 
 ////////////////////////////////////////////////
