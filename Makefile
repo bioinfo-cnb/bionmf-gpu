@@ -492,7 +492,7 @@ fast_pathsearch = $(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,${PATH}))
 # Applies the given function (e.g., dir(), notdir()) to a path with whitespace characters:
 # Substitutes any space, applies the function, and restores remaining spaces.
 # Usage: $(call whitespaced_path,$(function),$(path))
-whitespaced_path = $(call restore_whitespaces,$(call $(2),$(call subst_whitespaces,$(1))))
+whitespaced_path = $(call restore_whitespaces,$(call $(1),$(call subst_whitespaces,$(2))))
 
 
 ########################################
@@ -506,8 +506,14 @@ else
 	default_CC := gcc
 endif
 
-ifeq (${CC},)
+ifneq ($(filter default undefined,$(origin CC)),)
 	override CC := $(default_CC)
+else
+	# Just in case the user tried to undefine CC by assigning an empty value
+	# (rather than use the "unset" command).
+	ifeq (${CC},)
+		override CC := $(default_CC)
+	endif
 endif
 
 cc_name := $(or $(findstring gcc,${CC}),$(findstring clang,${CC}),$(strip $(notdir ${CC})))
@@ -573,8 +579,14 @@ clang_darwin_cc_fast_CFLAGS	:=
 # MPI compiler
 default_MPICC := mpicc
 
-ifeq (${MPICC},)
+ifneq ($(filter default undefined,$(origin MPICC)),)
 	override MPICC := $(default_MPICC)
+else
+	# Just in case the user tried to undefine MPICC by assigning an empty value
+	# (rather than use the "unset" command).
+	ifeq (${MPICC},)
+		override MPICC := $(default_MPICC)
+	endif
 endif
 
 ########################################
@@ -582,8 +594,14 @@ endif
 # CUDA compiler
 default_NVCC := nvcc
 
-ifeq (${NVCC},)
+ifneq ($(filter default undefined,$(origin NVCC)),)
 	override NVCC := $(default_NVCC)
+else
+	# Just in case the user tried to undefine NVCC by assigning an empty value
+	# (rather than use the "unset" command).
+	ifeq (${NVCC},)
+		override NVCC := $(default_NVCC)
+	endif
 endif
 
 user_cuda_compiler := ${NVCC}
@@ -607,9 +625,10 @@ endif
 # Path to the CUDA Toolkit
 cuda_home := $(call whitespaced_path,dir,${NVCC})/..
 
-
+# CUDA headers folder
 nvcc_includedir := $(cuda_home)/include
 
+# CUDA libraries folder
 nvcc_libdir := $(wildcard $(cuda_home)/lib$(os_size))
 ifeq ($(nvcc_libdir),)	# Previous path not found. Sets a new one.
 	nvcc_libdir := $(wildcard $(cuda_home)/lib)
@@ -1029,7 +1048,7 @@ multi_gpu_TARGETS	:= $(bindir)/$(basename $(multi_gpu_FILES))
 multi_gpu_OBJS		:= $(objdir)/$(multi_gpu_FILES).o
 multi_gpu_SRC		:= $(srcdir)/$(multi_gpu_FILES)
 multi_gpu_DEPS		:= $(single_gpu_DEPS)
-multi_gpu_CPPFLAGS	:= $(single_gpu_CPPLAGS) $(MPICC_CPPFLAGS)
+multi_gpu_CPPFLAGS	:= $(single_gpu_CPPFLAGS) $(MPICC_CPPFLAGS)
 multi_gpu_CFLAGS	:= $(single_gpu_CFLAGS) $(MPICC_CFLAGS)
 multi_gpu_INCLUDES	:= $(MPICC_INCLUDES) $(single_gpu_INCLUDES)
 multi_gpu_LDFLAGS	:= $(MPICC_LDFLAGS) $(single_gpu_LDFLAGS)
