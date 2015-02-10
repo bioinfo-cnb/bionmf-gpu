@@ -77,7 +77,7 @@ Basic steps:
    1. [Install the NVIDIA CUDA Toolkit and Drivers](#install).
    2. [Download, Decompress and Compile ***NMF-mGPU***](#compile).
    3. [Example of Use](#example).
-   <!--4. [How to Cite *NMF-mGPU*](#citation).-->
+   4. [How to Cite *NMF-mGPU*](#citation).
 
 The full [installation guide](doc/installation_guide.txt.md) can be found in the `doc` folder.  
 &nbsp;
@@ -171,7 +171,8 @@ To compile the program, just execute:
 The compilation process may take some time since different versions of the software (one per GPU model) will be generated into the executable file. To compile code for just a particular GPU architecture (e.g., for *Compute Capability 1.3*), you can use the following command:
 
          $>  make  SM_VERSIONS=13
-Please note that by default, **no code is compiled for *Compute Capabilities 1.x***, since they are being deprecated on newer versions of the CUDA Toolkit. Code for such GPU models must be explicitly requested as shown in the example above.  
+
+**Warning:** **No code is compiled for *Compute Capabilities 1.x*,** since they are being deprecated on newer versions of the CUDA Toolkit. For such GPU models, code must be explicitly requested as shown in the example above.  
 &nbsp;
 
 
@@ -239,7 +240,7 @@ After completion, both output matrices, **W** and **H**, are stored in the same 
 
    * An exhaustive list of all valid parameters for `NMF_GPU` can be shown with the option `-h`. That is,
 
-         $>  bin/NMF_GPU  -h
+            $>  bin/NMF_GPU  -h
      In that case, any other argument will be ignored.
 
    * On any error, please check first the [Troubleshooting section](doc/installation_guide.md#troubleshooting) in our [Installation Guide](doc/installation_guide.md), located in the `doc/` folder.
