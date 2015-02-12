@@ -389,23 +389,23 @@ endif
 srcdir	   := src
 includedir := include
 bindir	   := bin
-objdir	   := $(bindir)/obj
+objdir	   := obj
 
 # Matrix I/O Operations directory name
-matrix_io_dir := matrix_io
+matrix_io_dirname := matrix_io
 
 # Tools directory name
-tools_dir    := tools
-tools_objdir := $(objdir)/$(tools_dir)
-tools_bindir := $(bindir)/$(tools_dir)
+tools_dirname := tools
+tools_objdir  := $(objdir)/$(tools_dirname)
+tools_bindir  := $(bindir)/$(tools_dirname)
 
 # Source files
-single_gpu_FILES  := NMF_GPU.c
-multi_gpu_FILES   := NMF_mGPU.c
-tools_FILES	  := $(tools_dir)/file_converter.c $(tools_dir)/generate_matrix.c
+multi_gpu_FILE	  := NMF_mGPU.c
+single_gpu_FILE	  := NMF_GPU.c
+tools_FILES	  := $(tools_dirname)/file_converter.c  $(tools_dirname)/generate_matrix.c
 cuda_device_FILES := GPU_kernels.cu
-cuda_host_FILES   := timing.c GPU_setup.c matrix_operations.c NMF_routines.c
-iso_c_FILES	  := common.c $(matrix_io_dir)/matrix_io_routines.c $(matrix_io_dir)/matrix_io.c
+cuda_host_FILES	  := timing.c  GPU_setup.c matrix_operations.c NMF_routines.c
+iso_c_FILES	  := common.c  $(matrix_io_dirname)/matrix_io_routines.c  $(matrix_io_dirname)/matrix_io.c
 
 
 ########################################
@@ -429,7 +429,7 @@ space := $(empty) $(empty)
 .SECONDARY:
 
 .SUFFIXES:
-.SUFFIXES: .c .o .h .cu .cu.o .cuh
+.SUFFIXES: .c .o .h .cu .cu.o .cuh .d
 
 ###########
 
@@ -986,8 +986,7 @@ endif
 ########################################
 
 # CUDA device code
-cuda_device_OBJS := $(addprefix $(objdir)/,$(addsuffix .o,$(cuda_device_FILES)))
-
+cuda_device_OBJS   := $(addprefix $(objdir)/,$(addsuffix .o,$(cuda_device_FILES)))
 
 # Flags for NVCC
 cuda_nvcc_CPPFLAGS  := $(nvcc_CPPFLAGS) $(common_CPPFLAGS) $(CPPFLAGS) $(NVCC_CPPFLAGS)
@@ -1001,18 +1000,15 @@ export PTXAS_FLAGS  := $(ptxas_CFLAGS) $(PTXAS_FLAGS)
 
 
 # ISO-C code
-iso_c_OBJS := $(addprefix $(objdir)/,$(addsuffix .o,$(iso_c_FILES)))
-
+iso_c_OBJS	:= $(addprefix $(objdir)/,$(addsuffix .o,$(iso_c_FILES)))
 
 # CUDA host code
 cuda_host_OBJS	 := $(addprefix $(objdir)/,$(addsuffix .o,$(cuda_host_FILES)))
-
 
 # Flags for code compiled with CC
 c_CPPFLAGS := $(common_CPPFLAGS) $(CPPFLAGS)
 c_CFLAGS   := $(common_CFLAGS) $(cc_CFLAGS) $(CFLAGS)
 c_INCLUDES := $(INCLUDES) -I$(includedir)
-
 
 # Additional flags for CUDA host code compiled with CC
 cuda_cc_INCLUDES := -I$(nvcc_includedir)
@@ -1034,20 +1030,20 @@ tools_LDLIBS	:= $(LDLIBS) -lm
 
 
 # Main Program (single-GPU version)
-single_gpu_TARGETS	:= $(bindir)/$(basename $(single_gpu_FILES))
-single_gpu_OBJS		:= $(objdir)/$(single_gpu_FILES).o
+single_gpu_TARGET	:= $(bindir)/$(basename $(single_gpu_FILE))
+single_gpu_OBJ		:= $(objdir)/$(single_gpu_FILE).o
 single_gpu_DEPS		:= $(tools_DEPS) $(cuda_host_OBJS) $(cuda_device_OBJS)
-single_gpu_CPPFLAGS	:= $(tools_CPPFLAGS)
+single_gpu_CPPFLAGS	:= $(tools_CPPFLAGS) $(cuda_cc_CPPFLAGS)
 single_gpu_CFLAGS	:= $(tools_CFLAGS)
-single_gpu_INCLUDES	:= $(tools_INCLUDES) -I$(nvcc_includedir)
+single_gpu_INCLUDES	:= $(tools_INCLUDES) $(cuda_cc_INCLUDES)
 single_gpu_LDFLAGS	:= $(tools_LDFLAGS) -L$(nvcc_libdir)
 single_gpu_LDLIBS	:= $(LDLIBS) -lcublas -lcurand -lcudart -lm
 
 
 # Main Program (multi-GPU version)
-multi_gpu_TARGETS	:= $(bindir)/$(basename $(multi_gpu_FILES))
-multi_gpu_OBJS		:= $(objdir)/$(multi_gpu_FILES).o
-multi_gpu_SRC		:= $(srcdir)/$(multi_gpu_FILES)
+multi_gpu_TARGET	:= $(bindir)/$(basename $(multi_gpu_FILE))
+multi_gpu_OBJ		:= $(objdir)/$(multi_gpu_FILE).o
+multi_gpu_SRC		:= $(srcdir)/$(multi_gpu_FILE)
 multi_gpu_DEPS		:= $(single_gpu_DEPS)
 multi_gpu_CPPFLAGS	:= -DNMFGPU_MPI=1 $(single_gpu_CPPFLAGS) $(MPICC_CPPFLAGS)
 multi_gpu_CFLAGS	:= $(single_gpu_CFLAGS) $(MPICC_CFLAGS)
@@ -1063,22 +1059,22 @@ multi_gpu_LDLIBS	:= $(MPICC_LDLIBS) $(single_gpu_LDLIBS)
 
 # Compiles default programs
 .PHONY: all
-all : single_gpu tools
+all : tools single_gpu
 
 
 # Compiles ALL programs.
 .PHONY: all_programs
-all_programs : multi_gpu all
+all_programs : all multi_gpu
 
 
 # Compiles the single-GPU version
 .PHONY: single_gpu single_GPU
-single_gpu single_GPU : $(single_gpu_TARGETS)
+single_gpu single_GPU : $(single_gpu_TARGET)
 
 
 # Compiles the multi-GPU version
 .PHONY: multi_gpu multi_GPU
-multi_gpu multi_GPU : $(multi_gpu_TARGETS)
+multi_gpu multi_GPU : $(multi_gpu_TARGET)
 
 
 # Compiles the utility programs
@@ -1091,13 +1087,13 @@ tools : $(tools_TARGETS)
 ########################################
 
 # Main Program (multi-GPU version, C++ code)
-$(multi_gpu_TARGETS) : $(multi_gpu_DEPS) $(multi_gpu_OBJS) | check_sm_versions check_cuda_path
+$(multi_gpu_TARGET) : $(multi_gpu_DEPS) $(multi_gpu_OBJ) | check_sm_versions check_cuda_path
 	-$(cmd_prefix)mkdir -p $(@D)
 	$(cmd_prefix)${MPICC} $(multi_gpu_CPPFLAGS) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) $(multi_gpu_LDFLAGS) $^ $(multi_gpu_LDLIBS) -o $@
 
 
 # Main Program (single-GPU version, C++ code)
-$(single_gpu_TARGETS) : $(single_gpu_DEPS) $(single_gpu_OBJS) | check_sm_versions check_cuda_path
+$(single_gpu_TARGET) : $(single_gpu_DEPS) $(single_gpu_OBJ) | check_sm_versions check_cuda_path
 	-$(cmd_prefix)mkdir -p $(@D)
 	$(cmd_prefix)${CC} $(single_gpu_CPPFLAGS) $(single_gpu_CFLAGS) $(single_gpu_INCLUDES) $(single_gpu_LDFLAGS) $^ $(single_gpu_LDLIBS) -o $@
 
@@ -1110,26 +1106,40 @@ $(tools_bindir)/% : $(tools_DEPS) $(tools_objdir)/%.c.o
 
 ########################################
 # Compilation rules
+#
+# NOTE/HACK:
+# Tricks for dependencies, thanks to:
+#	Auto-Dependency Generation
+#	http://make.mad-scientist.net/papers/advanced-auto-dependency-generation/
 ########################################
 
 # MPI code
-$(multi_gpu_OBJS) : $(multi_gpu_SRC)
+$(multi_gpu_OBJ) : $(multi_gpu_SRC)
 	-$(cmd_prefix)mkdir -p $(@D)
+	@${MPICC} $(multi_gpu_CPPFLAGS) $(multi_gpu_INCLUDES) -MF $@.d -MT $@ -MM $<
 	$(cmd_prefix)${MPICC} $(multi_gpu_CPPFLAGS) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) -o $@ -c $<
+
+-include $(multi_gpu_OBJ).d
 
 
 # ISO-C and CUDA-host code
-$(cuda_host_OBJS) $(single_gpu_OBJS) : c_INCLUDES += $(cuda_cc_INCLUDES)
-$(cuda_host_OBJS) $(single_gpu_OBJS) : c_CPPFLAGS := $(cuda_cc_CPPFLAGS) $(c_CPPFLAGS)
+$(cuda_host_OBJS) $(single_gpu_OBJ) : c_INCLUDES += $(cuda_cc_INCLUDES)
+$(cuda_host_OBJS) $(single_gpu_OBJ) : c_CPPFLAGS := $(cuda_cc_CPPFLAGS) $(c_CPPFLAGS)
 $(objdir)/%.c.o : $(srcdir)/%.c
 	-$(cmd_prefix)mkdir -p $(@D)
+	@${CC} $(c_CPPFLAGS) $(c_INCLUDES) -MF $@.d -MT $@ -MM $<
 	$(cmd_prefix)${CC} $(c_CPPFLAGS) $(c_CFLAGS) $(c_INCLUDES) -o $@ -c $<
+
+-include $(addsuffix .d,$(tools_DEPS) $(tools_OBJS))
 
 
 # CUDA device code
 $(objdir)/%.cu.o : $(srcdir)/%.cu | check_sm_versions check_cuda_path
 	-$(cmd_prefix)mkdir -p $(@D)
+	@${NVCC} $(cuda_nvcc_CPPFLAGS) $(cuda_nvcc_INCLUDES) --output-file $@.d --dependency-target-name $@ --generate-dependencies $<
 	$(cmd_prefix)${NVCC} $(cuda_nvcc_CPPFLAGS) $(cuda_nvcc_CFLAGS) $(cuda_nvcc_INCLUDES) --output-file $@ --compile $<
+
+-include $(addsuffix .d,$(cuda_device_OBJS))
 
 
 ########################################
@@ -1175,7 +1185,7 @@ clobber_multi_gpu clobber_single_gpu clobber_tools : clobber_target=$(patsubst c
 clobber_multi_gpu : clean_multi_gpu
 clobber_single_gpu : clean_single_gpu
 clobber_tools : clean_tools
-	-$(cmd_prefix)${RM} $($(clobber_target)_TARGETS)
+	-$(cmd_prefix)${RM} $($(clobber_target)_TARGETS) $($(clobber_target)_TARGET)
 
 
 # Removes the folder containing all object (".o") files. Executable code is not affected.
@@ -1188,7 +1198,8 @@ clean :
 .PHONY: clean_multi_gpu clean_single_gpu clean_tools
 clean_multi_gpu clean_single_gpu clean_tools : clean_target=$(patsubst clean_%,%,$@)
 clean_multi_gpu clean_single_gpu clean_tools :
-	-$(cmd_prefix)${RM} $($(clean_target)_OBJS) $($(clean_target)_DEPS)
+	-$(cmd_prefix)${RM} $($(clean_target)_OBJS) $($(clean_target)_OBJ) $($(clean_target)_DEPS) \
+	$(addsuffix .d,$($(clean_target)_OBJS) $($(clean_target)_OBJ) $($(clean_target)_DEPS))
 
 
 ########################################
