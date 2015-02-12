@@ -751,7 +751,7 @@ The argument `-np 2` denotes that *two* GPU devices will be used.
 
    * *All* GPU devices must have a **similar** *Compute Capability*.
 
-   * Please remember to properly setup the environment of your MPI-library.
+   * Please remember to properly setup the environment of your MPI library.
 
 
 *****************************
@@ -844,9 +844,9 @@ Paths containing whitespace characters must be surrounded by single or double qu
 
 If you use this software, please cite one of the following works (the first in the list is preferred):
 
-<!--   * E. Mejía-Roa, D. Tabas-Madrid, J. Setoain, C. García, F. Tirado and A. Pascual-Montano. **NMF-mGPU: Non-negative matrix factorization on multi-GPU systems**. *BMC Bioinformatics* 2015, **1X**:. [doi:](http://dx.doi.org/).  
-     <http://www.biomedcentral.com/1471-2105/1X/>  
-     &nbsp; -->
+   * E. Mejía-Roa, D. Tabas-Madrid, J. Setoain, C. García, F. Tirado and A. Pascual-Montano. **NMF-mGPU: Non-negative matrix factorization on multi-GPU systems**. *BMC Bioinformatics* 2015, **16**:43. [doi:10.1186/s12859-015-0485-4](http://dx.doi.org/10.1186/s12859-015-0485-4).  
+     <http://www.biomedcentral.com/1471-2105/16/43>  
+     &nbsp;
 
    * E. Mejía-Roa, C. García, J.I. Gómez, M. Prieto, C. Tenllado, A. Pascual-Montano and F. Tirado. **Parallelism on the Nonnegative Matrix Factorization**. In *Applications, Tools and Techniques on the Road to Exascale Computing*. IOS Press BV; 2012:421-428. \[*Advances in Parallel Computing*, vol. 22]. [doi:10.3233/978-1-61499-041-3-421](http://dx.doi.org/10.3233/978-1-61499-041-3-421).  
      <http://ebooks.iospress.nl/publication/26557>  
