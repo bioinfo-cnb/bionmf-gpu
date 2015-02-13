@@ -836,25 +836,17 @@ Paths containing whitespace characters must be surrounded by single or double qu
          NVCC="/opt/cuda\ toolkit/bin/nvcc"
 
 
-
 *****************************
 
 
 ## 9. <a id="citation">How to Cite *NMF-mGPU*</a>
 
-If you use this software, please cite one of the following works (the first in the list is preferred):
+If you use this software, please cite the following work:
 
-   * E. Mejía-Roa, D. Tabas-Madrid, J. Setoain, C. García, F. Tirado and A. Pascual-Montano. **NMF-mGPU: Non-negative matrix factorization on multi-GPU systems**. *BMC Bioinformatics* 2015, **16**:43. [doi:10.1186/s12859-015-0485-4](http://dx.doi.org/10.1186/s12859-015-0485-4).  
-     <http://www.biomedcentral.com/1471-2105/16/43>  
-     &nbsp;
+   > E. Mejía-Roa, D. Tabas-Madrid, J. Setoain, C. García, F. Tirado and A. Pascual-Montano. **NMF-mGPU: Non-negative matrix factorization on multi-GPU systems**. *BMC Bioinformatics* 2015, **16**:43. doi:10.1186/s12859-015-0485-4 [<http://www.biomedcentral.com/1471-2105/16/43>]
 
-   * E. Mejía-Roa, C. García, J.I. Gómez, M. Prieto, C. Tenllado, A. Pascual-Montano and F. Tirado. **Parallelism on the Nonnegative Matrix Factorization**. In *Applications, Tools and Techniques on the Road to Exascale Computing*. IOS Press BV; 2012:421-428. \[*Advances in Parallel Computing*, vol. 22]. [doi:10.3233/978-1-61499-041-3-421](http://dx.doi.org/10.3233/978-1-61499-041-3-421).  
-     <http://ebooks.iospress.nl/publication/26557>  
-     &nbsp;
-
-   * E. Mejía-Roa, C. García, J.I. Gómez, M. Prieto, R. Nogales, F. Tirado and A. Pascual-Montano. **Biclustering and classification analysis in gene expression using Nonnegative Matrix Factorization on multi-GPU systems**. In *Proceedings of the 11th International Conference on Intelligent Systems Design and Applications* (*ISDA*). IEEE Press; 2011:882-887. [doi:10.1109/ISDA.2011.6121769](http://dx.doi.org/10.1109/ISDA.2011.6121769).  
-     <http://ieeexplore.ieee.org/xpls/abs_all.jsp?arnumber=6121769>  
-     &nbsp;
+  
+&nbsp;
 
 
 <!-- ==================================================== -->

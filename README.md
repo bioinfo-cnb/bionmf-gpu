@@ -59,11 +59,25 @@ This software has been developed using the NVIDIA's [***CUDA***][CUDA_homepage] 
 
 On detached devices with low on-board memory available, large datasets can be blockwise transferred from the CPU's main memory to the GPU's memory and processed accordingly. In addition, *NMF-mGPU* has been explicitly optimized for the different CUDA architectures.
 
-Finally, *NMF-mGPU* also provides a *multi-GPU* version that makes use of multiple GPU devices through the [***MPI***][MPI_homepage] ([***Message Passing Interface***][MPI_homepage]) standard.
+Finally, *NMF-mGPU* also provides a *multi-GPU* version that makes use of multiple GPU devices through the [***MPI***][MPI_homepage] ([***Message Passing Interface***][MPI_homepage]) standard.  
+&nbsp;
 
 
 [CUDA_homepage]: <http://www.nvidia.com/object/cuda_home_new.html> "CUDA Homepage"
 [MPI_homepage]: <http://mpi-forum.org/> "MPI Forum"
+
+
+<!-- ==================== -->
+
+
+## How to cite *NMF-mGPU*
+
+If you use this software, please cite the following work:
+
+   > E. Mejía-Roa, D. Tabas-Madrid, J. Setoain, C. García, F. Tirado and A. Pascual-Montano. **NMF-mGPU: Non-negative matrix factorization on multi-GPU systems**. *BMC Bioinformatics* 2015, **16**:43. doi:10.1186/s12859-015-0485-4 [<http://www.biomedcentral.com/1471-2105/16/43>]
+
+  
+&nbsp;
 
 
 *****************************  
@@ -75,9 +89,8 @@ Finally, *NMF-mGPU* also provides a *multi-GPU* version that makes use of multip
 Basic steps:
 
    1. [Install the NVIDIA CUDA Toolkit and Drivers](#install).
-   2. [Download, Decompress and Compile ***NMF-mGPU***](#compile).
+   2. [Download, Decompress and Compile *NMF-mGPU*](#compile).
    3. [Example of Use](#example).
-   4. [How to Cite *NMF-mGPU*](#citation).
 
 The full [installation guide](doc/installation_guide.txt.md) can be found in the `doc` folder.  
 &nbsp;
@@ -153,7 +166,7 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 ***NMF-mGPU*** can be downloaded from two main sources:
 
    * From the [*Releases* Page](https://github.com/bioinfo-cnb/bionmf-gpu/releases) for the latest and previous releases.
-   * From the [Applications Page](http://bioinfo-cnb.github.io/bionmf-gpu/) to get the latest development code.
+   * From the [Applications Page](http://bioinfo-cnb.github.io/bionmf-gpu/) to get the latest development code.  
 &nbsp;
 
 
@@ -261,26 +274,6 @@ The argument `-np 2` denotes that *two* GPU devices will be used.
    * *All* GPU devices must have a **similar** *Compute Capability*.
 
    * Please, remember to properly setup the environment of your MPI library.
-
-
-*****************************
-
-
-## 4. <a id="citation">How to Cite *NMF-mGPU*</a>
-
-If you use this software, please cite one of the following works (the first in the list is preferred):
-
-   * E. Mejía-Roa, D. Tabas-Madrid, J. Setoain, C. García, F. Tirado and A. Pascual-Montano. **NMF-mGPU: Non-negative matrix factorization on multi-GPU systems**. *BMC Bioinformatics* 2015, **16**:43. [doi:10.1186/s12859-015-0485-4](http://dx.doi.org/10.1186/s12859-015-0485-4).  
-     <http://www.biomedcentral.com/1471-2105/16/43>  
-     &nbsp;
-
-   * E. Mejía-Roa, C. García, J.I. Gómez, M. Prieto, C. Tenllado, A. Pascual-Montano and F. Tirado. **Parallelism on the Nonnegative Matrix Factorization**. In *Applications, Tools and Techniques on the Road to Exascale Computing*. IOS Press BV; 2012:421-428. \[*Advances in Parallel Computing*, vol. 22]. [doi:10.3233/978-1-61499-041-3-421](http://dx.doi.org/10.3233/978-1-61499-041-3-421).  
-     <http://ebooks.iospress.nl/publication/26557>  
-     &nbsp;
-
-   * E. Mejía-Roa, C. García, J.I. Gómez, M. Prieto, R. Nogales, F. Tirado and A. Pascual-Montano. **Biclustering and classification analysis in gene expression using Nonnegative Matrix Factorization on multi-GPU systems**. In *Proceedings of the 11th International Conference on Intelligent Systems Design and Applications* (*ISDA*). IEEE Press; 2011:882-887. [doi:10.1109/ISDA.2011.6121769](http://dx.doi.org/10.1109/ISDA.2011.6121769).  
-     <http://ieeexplore.ieee.org/xpls/abs_all.jsp?arnumber=6121769>  
-     &nbsp;
 
 
 <!-- ==================================================== -->
