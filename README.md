@@ -92,7 +92,7 @@ Basic steps:
    2. [Download, Decompress and Compile *NMF-mGPU*](#compile).
    3. [Example of Use](#example).
 
-The full [installation guide](doc/installation_guide.txt.md) can be found in the `doc` folder.  
+The full [installation guide](doc/installation_guide.txt.md) can be found in the `doc/` folder.  
 &nbsp;
 
 
@@ -185,7 +185,8 @@ The compilation process may take some time since different versions of the softw
 
          $>  make  SM_VERSIONS=13
 
-**Warning:** **No code is compiled for *Compute Capabilities 1.x*,** since they are being deprecated on newer versions of the CUDA Toolkit. For such GPU models, code must be explicitly requested as shown in the example above.  
+### Warning:
+   **No code is compiled for *Compute Capabilities 1.x*,** since they are being deprecated on newer versions of the CUDA Toolkit. For such GPU models, code must be explicitly requested as shown in the example above.  
 &nbsp;
 
 

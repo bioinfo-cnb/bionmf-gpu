@@ -327,7 +327,7 @@ The compilation process can be customized with the following parameters:
    * `DBG`: *Verbose* and *Debug* mode (prints *a lot* of information). It implies `CC_WARN_VERBOSE`, `NVCC_WARN_VERBOSE`, and `PTXAS_WARN_VERBOSE` set to `1`.  
      Default value: `0`.
 
-   * `VERBOSE`: Command-line verbosity level. Valid values are `0` (none), `1` (shows `make` commands), and `2` (shows `make` and internal `NVCC` commands).  
+   * `VERBOSE`: Command-line verbosity level. Valid values are `0` (none), `1` (shows `make` compilation commands), `2` (shows all `make` commands), and `3` (shows all `make` and `NVCC` commands).  
      Default value: `0`.
 
    * `CC_WARN_VERBOSE`: Shows extra warning messages on programs compiled with `CC`. Please note that it may include *false-positive* warnings.  
@@ -507,7 +507,7 @@ or as environment variables, for some of them:
      If no path to CUDA is specified, both, `env.sh` and `Makefile`, will look for `nvcc` in all folders stored in your `PATH` environment variable.
 
 
-Finally, to show all command executed by `make`, you can use the `VERBOSE` parameter:
+Finally, to show most of commands executed by `make`, you can use the `VERBOSE` parameter:
 
          $> make VERBOSE=1
 
@@ -774,6 +774,7 @@ The argument `-np 2` denotes that *two* GPU devices will be used.
 
    7. Whitespace characters in the path to the CUDA Toolkit.
 
+   8. `CUDA Error: invalid device function.`
 
 <!-- ==================== -->
 
@@ -834,6 +835,17 @@ Try to change your locales to `en_US.UTF-8` or `en_US.ISO-8859-15`. For instance
 Paths containing whitespace characters must be surrounded by single or double quotes, ***and*** must have all space characters properly escaped (with `\`). For instance:  
 
          NVCC="/opt/cuda\ toolkit/bin/nvcc"
+
+
+<!-- ==================== -->
+
+#### 8.8. `CUDA Error: invalid device function.`
+
+This error may happen if there is no code compatible with the actual GPU device. For instance, if your device is Compute Capability 1.3, but *NMF-mGPU* was compiled for higher values (which *is* the default). In that case, please specify the GPU architecture in the parameter `SM_VERSIONS`.
+
+Example:
+
+         $>  make  SM_VERSIONS:=13
 
 
 *****************************
