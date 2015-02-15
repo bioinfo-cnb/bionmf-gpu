@@ -135,8 +135,9 @@
 #			PTXAS_WARN_VERBOSE set to '1'.
 #
 #	VERBOSE:	Command-line verbosity level. Valid values are '0'
-#			(none), '1' (shows make commands), and '2' (shows make
-#			and internal NVCC commands).
+#			(none), '1' (shows make compilation commands), '2'
+#			(shows all make commands), and '3' (shows all make and
+#			NVCC commands).
 #
 #	CC_WARN_VERBOSE:
 #			Shows extra warning messages on programs compiled with
@@ -258,7 +259,7 @@ UNSIGNED := 1
 FAST_MATH := 1
 
 # Target GPU architectures.
-ifeq ($(SM_VERSIONS),)
+ifeq (${SM_VERSIONS},)
 
 	#############
 	 #
@@ -386,6 +387,7 @@ endif
 ########################################
 
 # Directory tree
+# WARNING: Please, do NOT use whitespace characters in folder names.
 srcdir	   := src
 includedir := include
 bindir	   := bin
@@ -415,6 +417,16 @@ iso_c_FILES	  := common.c  $(matrix_io_dirname)/matrix_io_routines.c  $(matrix_i
 # Shell
 SHELL := /bin/sh
 
+# Makes a directory:
+MKDIR := mkdir
+
+# Makes a (possibly existing) directory
+# NOTE: Replace it by a custom function if your system does not support '-p'
+MKDIR_P = ${MKDIR} -p $(1)
+
+# Removes an entire directory with all its content:
+RMDIR := ${RM} -r
+
 # OS Name
 os_lower := $(strip $(shell uname -s 2>/dev/null | tr "[:upper:]" "[:lower:]"))
 
@@ -429,7 +441,7 @@ space := $(empty) $(empty)
 .SECONDARY:
 
 .SUFFIXES:
-.SUFFIXES: .c .o .h .cu .cu.o .cuh .d
+.SUFFIXES: .c .o .h .cu .cu.o .cuh .d .sentinel
 
 ###########
 
@@ -495,6 +507,7 @@ fast_pathsearch = $(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,${PATH}))
 whitespaced_path = $(call restore_whitespaces,$(call $(1),$(call subst_whitespaces,$(2))))
 
 
+
 ########################################
 # Compiler options
 ########################################
@@ -524,8 +537,9 @@ cc_name := $(or $(findstring gcc,${CC}),$(findstring clang,${CC}),$(strip $(notd
 # NOTE: Some of the following variables are recursively expanded (i.e., they use '=' rather than ':=').
 
 # Common C/C++ flags (i.e., common flags for CC and NVCC's internal compilers).
-common_CFLAGS = -O3 -pipe -fPIC -fPIE -D_GNU_SOURCE -fpch-preprocess -Wall -Wextra -Wcast-align -Wstrict-overflow=5 -Winline -Wno-invalid-pch \
-		-Wno-unused-parameter -Wno-unused-variable -m$(os_size) $($(cc_name)_$(os_lower)_common_CFLAGS)
+common_CFLAGS = -O3 -pipe -fPIC -fPIE -D_GNU_SOURCE -fpch-preprocess -Wall -fstrict-aliasing -Winline -Wcast-align \
+		$($(cc_name)_$(os_lower)_common_CFLAGS) -Wstrict-overflow=5 -Wno-invalid-pch -Wno-unused-parameter \
+		-Wno-unused-variable -m$(os_size)
 
 
 # Flags for faster code.
@@ -548,26 +562,26 @@ cc_fast_CFLAGS = $($(cc_name)_$(os_lower)_cc_fast_CFLAGS)
 # Compiler- and OS-specific flags.
 
 # GCC on GNU/Linux:
-gcc_linux_common_CFLAGS		:= -Wmissing-declarations -Wunsafe-loop-optimizations -Wno-type-limits
+gcc_linux_common_CFLAGS		:= -Wextra -Wmissing-declarations -Wunsafe-loop-optimizations -Wno-type-limits
 gcc_linux_common_fast_CFLAGS	:= -Ofast -march=native -ftree-loop-distribution -fbranch-target-load-optimize -funsafe-loop-optimizations
 gcc_linux_cc_CFLAGS		:= -Wno-unsuffixed-float-constants -Wno-unused-result
 gcc_linux_cc_fast_CFLAGS	:=
 
 # GCC on Darwin (i.e., Mac OS X):
-gcc_darwin_common_CFLAGS	:= -Wunsafe-loop-optimizations -Wmissing-field-initializers -Wempty-body
+gcc_darwin_common_CFLAGS	:= -Wunsafe-loop-optimizations -Wmissing-field-initializers -Wempty-body -Wno-strict-aliasing
 gcc_darwin_common_fast_CFLAGS	:= -fast -fbranch-target-load-optimize -funsafe-loop-optimizations
 gcc_darwin_cc_CFLAGS		:= -Wmissing-declarations
 gcc_darwin_cc_fast_CFLAGS	:=
 
 # Clang on GNU/Linux:
-clang_linux_common_CFLAGS	:= -Wmissing-declarations -Wno-unknown-warning-option -Qunused-arguments -Wno-tautological-compare \
-				   -Wno-type-limits -Wno-unknown-warning-option
+clang_linux_common_CFLAGS	:= -Wextra -Wmissing-declarations -Qunused-arguments -Wno-tautological-compare -Wno-type-limits \
+					-Wno-unknown-warning-option
 clang_linux_common_fast_CFLAGS	:= -Ofast -march=native
 clang_linux_cc_CFLAGS		:= -Wno-unused-result
 clang_linux_cc_fast_CFLAGS	:=
 
 # Clang on Darwin (i.e., Mac OS X):
-clang_darwin_common_CFLAGS	:= -Wmissing-declarations -Qunused-arguments -Wno-tautological-compare -Wno-type-limits \
+clang_darwin_common_CFLAGS	:= -Wextra -Wmissing-declarations -Qunused-arguments -Wno-tautological-compare -Wno-type-limits \
 					-Wno-unknown-warning-option
 clang_darwin_common_fast_CFLAGS	:= -O4 -march=native -ftree-loop-distribution -fbranch-target-load-optimize -funsafe-loop-optimizations
 clang_darwin_cc_CFLAGS		:= -Wno-unused-result
@@ -748,11 +762,11 @@ sm_virtual_template = $(call gencode_virtual_template,$(subst PTX,,$(1)))
 
 # Calls sm_real_template for each value in SM_VERSIONS, previously removing any dash.
 # Values prefixed with 'PTX' are also removed.
-sm_CFLAGS := $(foreach sm_ver,$(filter-out PTX%,$(SM_VERSIONS)),$(call sm_real_template,$(subst -, ,$(sm_ver))))
+sm_CFLAGS := $(foreach sm_ver,$(filter-out PTX%,${SM_VERSIONS}),$(call sm_real_template,$(subst -, ,$(sm_ver))))
 
 # Calls sm_virtual_template for each value in SM_VERSIONS prefixed with 'PTX'.
 # Non-prefixed values are previously removed.
-sm_CFLAGS += $(foreach sm_ver,$(filter PTX%,$(SM_VERSIONS)),$(call sm_virtual_template,$(sm_ver)))
+sm_CFLAGS += $(foreach sm_ver,$(filter PTX%,${SM_VERSIONS}),$(call sm_virtual_template,$(sm_ver)))
 
 
 #####
@@ -761,7 +775,7 @@ sm_CFLAGS += $(foreach sm_ver,$(filter PTX%,$(SM_VERSIONS)),$(call sm_virtual_te
 # Double-precision operations are NOT natively supported on Compute Capability < 1.3
 
 # Searches for unsupported Compute Capabilities.
-unsupported_sm_versions := $(filter 10 11 12,$(subst -, ,$(SM_VERSIONS)))
+unsupported_sm_versions := $(filter 10 11 12,$(subst -, ,${SM_VERSIONS}))
 
 # Warning message to show.
 # NOTE:
@@ -791,7 +805,7 @@ unknown_sm_version_message := "\n\
 ########################################
 
 # Uses single-precision data.
-ifeq ($(SINGLE),1)
+ifeq (${SINGLE},1)
 	common_CPPFLAGS += -DNMFGPU_SINGLE_PREC=1
 else
 	# Just in case it was not defined.
@@ -800,7 +814,7 @@ endif
 
 
 # Uses unsigned integers for matrix dimensions
-ifeq ($(UNSIGNED),1)
+ifeq (${UNSIGNED},1)
 	common_CPPFLAGS += -DNMFGPU_UINDEX=1
 else
 	# Just in case it was not defined.
@@ -809,7 +823,7 @@ endif
 
 
 # Uses faster math functions
-ifeq ($(FAST_MATH),1)
+ifeq (${FAST_MATH},1)
 	cc_CFLAGS	:= $(filter-out -O%,$(cc_CFLAGS)) $(cc_fast_CFLAGS)
 	common_CFLAGS	:= $(filter-out -O%,$(common_CFLAGS)) $(common_fast_CFLAGS)
 
@@ -827,7 +841,7 @@ endif
 
 
 # Show total elapsed time
-ifeq ($(TIME),1)
+ifeq (${TIME},1)
 	common_CPPFLAGS += -DNMFGPU_PROFILING_GLOBAL=1
 else
 	# Just in case it was not defined.
@@ -836,7 +850,7 @@ endif
 
 
 # Shows time elapsed on data transfers
-ifeq ($(TRANSF_TIME),1)
+ifeq (${TRANSF_TIME},1)
 	common_CPPFLAGS += -DNMFGPU_PROFILING_TRANSF=1
 else
 	# Just in case it was not defined.
@@ -845,7 +859,7 @@ endif
 
 
 # Shows time elapsed on kernel code.
-ifeq ($(KERNEL_TIME),1)
+ifeq (${KERNEL_TIME},1)
 	common_CPPFLAGS += -DNMFGPU_PROFILING_KERNELS=1
 else
 	# Just in case it was not defined.
@@ -854,7 +868,7 @@ endif
 
 
 # Shows time elapsed on MPI communications.
-ifeq ($(COMM_TIME),1)
+ifeq (${COMM_TIME},1)
 	common_CPPFLAGS += -DNMFGPU_PROFILING_COMM=1
 else
 	# Just in case it was not defined.
@@ -863,7 +877,7 @@ endif
 
 
 # Performs SYNCHRONOUS data transfers.
-ifeq ($(SYNC_TRANSF),1)
+ifeq (${SYNC_TRANSF},1)
 	common_CPPFLAGS += -DNMFGPU_SYNC_TRANSF=1
 else
 	# Just in case it was not defined.
@@ -872,7 +886,7 @@ endif
 
 
 # Fixed initial values for W and H. Useful for debugging.
-ifeq ($(FIXED_INIT),1)
+ifeq (${FIXED_INIT},1)
 	common_CPPFLAGS += -DNMFGPU_FIXED_INIT=1
 else
 	# Just in case it was not defined.
@@ -882,7 +896,7 @@ endif
 
 # Generates values from the CPU (host) random generator,
 # not from the GPU device.
-ifeq ($(CPU_RANDOM),1)
+ifeq (${CPU_RANDOM},1)
 	common_CPPFLAGS += -DNMFGPU_CPU_RANDOM=1
 else
 	# Just in case it was not defined.
@@ -891,7 +905,7 @@ endif
 
 
 # VERBOSE and DEBUG mode (prints A LOT of information)
-ifeq ($(DBG),1)
+ifeq (${DBG},1)
 	common_CPPFLAGS += -DNMFGPU_VERBOSE=1 -DNMFGPU_DEBUG=1
 
 	# Other DEBUG flags
@@ -925,26 +939,32 @@ endif
 
 
 # Verbose compiling commands
-ifeq ($(VERBOSE),2)
-	cmd_prefix :=
+ifeq (${VERBOSE},3)
 	nvcc_CFLAGS += --verbose
+	cmd_prefix :=
+	cmd_prefix2 :=
 else
-	ifeq ($(VERBOSE),1)
+	ifeq (${VERBOSE},2)
 		cmd_prefix :=
+		cmd_prefix2 :=
 	else
-		cmd_prefix := @
+		ifeq (${VERBOSE},1)
+			cmd_prefix :=
+		else
+			cmd_prefix := @
 
-		# Just in case it was not defined.
-		VERBOSE := 0
+			# Just in case it was not defined.
+			VERBOSE := 0
+		endif
+		cmd_prefix2 := @
 	endif
 endif
 
 
 # Shows extra warnings on code compiled by CC, including several "false-positive" warnings.
-ifeq ($(CC_WARN_VERBOSE),1)
-	cc_CFLAGS := $(subst -Wno-,-W,$(cc_CFLAGS))
-	common_CFLAGS := $(subst -Wno-,-W,$(common_CFLAGS))
-	# Already included in "cc_CFLAGS"
+ifeq (${CC_WARN_VERBOSE},1)
+	cc_CFLAGS := $(subst -Wno-,-W,$(cc_CFLAGS)) -Wextra
+	common_CFLAGS := $(subst -Wno-,-W,$(common_CFLAGS)) -Wextra
 else
 	# Just in case it was not defined.
 	CC_WARN_VERBOSE := 0
@@ -952,7 +972,7 @@ endif
 
 
 # Shows extra warnings on code compiled by NVCC, including many "false-positive" warnings.
-ifeq ($(NVCC_WARN_VERBOSE),1)
+ifeq (${NVCC_WARN_VERBOSE},1)
 	common_CFLAGS	:= $(subst -Wno-,-W,$(common_CFLAGS))
 	nvcc_CFLAGS	:= $(filter-out --disable-warnings,$(nvcc_CFLAGS))
 
@@ -964,7 +984,7 @@ endif
 
 
 # Shows kernel compilation warnings
-ifeq ($(PTXAS_WARN_VERBOSE),1)
+ifeq (${PTXAS_WARN_VERBOSE},1)
 	ptxas_CFLAGS += $(ptxas_warn_CFLAGS)
 else
 	# Just in case it was not defined.
@@ -973,7 +993,7 @@ endif
 
 
 # Keep intermediate code files.
-ifeq ($(KEEP_INTERMEDIATE),1)
+ifeq (${KEEP_INTERMEDIATE},1)
 	nvcc_CFLAGS += --keep
 else
 	# Just in case it was not defined.
@@ -989,11 +1009,11 @@ endif
 cuda_device_OBJS   := $(addprefix $(objdir)/,$(addsuffix .o,$(cuda_device_FILES)))
 
 # Flags for NVCC
-cuda_nvcc_CPPFLAGS  := $(nvcc_CPPFLAGS) $(common_CPPFLAGS) $(CPPFLAGS) $(NVCC_CPPFLAGS)
-cuda_nvcc_CFLAGS    := $(nvcc_CFLAGS) $(sm_CFLAGS) $(addprefix --compiler-options ,$(common_CFLAGS) $(CXXFLAGS)) $(NVCC_CFLAGS)
-cuda_nvcc_INCLUDES  := $(NVCC_INCLUDES) $(INCLUDES) --include-path $(includedir)
-export OPENCC_FLAGS := $(opencc_CFLAGS) $(filter-out $(not_in_opencc),$(common_CFLAGS) $(CXXFLAGS)) $(OPENCC_FLAGS)
-export PTXAS_FLAGS  := $(ptxas_CFLAGS) $(PTXAS_FLAGS)
+cuda_nvcc_CPPFLAGS  := $(nvcc_CPPFLAGS) $(common_CPPFLAGS) ${CPPFLAGS} ${NVCC_CPPFLAGS}
+cuda_nvcc_CFLAGS    := $(nvcc_CFLAGS) $(sm_CFLAGS) $(addprefix --compiler-options ,$(common_CFLAGS) ${CXXFLAGS}) ${NVCC_CFLAGS}
+cuda_nvcc_INCLUDES  := ${NVCC_INCLUDES} ${INCLUDES} --include-path $(includedir)
+export OPENCC_FLAGS := $(opencc_CFLAGS) $(filter-out $(not_in_opencc),$(common_CFLAGS) ${CXXFLAGS}) ${OPENCC_FLAGS}
+export PTXAS_FLAGS  := $(ptxas_CFLAGS) ${PTXAS_FLAGS}
 
 
 ######
@@ -1006,9 +1026,9 @@ iso_c_OBJS	:= $(addprefix $(objdir)/,$(addsuffix .o,$(iso_c_FILES)))
 cuda_host_OBJS	 := $(addprefix $(objdir)/,$(addsuffix .o,$(cuda_host_FILES)))
 
 # Flags for code compiled with CC
-c_CPPFLAGS := $(common_CPPFLAGS) $(CPPFLAGS)
-c_CFLAGS   := $(common_CFLAGS) $(cc_CFLAGS) $(CFLAGS)
-c_INCLUDES := $(INCLUDES) -I$(includedir)
+c_CPPFLAGS := $(common_CPPFLAGS) ${CPPFLAGS}
+c_CFLAGS   := $(common_CFLAGS) $(cc_CFLAGS) ${CFLAGS}
+c_INCLUDES := ${INCLUDES} -I$(includedir)
 
 # Additional flags for CUDA host code compiled with CC
 cuda_cc_INCLUDES := -I$(nvcc_includedir)
@@ -1025,8 +1045,8 @@ tools_DEPS	:= $(iso_c_OBJS)
 tools_CPPFLAGS	:= $(c_CPPFLAGS)
 tools_CFLAGS	:= $(c_CFLAGS)
 tools_INCLUDES	:= $(c_INCLUDES)
-tools_LDFLAGS	:= $(LDFLAGS) $(common_LDFLAGS)
-tools_LDLIBS	:= $(LDLIBS) -lm
+tools_LDFLAGS	:= ${LDFLAGS} $(common_LDFLAGS)
+tools_LDLIBS	:= ${LDLIBS} -lm
 
 
 # Main Program (single-GPU version)
@@ -1037,7 +1057,7 @@ single_gpu_CPPFLAGS	:= $(tools_CPPFLAGS) $(cuda_cc_CPPFLAGS)
 single_gpu_CFLAGS	:= $(tools_CFLAGS)
 single_gpu_INCLUDES	:= $(tools_INCLUDES) $(cuda_cc_INCLUDES)
 single_gpu_LDFLAGS	:= $(tools_LDFLAGS) -L$(nvcc_libdir)
-single_gpu_LDLIBS	:= $(LDLIBS) -lcublas -lcurand -lcudart -lm
+single_gpu_LDLIBS	:= ${LDLIBS} -lcublas -lcurand -lcudart -lm
 
 
 # Main Program (multi-GPU version)
@@ -1045,11 +1065,11 @@ multi_gpu_TARGET	:= $(bindir)/$(basename $(multi_gpu_FILE))
 multi_gpu_OBJ		:= $(objdir)/$(multi_gpu_FILE).o
 multi_gpu_SRC		:= $(srcdir)/$(multi_gpu_FILE)
 multi_gpu_DEPS		:= $(single_gpu_DEPS)
-multi_gpu_CPPFLAGS	:= -DNMFGPU_MPI=1 $(single_gpu_CPPFLAGS) $(MPICC_CPPFLAGS)
-multi_gpu_CFLAGS	:= $(single_gpu_CFLAGS) $(MPICC_CFLAGS)
-multi_gpu_INCLUDES	:= $(MPICC_INCLUDES) $(single_gpu_INCLUDES)
-multi_gpu_LDFLAGS	:= $(MPICC_LDFLAGS) $(single_gpu_LDFLAGS)
-multi_gpu_LDLIBS	:= $(MPICC_LDLIBS) $(single_gpu_LDLIBS)
+multi_gpu_CPPFLAGS	:= -DNMFGPU_MPI=1 $(single_gpu_CPPFLAGS) ${MPICC_CPPFLAGS}
+multi_gpu_CFLAGS	:= $(single_gpu_CFLAGS) ${MPICC_CFLAGS}
+multi_gpu_INCLUDES	:= ${MPICC_INCLUDES} $(single_gpu_INCLUDES)
+multi_gpu_LDFLAGS	:= ${MPICC_LDFLAGS} $(single_gpu_LDFLAGS)
+multi_gpu_LDLIBS	:= ${MPICC_LDLIBS} $(single_gpu_LDLIBS)
 
 
 ########################################
@@ -1087,20 +1107,17 @@ tools : $(tools_TARGETS)
 ########################################
 
 # Main Program (multi-GPU version, C++ code)
-$(multi_gpu_TARGET) : $(multi_gpu_DEPS) $(multi_gpu_OBJ) | check_sm_versions check_cuda_path
-	-$(cmd_prefix)mkdir -p $(@D)
+$(multi_gpu_TARGET) : $(multi_gpu_DEPS) $(multi_gpu_OBJ) | check_sm_versions check_cuda_path $(dir $(multi_gpu_TARGET))/.sentinel
 	$(cmd_prefix)${MPICC} $(multi_gpu_CPPFLAGS) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) $(multi_gpu_LDFLAGS) $^ $(multi_gpu_LDLIBS) -o $@
 
 
 # Main Program (single-GPU version, C++ code)
-$(single_gpu_TARGET) : $(single_gpu_DEPS) $(single_gpu_OBJ) | check_sm_versions check_cuda_path
-	-$(cmd_prefix)mkdir -p $(@D)
+$(single_gpu_TARGET) : $(single_gpu_DEPS) $(single_gpu_OBJ) | check_sm_versions check_cuda_path $(dir $(single_gpu_TARGET))/.sentinel
 	$(cmd_prefix)${CC} $(single_gpu_CPPFLAGS) $(single_gpu_CFLAGS) $(single_gpu_INCLUDES) $(single_gpu_LDFLAGS) $^ $(single_gpu_LDLIBS) -o $@
 
 
 # Tools
-$(tools_bindir)/% : $(tools_DEPS) $(tools_objdir)/%.c.o
-	-$(cmd_prefix)mkdir -p $(@D)
+$(tools_bindir)/% : $(tools_DEPS) $(tools_objdir)/%.c.o | $(tools_bindir)/.sentinel
 	$(cmd_prefix)${CC} $(tools_CPPFLAGS) $(tools_CFLAGS) $(tools_INCLUDES) $(tools_LDFLAGS) $^ $(tools_LDLIBS) -o $@
 
 
@@ -1109,37 +1126,47 @@ $(tools_bindir)/% : $(tools_DEPS) $(tools_objdir)/%.c.o
 #
 # NOTE/HACK:
 # Tricks for dependencies, thanks to:
-#	Auto-Dependency Generation
+#	Auto-Dependency Generation [retrieved on February 2015]
 #	http://make.mad-scientist.net/papers/advanced-auto-dependency-generation/
 ########################################
 
 # MPI code
-$(multi_gpu_OBJ) : $(multi_gpu_SRC)
-	-$(cmd_prefix)mkdir -p $(@D)
-	@${MPICC} $(multi_gpu_CPPFLAGS) $(multi_gpu_INCLUDES) -MF $@.d -MT $@ -MM $<
+$(multi_gpu_OBJ) : $(multi_gpu_SRC) | $(dir $(multi_gpu_OBJ))/.sentinel
+	$(cmd_prefix2)${MPICC} $(multi_gpu_CPPFLAGS) $(multi_gpu_INCLUDES) -MT $@ -MM $< > $@.d
 	$(cmd_prefix)${MPICC} $(multi_gpu_CPPFLAGS) $(multi_gpu_CFLAGS) $(multi_gpu_INCLUDES) -o $@ -c $<
 
 -include $(multi_gpu_OBJ).d
 
 
 # ISO-C and CUDA-host code
+
+$(iso_c_OBJS) : | $(addsuffix /.sentinel,$(dir $(iso_c_OBJS)))
+$(tools_OBJS) : | $(addsuffix /.sentinel,$(dir $(tools_OBJS)))
+$(cuda_host_OBJS) : | $(addsuffix /.sentinel,$(dir $(cuda_host_OBJS)))
+$(single_gpu_OBJ) : | $(addsuffix /.sentinel,$(dir $(single_gpu_OBJ)))
 $(cuda_host_OBJS) $(single_gpu_OBJ) : c_INCLUDES += $(cuda_cc_INCLUDES)
 $(cuda_host_OBJS) $(single_gpu_OBJ) : c_CPPFLAGS := $(cuda_cc_CPPFLAGS) $(c_CPPFLAGS)
 $(objdir)/%.c.o : $(srcdir)/%.c
-	-$(cmd_prefix)mkdir -p $(@D)
-	@${CC} $(c_CPPFLAGS) $(c_INCLUDES) -MF $@.d -MT $@ -MM $<
+	$(cmd_prefix2)${CC} $(c_CPPFLAGS) $(c_INCLUDES) -MT $@ -MM $< > $@.d
 	$(cmd_prefix)${CC} $(c_CPPFLAGS) $(c_CFLAGS) $(c_INCLUDES) -o $@ -c $<
 
 -include $(addsuffix .d,$(tools_DEPS) $(tools_OBJS))
 
 
 # CUDA device code
-$(objdir)/%.cu.o : $(srcdir)/%.cu | check_sm_versions check_cuda_path
-	-$(cmd_prefix)mkdir -p $(@D)
-	@${NVCC} $(cuda_nvcc_CPPFLAGS) $(cuda_nvcc_INCLUDES) --output-file $@.d --dependency-target-name $@ --generate-dependencies $<
+$(cuda_device_OBJS) : | check_sm_versions check_cuda_path $(addsuffix /.sentinel,$(dir $(cuda_device_OBJS)))
+$(objdir)/%.cu.o : $(srcdir)/%.cu
+	$(cmd_prefix2)${NVCC} $(cuda_nvcc_CPPFLAGS) $(cuda_nvcc_INCLUDES) --dependency-target-name $@ --generate-dependencies $< > $@.d
 	$(cmd_prefix)${NVCC} $(cuda_nvcc_CPPFLAGS) $(cuda_nvcc_CFLAGS) $(cuda_nvcc_INCLUDES) --output-file $@ --compile $<
 
 -include $(addsuffix .d,$(cuda_device_OBJS))
+
+
+# Makes directories
+# $(objdir)/$(matrix_io_dirname) $(tools_objdir) $(objdir) $(tools_bindir) $(bindir) :
+%/.sentinel :
+	-$(cmd_prefix2)$(call MKDIR_P,$(@D)) && touch $@
+
 
 
 ########################################
@@ -1162,7 +1189,7 @@ ifneq ($(SM_VERSION),)
 	@echo $(unknown_sm_version_message) >&2
 	@exit 1
 endif
-ifneq ($(SINGLE),1)
+ifneq (${SINGLE},1)
 ifneq ($(strip $(unsupported_sm_versions)),)
 	@echo $(unsupported_sm_versions_message) >&2
 endif
@@ -1176,7 +1203,7 @@ endif
 # Removes all directories containing executable and object files
 .PHONY: clobber distclean realclean
 clobber distclean realclean : clean
-	-$(cmd_prefix)${RM} -r $(bindir)
+	-$(cmd_prefix)${RMDIR} $(bindir)
 
 
 # Removes executable and object files generated by the corresponding target.
@@ -1186,12 +1213,13 @@ clobber_multi_gpu : clean_multi_gpu
 clobber_single_gpu : clean_single_gpu
 clobber_tools : clean_tools
 	-$(cmd_prefix)${RM} $($(clobber_target)_TARGETS) $($(clobber_target)_TARGET)
+	$(if $($(clobber_target)_bindir),-$(cmd_prefix)${RMDIR} $($(clobber_target)_bindir))
 
 
 # Removes the folder containing all object (".o") files. Executable code is not affected.
 .PHONY: clean
 clean :
-	-$(cmd_prefix)${RM} -r $(objdir)
+	-$(cmd_prefix)${RMDIR} $(objdir)
 
 
 # Removes object files generated by the corresponding target. Executable code is not affected.
@@ -1200,6 +1228,7 @@ clean_multi_gpu clean_single_gpu clean_tools : clean_target=$(patsubst clean_%,%
 clean_multi_gpu clean_single_gpu clean_tools :
 	-$(cmd_prefix)${RM} $($(clean_target)_OBJS) $($(clean_target)_OBJ) $($(clean_target)_DEPS) \
 	$(addsuffix .d,$($(clean_target)_OBJS) $($(clean_target)_OBJ) $($(clean_target)_DEPS))
+	$(if $($(clean_target)_objdir),-$(cmd_prefix)${RMDIR} $($(clean_target)_objdir))
 
 
 ########################################
@@ -1297,7 +1326,7 @@ help_message := "\n\
 		\t\t\t\tmake help_sm_versions\n\
 		\t\t\tThis parameter is currently ignored on the 'tools'\n\
 		\t\t\ttarget.\n\
-		\t\t\tDefault value(s): \"$(SM_VERSIONS)\".\n\
+		\t\t\tDefault value(s): \"${SM_VERSIONS}\".\n\
 	\n\
 	\tSINGLE:\t\tIf set to '1', uses single-precision data (ie, 'float').\n\
 		\t\t\tOtherwise, uses double-precision (i.e., 'double').\n\
@@ -1305,58 +1334,59 @@ help_message := "\n\
 		\t\t\tarithmetic operations are demoted to single precision.\n\
 		\t\t\tIn addition, accesses to shared memory will be split\n\
 		\t\t\tinto two requests with bank conflicts.\n\
-		\t\t\tDefault value: '$(SINGLE)'.\n\
+		\t\t\tDefault value: '${SINGLE}'.\n\
 	\n\
 	\tUNSIGNED:\tUses unsigned integers for matrix dimensions, which may\n\
 		\t\t\tgenerate faster code. Nevertheless, please note that\n\
 		\t\t\tCUBLAS library functions use SIGNED-integer parameters.\n\
 		\t\t\tTherefore, matrix dimensions must not overflow such data\n\
 		\t\t\ttype. An error message will be shown if this happens.\n\
-		\t\t\tDefault value: '$(UNSIGNED)'.\n\
+		\t\t\tDefault value: '${UNSIGNED}'.\n\
 	\n\
-	\tFAST_MATH:\tUses less-precise faster math functions. Default: '$(FAST_MATH)'.\n\
+	\tFAST_MATH:\tUses less-precise faster math functions. Default: '${FAST_MATH}'.\n\
 	\n\
-	\tTIME:\t\tShows total elapsed time. Default value: '$(TIME)'.\n\
+	\tTIME:\t\tShows total elapsed time. Default value: '${TIME}'.\n\
 	\n\
-	\tTRANSF_TIME:\tShows time elapsed on data transfers. Default: '$(TRANSF_TIME)'.\n\
+	\tTRANSF_TIME:\tShows time elapsed on data transfers. Default: '${TRANSF_TIME}'.\n\
 	\n\
-	\tKERNEL_TIME:\tShows time elapsed on kernel code. Default value: '$(KERNEL_TIME)'.\n\
+	\tKERNEL_TIME:\tShows time elapsed on kernel code. Default value: '${KERNEL_TIME}'.\n\
 	\n\
-	\tCOMM_TIME:\tShows time elapsed on MPI communications. Default: '$(COMM_TIME)'.\n\
+	\tCOMM_TIME:\tShows time elapsed on MPI communications. Default: '${COMM_TIME}'.\n\
 	\n\
-	\tSYNC_TRANSF:\tPerforms SYNCHRONOUS data transfers. Default value: '$(SYNC_TRANSF)'.\n\
+	\tSYNC_TRANSF:\tPerforms SYNCHRONOUS data transfers. Default value: '${SYNC_TRANSF}'.\n\
 	\n\
 	\tFIXED_INIT:\tMakes use of \"random\" values from a fixed seed.\n\
-		\t\t\tDefault value: '$(FIXED_INIT)'.\n\
+		\t\t\tDefault value: '${FIXED_INIT}'.\n\
 	\n\
 	\tCPU_RANDOM:\tGenerates random values from the CPU host, not from the\n\
-		\t\t\tGPU device. Default value: '$(CPU_RANDOM)'.\n\
+		\t\t\tGPU device. Default value: '${CPU_RANDOM}'.\n\
 	\n\
 	\tDBG:\t\tVERBOSE and DEBUG mode (prints A LOT of information).\n\
 		\t\t\tIt implies CC_WARN_VERBOSE, NVCC_WARN_VERBOSE, and\n\
 		\t\t\tPTXAS_WARN_VERBOSE set to '1'.\n\
-		\t\t\tDefault value: '$(DBG)'.\n\
+		\t\t\tDefault value: '${DBG}'.\n\
 	\n\
 	\tVERBOSE:\tCommand-line verbosity level. Valid values are '0'\n\
-		\t\t\t(none), '1' (shows make commands), and '2' (shows make\n\
-		\t\t\tand internal NVCC commands). Default value: '$(VERBOSE)'.\n\
+		\t\t\t(none), '1' (shows make compilation commands), '2'\n\
+		\t\t\t(shows all make commands), and '3' (shows all make and\n\
+		\t\t\tNVCC commands). Default value: '${VERBOSE}'.\n\
 	\n\
 	\tCC_WARN_VERBOSE:\n\
 		\t\t\tShows extra warning messages on programs compiled with\n\
 		\t\t\tCC. Please note that it may include \"false-positive\"\n\
-		\t\t\twarnings. Default value: '$(CC_WARN_VERBOSE)'.\n\
+		\t\t\twarnings. Default value: '${CC_WARN_VERBOSE}'.\n\
 	\n\
 	\tNVCC_WARN_VERBOSE:\n\
 		\t\t\tShows extra warning messages on programs compiled with\n\
 		\t\t\tNVCC. Please note that it may include \"false-positive\"\n\
 		\t\t\twarnings. It implies PTXAS_WARN_VERBOSE set to '1'.\n\
-		\t\t\tDefault value: '$(NVCC_WARN_VERBOSE)'.\n\
+		\t\t\tDefault value: '${NVCC_WARN_VERBOSE}'.\n\
 	\n\
 	\tPTXAS_WARN_VERBOSE:\n\
-		\t\t\tShows PTX-specific compilation warnings. Default: '$(PTXAS_WARN_VERBOSE)'.\n\
+		\t\t\tShows PTX-specific compilation warnings. Default: '${PTXAS_WARN_VERBOSE}'.\n\
 	\n\
 	\tKEEP_INTERMEDIATE:\n\
-		\t\t\tKeeps temporary files generated by NVCC. Default: '$(KEEP_INTERMEDIATE)'.\n\
+		\t\t\tKeeps temporary files generated by NVCC. Default: '${KEEP_INTERMEDIATE}'.\n\
 	\n\
 	\n\
  Default compilers can be overridden with following parameters or environment\n\
@@ -1540,7 +1570,7 @@ help_sm_versions_message := "\n\
  \n\
  Current default value(s):\n\
  \n\
-	\t\"$(subst $(space),  ,$(SM_VERSIONS))\",\n\
+	\t\"$(subst $(space),  ,${SM_VERSIONS})\",\n\
  \n\
  which will be translated into the following argument(s) for NVCC:\n\
  \n\
