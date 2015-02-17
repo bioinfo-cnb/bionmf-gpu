@@ -1089,17 +1089,17 @@ all_programs : all multi_gpu
 
 # Compiles the single-GPU version
 .PHONY: single_gpu single_GPU
-single_gpu single_GPU : $(single_gpu_TARGET)
+single_gpu single_GPU : compiling_single_gpu_message $(single_gpu_TARGET)
 
 
 # Compiles the multi-GPU version
 .PHONY: multi_gpu multi_GPU
-multi_gpu multi_GPU : $(multi_gpu_TARGET)
+multi_gpu multi_GPU : compiling_multi_gpu_message $(multi_gpu_TARGET)
 
 
 # Compiles the utility programs
 .PHONY: tools
-tools : $(tools_TARGETS)
+tools : compiling_tools_message $(tools_TARGETS)
 
 
 ########################################
@@ -1254,7 +1254,7 @@ help_tools help_Tools :
 
 
 ########################################
-# Messages
+# Help Messages
 ########################################
 
 # Main help message
@@ -1626,5 +1626,23 @@ help_tools_message := "\n\
 	" "  WARNING: Output matrix will NOT contain any tag (i.e., neither of row\n\
 	" "  labels, column headers nor a description string), just numeric data.\n"
 
+
+########################################
+# Compiling messages
+########################################
+
+.PHONY: compiling_multi_gpu_message
+compiling_multi_gpu_message :
+	@echo "\nCompiling the multi-GPU version for the following GPU architecture(s): $(SM_VERSIONS) ..."
+
+
+.PHONY: compiling_single_gpu_message
+compiling_single_gpu_message :
+	@echo "\nCompiling the single-GPU version for the following GPU architecture(s): $(SM_VERSIONS) ..."
+
+
+.PHONY: compiling_tools_message
+compiling_tools_message :
+	@echo "\nCompiling the utility programs..."
 
 ########################################
