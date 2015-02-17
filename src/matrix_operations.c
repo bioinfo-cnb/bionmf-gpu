@@ -248,7 +248,7 @@ index_t gpu_max_height( index_t pitch )
 
 	// ---------------------------------
 
-	// The "height" in a kernel may be any of both input-matrix dimensions.
+	// The "height" in a kernel may be any of both input matrix dimensions.
 	index_t max_height = MIN( matrix_max_non_padded_dim, matrix_max_pitch );
 
 	// ---------------------------------

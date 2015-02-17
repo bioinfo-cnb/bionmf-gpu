@@ -792,7 +792,7 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
 		return 0;
 	}
 
-	// Maximum "height" on GPU kernels. NOTE: It applies to both input-matrix dimensions.
+	// Maximum "height" on GPU kernels. NOTE: It applies to both input matrix dimensions.
 	index_t l_max_dim = gpu_max_height( Kp );
 
 	// Maximum number of items on GPU kernels (global variable).
@@ -811,7 +811,7 @@ size_t initialize_GPU( index_t dev_id, index_t factorization_rank )
 	 */
 	size_t const l_max_nitems = gpu_max_num_items * mappedHostMemory * (num_processes == 1);
 
-	// Finally, updates input-matrix limits for the current GPU device.
+	// Finally, updates the input matrix limits for the current GPU device.
 	if ( set_matrix_limits( memory_alignment, l_max_dim, l_max_nitems ) != EXIT_SUCCESS ) {
 		print_error( error_shown_by_all, "Invalid data alignment (" PRI_IDX ") or matrix dimension limit (" PRI_IDX
 				") on device %" PRI_IDX ".\n", memory_alignment, l_max_dim, dev_id );
