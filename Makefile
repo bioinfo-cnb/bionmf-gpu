@@ -136,8 +136,8 @@
 #
 #	VERBOSE:	Command-line verbosity level. Valid values are '0'
 #			(none), '1' (shows make compilation commands), '2'
-#			(shows all make commands), and '3' (shows all make and
-#			NVCC commands).
+#			(shows all make and shell commands), and '3' (shows all
+#			make, shell, and NVCC commands).
 #
 #	CC_WARN_VERBOSE:
 #			Shows extra warning messages on programs compiled with
@@ -913,11 +913,17 @@ ifeq (${DBG},1)
 	# Verbosity level
 	common_CPPFLAGS += -DNMFGPU_VERBOSE_2=1
 
-	# # Data transfers
+	# # Dumps all data transfers
 	# common_CPPFLAGS += -DNMFGPU_DEBUG_TRANSF=1
 
+	# # Forces a blockwise processing:
 	# common_CPPFLAGS += -DNMFGPU_FORCE_BLOCKS=1
+
+	# # Just shows blockwise-processing information and exits.
+	# # No actual processing is performed
 	# common_CPPFLAGS += -DNMFGPU_TEST_BLOCKS=1
+
+	# # Dumps intermediate data from the matrix reduction routine.
 	# common_CPPFLAGS += -DNMFGPU_DEBUG_REDUCT=1
 
 	# # Flags for I/O Debug & testing.
@@ -1368,8 +1374,8 @@ help_message := "\n\
 	\n\
 	\tVERBOSE:\tCommand-line verbosity level. Valid values are '0'\n\
 		\t\t\t(none), '1' (shows make compilation commands), '2'\n\
-		\t\t\t(shows all make commands), and '3' (shows all make and\n\
-		\t\t\tNVCC commands). Default value: '${VERBOSE}'.\n\
+		\t\t\t(shows all make and shell commands), and '3' (shows all\n\
+		\t\t\tmake, shell, and NVCC commands). Default value: '${VERBOSE}'.\n\
 	\n\
 	\tCC_WARN_VERBOSE:\n\
 		\t\t\tShows extra warning messages on programs compiled with\n\
