@@ -3,7 +3,7 @@
  *
  * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
- * Copyright (C) 2011-2014:
+ * Copyright (C) 2011-2015:
  *
  *      Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
  *      Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
@@ -43,7 +43,7 @@
    <meta name="language" content="en"/>
    <meta name="copyright" content="(C) 2011-2014 Edgardo Mejia-Roa (edgardomejia@fis.ucm.es). ArTeCS Group, Complutense University of Madrid (UCM), Spain."/>
    <meta http-equiv="content-Type" content="text/html; charset=UTF-8"/>
-   <meta http-equiv="last-modified" content="2015/01/03" scheme="YYYY/MM/DD"/>
+   <meta http-equiv="last-modified" content="2015/02/20" scheme="YYYY/MM/DD"/>
    <link rel="stylesheet" type="text/css" href="doc/styles.css"/>
    <title>NMF-mGPU: Non-negative Matrix Factorization on multi-GPU systems</title>
  </head>
@@ -74,7 +74,7 @@ Finally, *NMF-mGPU* also provides a *multi-GPU* version that makes use of multip
 
 If you use this software, please cite the following work:
 
-   > E. Mejía-Roa, D. Tabas-Madrid, J. Setoain, C. García, F. Tirado and A. Pascual-Montano. **NMF-mGPU: Non-negative matrix factorization on multi-GPU systems**. *BMC Bioinformatics* 2015, **16**:43. doi:10.1186/s12859-015-0485-4 [<http://www.biomedcentral.com/1471-2105/16/43>]
+   > E. Mejía-Roa, D. Tabas-Madrid, J. Setoain, C. García, F. Tirado and A. Pascual-Montano. **NMF-mGPU: Non-negative matrix factorization on multi-GPU systems**. *BMC Bioinformatics* 2015, **16**:43. doi:10.1186/s12859-015-0485-4 \[<http://www.biomedcentral.com/1471-2105/16/43>]
 
   
 &nbsp;
@@ -92,8 +92,9 @@ Basic steps:
    2. [Download, Decompress and Compile *NMF-mGPU*](#compile).
    3. [Example of Use](#example).
 
-The full [installation guide](doc/installation_guide.txt.md) can be found in the `doc/` folder.  
+The full [installation guide](doc/installation_guide.txt.md) can be found in the `doc/` folder. Similarly, please read the [user guide](doc/user_guide.txt.md) for information of program usage, and a detailed description of the analysis process.  
 &nbsp;
+
 
 
 <!-- ==================== -->
@@ -173,7 +174,7 @@ The full [installation guide](doc/installation_guide.txt.md) can be found in the
 Once the file has been unzipped, please open a Terminal in the generated folder and execute the following command:
 
          $>  source  env.sh  <CUDA_PATH>
-where "*\<CUDA_PATH>*" denotes the path to your CUDA Toolkit (e.g., `/usr/local/cuda-5.5` or `/Developer/NVIDIA/cuda-5.5`).
+where *`<CUDA_PATH>`* denotes the path to your CUDA Toolkit (e.g., `/usr/local/cuda-5.5` or `/Developer/NVIDIA/cuda-5.5`).
 
 
 To compile the program, just execute:
@@ -195,11 +196,14 @@ The resulting executable file, `NMF_GPU`, will be stored in the `bin/` folder.
 &nbsp;
 
 
-Finally, to compile the *multi-GPU* version (process not performed by default), just execute:
+### Multi-GPU version:
+
+To compile the *multi-GPU* version (process *not* performed by default), just execute:
 
          $>  make  multi_gpu  MPICC=<path_to_mpi>/bin/mpicc
 
-Please make sure your MPI Library is properly installed (i.e., environment variables, etc). Similarly as above, the resulting executable file, `NMF_mGPU` is stored in the `bin/` folder.
+Please **make sure that your MPI library is properly installed** (i.e., environment variables, etc). Similarly as above, the resulting executable file, `NMF_mGPU` is stored in the `bin/` folder.
+
 
 
 *****************************
@@ -257,7 +261,7 @@ After completion, both output matrices, **W** and **H**, are stored in the same 
             $>  bin/NMF_GPU  -h
      In that case, any other argument will be ignored.
 
-   * On any error, please check first the [Troubleshooting section](doc/installation_guide.md#troubleshooting) in our [Installation Guide](doc/installation_guide.md), located in the `doc/` folder.
+   * On any error, please check first the [troubleshooting section](doc/installation_guide.md#troubleshooting) in the [installation guide](doc/installation_guide.md), located in the `doc/` folder.
 
 
 <!-- ==================== -->
