@@ -2,7 +2,7 @@
  *
  * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
- * Copyright (C) 2011-2014:
+ * Copyright (C) 2011-2015:
  *
  *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
  *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
@@ -139,8 +139,15 @@ static int print_file_converter_help( char const *restrict const execname )
 				"Usage:\n\t%s <filename> [ -b <native_format> ] [ -cr ] [ -e <native_format> ]\n\t%s -h\n\n",
 				execname, execname );
 
-	if ( help_matrix() != EXIT_SUCCESS )
+
+	if ( append_printed_message( shown_by_all,
+				"\n<filename>\n\tInput data matrix (mandatory if 'help' is not requested).\n\n" ) != EXIT_SUCCESS )
+		status = EXIT_SUCCESS;
+
+
+	if ( help_file_formats() != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
+
 
 	if ( append_printed_message( shown_by_all, "\n-h,-H\tPrints this help message.\n\n" ) != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
@@ -196,8 +203,8 @@ int main( int argc, char *argv[] )
 	char const *restrict const filename = arguments.filename;	// Input data filename.
 	bool const numeric_hdrs = arguments.numeric_hdrs;		// Has numeric columns headers.
 	bool const numeric_lbls = arguments.numeric_lbls;		// Has numeric row labels.
-	index_t const is_bin = arguments.is_bin;			// Input  file is binary (native or non-native format).
-	index_t const save_bin = arguments.save_bin;			// Output file is binary (native or non-native format).
+	file_fmt_t const input_file_fmt = arguments.input_file_fmt;	// Input  file format.
+	file_fmt_t const output_file_fmt = arguments.output_file_fmt;	// Output file format.
 
 	// ----------------------------------------
 
@@ -218,7 +225,8 @@ int main( int argc, char *argv[] )
 
 	// Loads the file.
 
-	status = matrix_load( filename, numeric_hdrs, numeric_lbls, is_bin, &matrix, &nrows, &ncols, &pitch, &mt );
+	status = matrix_load( filename, numeric_hdrs, numeric_lbls, input_file_fmt, &matrix, &nrows, &ncols, &pitch, &mt );
+
 	if ( status != EXIT_SUCCESS ) {
 		print_error( error_shown_by_all, "Error reading '%s'\n", filename );
 		return EXIT_FAILURE;
@@ -232,6 +240,7 @@ int main( int argc, char *argv[] )
 		bool const real_data = true;
 
 		status = matrix_show( matrix, nrows, ncols, pitch, real_data, transpose, dbg_shown_by_all, &mt );
+
 		if ( status != EXIT_SUCCESS ) {
 			print_error( error_shown_by_all, "Error showing '%s'\n", filename );
 			matrix_clean( matrix, mt );
@@ -242,26 +251,23 @@ int main( int argc, char *argv[] )
 
 	// --------------------------------------------------------------------- //
 
-	/* Output filename.
-	 *
-	 * save_bin: Saves output matrix to a binary file.
-	 *	== 0: Disabled. Saves the file as ASCII text.
-	 *	== 1: Uses "non-native" format (i.e., double-precision data, and "unsigned int" for dimensions).
-	 *	 > 1: Uses "native" or raw format (i.e., the compiled types for matrix data and dimensions).
-	 */
+	// Output filename
 
-	char *restrict const filename_str = malloc( (strlen(filename) + 16) * sizeof(char) );
+	// File extension:
+	char const *restrict const p_file_ext = file_extension[ output_file_fmt ];
+
+	char *restrict const filename_str = malloc( (strlen(filename) + strlen(p_file_ext)) * sizeof(char) );
 	if ( ! filename_str ) {
-		print_errnum( sys_error_shown_by_all,errno, "Error setting output filename: malloc(filename_str)" );
+		print_errnum( sys_error_shown_by_all, errno, "Error setting output filename: malloc(filename_str)" );
 		matrix_clean( matrix, mt );
 		return EXIT_FAILURE;
 	}
 
 	errno = 0;	// Resets errno.
-	int const conv = sprintf( filename_str, "%s.%s", filename, ( (save_bin > 1) ? ("native.dat") : ( save_bin ? "dat" : "txt" ) ) );
+	int const conv = sprintf( filename_str, "%s%s", filename, p_file_ext );
 
 	if ( conv <= 0 ) {
-		print_errnum( sys_error_shown_by_all,errno, "Error setting output filename (sprintf)", filename );
+		print_errnum( sys_error_shown_by_all, errno, "Error setting output filename (sprintf)" );
 		free( filename_str ); matrix_clean( matrix, mt );
 		return EXIT_FAILURE;
 	}
@@ -274,7 +280,7 @@ int main( int argc, char *argv[] )
 
 	bool const verbose = true;
 
-	status = matrix_save( filename_str, save_bin, (real const *restrict) matrix, nrows, ncols, pitch, transpose, &mt, verbose );
+	status = matrix_save( filename_str, output_file_fmt, (real const *restrict) matrix, nrows, ncols, pitch, transpose, &mt, verbose );
 
 	free( filename_str );
 

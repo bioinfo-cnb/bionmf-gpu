@@ -2,7 +2,7 @@
  *
  * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
- * Copyright (C) 2011-2014:
+ * Copyright (C) 2011-2015:
  *
  *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
  *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
@@ -155,19 +155,19 @@ static int print_generate_matrix_help( char const *restrict const execname )
 	// ---------------------------
 
 	status = print_message( shown_by_all, "Tool to generate (in CPU) a matrix with random values\n\n"
-				"Usage:\n\t%s <filename> <rows> <columns> [ -e <native_format> ] [ <max_value> ]\n"
+				"Usage:\n\t%s <output_filename> <rows> <columns> [ -e <native_format> ] [ <max_value> ]\n"
 				"\t%s -h\n\n", execname, execname );
 
-	if ( help_matrix() != EXIT_SUCCESS )
+	if ( help_file_formats() != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
 
 	if ( append_printed_message( shown_by_all, "\nNote: Some of the previous options are read for compatibility reasons, "
 				"but they are ignored by the program.\n\n"
-				"<rows> <columns>\n\tOutput matrix dimensions (both mandatory if 'help' is not requested).\n"
-				"\tNote that <rows> x <columns> must be less than, or equal to, %" PRI_IDX ".\n\n"
-				"<max_value>\n\tRange for random values: [0..<max_value>]. "
-				"Valid values are in range (%g .. %g). The default is %g\n\n"
-				"-h,-H\tPrints this help message.\n\n", IDX_MAX, DEFAULT_MINRAND, R_MAX, DEFAULT_MAXRAND ) != EXIT_SUCCESS )
+				"<output_filename>\n\tOutput file (mandatory if 'help' is not requested).\n\n"
+				"<rows> <columns>\n\tOutput matrix dimensions (both mandatory if 'help' is not requested).\n\n"
+				"<max_value>\n\tRange for random values: [0.0 ... <max_value>].\n"
+				"\tValid values are in range (%g ... %g). The default is %g\n\n"
+				"-h,-H\tPrints this help message.\n\n", DEFAULT_MINRAND, R_MAX, DEFAULT_MAXRAND ) != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
 
 	return status;
@@ -333,7 +333,7 @@ int main( int argc, char *argv[] )
 		return print_generate_matrix_help( argv[0] );
 
 	char const *restrict const filename = arguments.filename;	// Output filename
-	index_t const save_bin = arguments.save_bin;			// Output file is binary (native or non-native format).
+	file_fmt_t const output_file_fmt = arguments.output_file_fmt;	// Output file format.
 	index_t const idx_other_args = arguments.idx_other_args;	// Index in argv[] with additional arguments.
 
 	// ----------------------------------------
@@ -405,7 +405,7 @@ int main( int argc, char *argv[] )
 	bool const verbose = true;
 	struct matrix_tags_t const mt = new_empty_matrix_tags();
 
-	status = matrix_save( filename, save_bin, matrix, nrows, ncols, pitch, transpose, &mt, verbose );
+	status = matrix_save( filename, output_file_fmt, matrix, nrows, ncols, pitch, transpose, &mt, verbose );
 
 	free( matrix );
 

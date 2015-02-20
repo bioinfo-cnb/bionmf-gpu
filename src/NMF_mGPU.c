@@ -2,7 +2,7 @@
  *
  * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
- * Copyright (C) 2011-2014:
+ * Copyright (C) 2011-2015:
  *
  *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
  *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
@@ -664,7 +664,8 @@ static int get_dim_vectors( char const *restrict matrix_name, index_t R, index_t
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeric_lbls, index_t isBinary, struct matrix_tags_t *restrict mt )
+static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeric_lbls, file_fmt_t input_file_fmt,
+			struct matrix_tags_t *restrict mt )
 {
 
 	// Checks for NULL parameters
@@ -691,7 +692,7 @@ static int init_V( const char *restrict filename, bool numeric_hdrs, bool numeri
 	real *restrict matrix = NULL;
 	struct matrix_tags_t l_mt = new_empty_matrix_tags();
 
-	status = matrix_load( filename, numeric_hdrs, numeric_lbls, isBinary, &matrix, &nrows, &ncols, &pitch, &l_mt );
+	status = matrix_load( filename, numeric_hdrs, numeric_lbls, input_file_fmt, &matrix, &nrows, &ncols, &pitch, &l_mt );
 	if ( status != EXIT_SUCCESS ) {
 		print_error( error_shown_by_all, "Error reading input file.\n" );
 		return EXIT_FAILURE;
@@ -2418,7 +2419,7 @@ static int nmf( index_t nIters, index_t niter_test_conv, index_t stop_threshold 
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE
  */
-static int write_matrices( const char *restrict filename, index_t save_bin, struct matrix_tags_t mt )
+static int write_matrices( const char *restrict filename, file_fmt_t output_file_fmt, struct matrix_tags_t mt )
 {
 
 	int status = EXIT_SUCCESS;
@@ -2456,7 +2457,10 @@ static int write_matrices( const char *restrict filename, index_t save_bin, stru
 
 	// Output filenames
 
-	char *restrict const filename_out = (char *restrict) malloc( (strlen(filename) + 6)*sizeof(char) );
+	// File extension:
+	char const *restrict const p_file_ext = file_extension[ output_file_fmt ];
+
+	char *restrict const filename_out = (char *restrict) malloc( (strlen(filename) + strlen(p_file_ext))*sizeof(char) );
 	if ( ! filename_out ) {
 		print_errnum( sys_error_shown_by_all, errno, "Error allocating memory for output filename" );
 		clean_tag( tag_factors );
@@ -2468,7 +2472,7 @@ static int write_matrices( const char *restrict filename, index_t save_bin, stru
 	// Matrix W
 
 	errno = 0;
-	if ( sprintf( filename_out, "%s_W.txt", filename ) <= 0 ) {
+	if ( sprintf( filename_out, "%s_W%s", filename, p_file_ext ) <= 0 ) {
 		print_errnum( sys_error_shown_by_all, errno, "Error setting output filename for matrix W" );
 		free( filename_out );
 		clean_tag( tag_factors );
@@ -2477,7 +2481,7 @@ static int write_matrices( const char *restrict filename, index_t save_bin, stru
 
 	transpose = false;
 	verbose = true;
-	status = matrix_save( filename_out, save_bin, W, N, K, Kp, transpose, &mt_W, verbose );
+	status = matrix_save( filename_out, output_file_fmt, W, N, K, Kp, transpose, &mt_W, verbose );
 	if ( status != EXIT_SUCCESS ) {
 		print_error( error_shown_by_all, "Error writing matrix W.\n" );
 		free( filename_out );
@@ -2490,7 +2494,7 @@ static int write_matrices( const char *restrict filename, index_t save_bin, stru
 	// Matrix H
 
 	errno = 0;
-	if ( sprintf( filename_out, "%s_H.txt", filename ) <= 0 ) {
+	if ( sprintf( filename_out, "%s_H%s", filename, p_file_ext ) <= 0 ) {
 		print_errnum( sys_error_shown_by_all, errno, "Error setting output filename for matrix H" );
 		free( filename_out );
 		clean_tag( tag_factors );
@@ -2499,7 +2503,7 @@ static int write_matrices( const char *restrict filename, index_t save_bin, stru
 
 	transpose = true;
 	verbose = false;
-	status = matrix_save( filename_out, save_bin, H, M, K, Kp, transpose, &mt_H, verbose );
+	status = matrix_save( filename_out, output_file_fmt, H, M, K, Kp, transpose, &mt_H, verbose );
 	if ( status != EXIT_SUCCESS )
 		print_error( error_shown_by_all, "Error writing matrix H.\n" );
 
@@ -2678,8 +2682,8 @@ int main( int argc, char *argv[] )
 	char const *restrict const filename = arguments.filename;	// Input filename
 	bool const numeric_hdrs = arguments.numeric_hdrs;		// Has numeric columns headers.
 	bool const numeric_lbls = arguments.numeric_lbls;		// Has numeric row labels.
-	index_t const is_bin = arguments.is_bin;			// Input  file is binary (native or non-native format).
-	index_t const save_bin = arguments.save_bin;			// Output file is binary (native or non-native format).
+	file_fmt_t const input_file_fmt = arguments.input_file_fmt;	// Input  file format.
+	file_fmt_t const output_file_fmt = arguments.output_file_fmt;	// Output file format.
 	K = arguments.k;						// Factorization rank.
 	Kp = arguments.kp;						// Padded factorization rank.
 	index_t const nIters = arguments.nIters;			// Maximum number of iterations per run.
@@ -2722,7 +2726,7 @@ int main( int argc, char *argv[] )
 
 	struct matrix_tags_t mt = new_empty_matrix_tags();
 
-	status = init_V( filename, numeric_hdrs, numeric_lbls, is_bin, &mt );
+	status = init_V( filename, numeric_hdrs, numeric_lbls, input_file_fmt, &mt );
 	if ( status != EXIT_SUCCESS ) {
 		shutdown_GPU();
 		MPI_Abort( MPI_COMM_WORLD, EXIT_FAILURE );
@@ -2894,7 +2898,7 @@ int main( int argc, char *argv[] )
 	// Writes output matrices.
 
 	if ( ! process_id ) {
-		status = write_matrices( filename, save_bin, mt );
+		status = write_matrices( filename, output_file_fmt, mt );
 
 		if ( status != EXIT_SUCCESS ) {
 			clean_matrix_tags( mt );

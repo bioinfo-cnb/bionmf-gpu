@@ -2,7 +2,7 @@
  *
  * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
- * Copyright (C) 2011-2014:
+ * Copyright (C) 2011-2015:
  *
  *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
  *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
@@ -144,6 +144,7 @@
  *
  *********************************************************/
 
+#include "common_defaults.h"	/* Constants */
 #include "common.h"
 #include "index_type.h"
 #include "real_type.h"
@@ -163,42 +164,6 @@
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
-
-/* Constants */
-
-// Fixed seed for the random-values generator.
-#ifndef FIXED_SEED
-	#define FIXED_SEED ( INDEX_C(3) )
-#endif
-
-// Default alignment for data on memory.
-#ifndef DEFAULT_MEMORY_ALIGNMENT		/* 64 bytes, expressed in real-type items. */
-	#define DEFAULT_MEMORY_ALIGNMENT ( (index_t) ( 64 / sizeof(real) ) )
-#endif
-
-// Default values of some input parameters.
-#ifndef DEFAULT_K
-	#define DEFAULT_K ( INDEX_C(2) )
-#endif
-
-#ifndef DEFAULT_NITERS
-	#define DEFAULT_NITERS ( INDEX_C(2000) )
-#endif
-
-#ifndef DEFAULT_NITER_CONV
-	#define DEFAULT_NITER_CONV ( INDEX_C(10) )
-#endif
-
-#ifndef DEFAULT_STOP_THRESHOLD
-	#define DEFAULT_STOP_THRESHOLD ( INDEX_C(40) )
-#endif
-
-#ifndef DEFAULT_GPU_DEVICE
-	#define DEFAULT_GPU_DEVICE ( INDEX_C(0) )
-#endif
-
-// ---------------------------------------------
-// ---------------------------------------------
 
 /* Global variables */
 
@@ -237,6 +202,9 @@ real *restrict W = NULL;
 real *restrict H = NULL;
 real *restrict Vcol = NULL;	// Block of NpP rows from input matrix V.
 real *Vrow = NULL;		// Block of MpP columns from input matrix V.
+
+// File extension for output files.
+char const *restrict const file_extension[ 3 ] = { TEXT_FILE_EXT, NON_NATIVE_BIN_FILE_EXT, NATIVE_BIN_FILE_EXT };
 
 // ---------------------------------------------
 
@@ -601,36 +569,36 @@ int flush_output( bool permanently )
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
- * Prints all arguments regarding the input matrix (e.g., matrix dimensions and format).
+ * Prints all arguments regarding the file formats.
  *
  * This message is printed by process 0 only.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int help_matrix( void )
+int help_file_formats( void )
 {
 
 	int const status = append_printed_message( shown_by_all,
 
-		"\n<filename>\n\tInput data matrix (mandatory if 'help' is not requested).\n\n"
-
-		"-B,-b <native>\n\tBinary input file in \"native\" ('-b 1') or \"non-native\" format ('-b 0').\n"
-			"\tIn NON-native format, the file is read assuming it was written using double-precision data, and unsigned "
-			"integers for matrix\n\tdimensions, regardless how the program was compiled.\n"
-			"\tOtherwise, in \"native\" format, the file is read using the data types specified at compilation "
-			"(e.g., floats and signed int).\n\tPlease note that \"native\" mode skips most error checking and information messages.\n"
+		"\n-B,-b <native>\n\tInput file is binary, in \"native\" ('-b 1') or \"non-native\" format ('-b 0').\n"
+			"\tIn NON-native format, the file is read assuming it was written using little-endian double-precision data,\n"
+			"\tand 32-bits unsigned integers for matrix dimensions, regardless how the program was compiled. The file\n"
+			"\tmust also contain a \"binary signature\".\n"
+			"\tOtherwise, in \"native\" or raw format, the file is read using the native endiannes and the data types\n"
+			"\tspecified at compilation. Please note this mode *SKIPS* most error checking and information messages.\n"
 			"\tThe default (if '-b' is not specified) is to read input data from an ASCII-text file.\n\n"
 
 		"-C,-c\tInput text file has numeric column headers (disabled by default, ignored for binary files).\n\n"
 
 		"-R,-r\tInput text file has numeric row labels (disabled by default, ignored for binary files).\n\n"
 
-		"-E,-e <native>\n\tWrites output files as \"native\" ('-e 1') or \"non-native\" binary format ('-e 0').\n"
-			"\tIn NON-native format, the file is written using double-precision data, and unsigned integers for matrix dimensions, "
-			"regardless\n\thow the program was compiled.\n"
-			"\tOtherwise, in \"native\" or raw format, the file is written using the data types specified at compilation "
-			"(e.g., floats and signed int).\n\tPlease note that native mode skips error checking, information messages, and "
-			"data transformation (e.g., matrix transposing).\n"
+		"-E,-e <native>\n\tWrites output files in \"native\" ('-e 1') or \"non-native\" binary format ('-e 0').\n"
+			"\tIn NON-native format, the file is written using little-endian double-precision data, and 32-bits\n"
+			"\tunsigned integers for matrix dimensions, regardless how the program was compiled. In addition, a\n"
+			"\tfile signature is written to the file.\n"
+			"\tOtherwise, in \"native\" or raw format, the file is written using the native endiannes and the data\n"
+			"\ttypes specified at compilation. Please note this mode *SKIPS* error checking, information messages,\n"
+			"\tand data transformation (e.g., matrix transposing).\n"
 			"\tThe default (if '-e' is not specified) is to write output data to an ASCII-text file.\n\n" );
 
 	return status;
@@ -696,7 +664,11 @@ int print_nmf_gpu_help( char const *restrict const execname )
 				"[ -j <niter_test_conv> ]\n\t\t[ -t <stop_threshold> ] [ -e <native> ] [ -z <GPU_device> ]\n\t%s -h\n\n"
 				"---------------\n\nData matrix options:\n", execname, execname );
 
-	if ( help_matrix() != EXIT_SUCCESS )
+	if ( append_printed_message( shown_by_all,
+				"\n<filename>\n\tInput data matrix (mandatory if 'help' is not requested).\n\n" ) != EXIT_SUCCESS )
+		status = EXIT_SUCCESS;
+
+	if ( help_file_formats() != EXIT_SUCCESS )
 		status = EXIT_FAILURE;
 
 	if ( append_printed_message( shown_by_all, "\n---------------\n\nNMF options:\n" ) != EXIT_SUCCESS )
@@ -895,15 +867,8 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 	bool l_numeric_hdrs = false;	// Has numeric columns headers.
 	bool l_numeric_lbls = false;	// Has numeric row labels.
 
-	index_t l_is_bin = 0;		// Input file is binary.
-					// == 0 for ASCII-text format.
-					// == 1 for non-native binary format (i.e., double-precision data, and "unsigned int" for dimensions).
-					// > 1 for native binary format (i.e., the compiled types for matrix data and dimensions).
-
-	index_t l_save_bin = 0;		// Saves output matrices to binary files.
-					// == 0 for ASCII-text format.
-					// == 1 for non-native format (i.e., double-precision data, and "unsigned int" for dimensions).
-					// > 1 for native format (i.e., the compiled types for matrix data and dimensions).
+	file_fmt_t l_input_file_fmt = ASCII_TEXT_FMT;	// Input file format.
+	file_fmt_t l_output_file_fmt = ASCII_TEXT_FMT;	// Output file format.
 
 	index_t l_k = DEFAULT_K;				// Factorization rank.
 	index_t l_kp = get_padding( DEFAULT_K );		// (Initial) padded factorization rank.
@@ -957,7 +922,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 					append_printed_error( error_shown_by_all, "It must be a non-negative integer value.\n");
 					return EXIT_FAILURE;
 				}
-				l_is_bin = (index_t) ( val ? 2 : 1 );
+				l_input_file_fmt = (file_fmt_t) ( val ? NATIVE_BINARY_FMT : NON_NATIVE_BINARY_FMT );
 			} break;
 
 
@@ -979,7 +944,7 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 					append_printed_error( error_shown_by_all, "It must be a non-negative integer value.\n" );
 					return EXIT_FAILURE;
 				}
-				l_save_bin = (index_t) ( val ? 2 : 1 );
+				l_output_file_fmt = (file_fmt_t) ( val ? NATIVE_BINARY_FMT : NON_NATIVE_BINARY_FMT );
 			} break;
 
 
@@ -1072,8 +1037,8 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 				intmax_t const val = strtoimax( optarg, &endptr, 10 );
 				if ( *endptr + errno + (val < INTMAX_C(0)) + (val > (intmax_t) IDX_MAX) ) {
 					print_errnum( error_shown_by_all, errno, "Error: invalid basis device ID number '%s'", optarg );
-					append_printed_error( error_shown_by_all, "It must be a non-negative integer value less than or equal to %"
-							PRI_IDX ".\n", IDX_MAX );
+					append_printed_error( error_shown_by_all, "It must be a non-negative integer value less "
+								"than or equal to %" PRI_IDX ".\n", IDX_MAX );
 					return EXIT_FAILURE;
 				}
 				l_gpu_device = (index_t) val;
@@ -1132,8 +1097,8 @@ int check_arguments( int argc, char const *restrict *restrict argv, bool *restri
 	l_arguments.numeric_hdrs = l_numeric_hdrs;
 	l_arguments.numeric_lbls = l_numeric_lbls;
 
-	l_arguments.is_bin = l_is_bin;
-	l_arguments.save_bin = l_save_bin;
+	l_arguments.input_file_fmt = l_input_file_fmt;
+	l_arguments.output_file_fmt = l_output_file_fmt;
 
 	l_arguments.k = l_k;
 	l_arguments.kp = l_kp;
@@ -1263,8 +1228,8 @@ index_t get_seed( void )
 
 		if ( ( ! file ) || ( ! fread( &seed, sizeof(index_t), 1, file ) ) ) {
 
-			/* If for whatever reason (e.g., non-Linux system, file
-			 * not found, etc.) it failed to read the file, sets
+			/* If for whatever reason it failed to read the file
+			 * (e.g., non-Linux system, file not found, etc.), sets
 			 * the seed from the clock.
 			 */
 

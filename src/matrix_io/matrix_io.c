@@ -2,7 +2,7 @@
  *
  * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
- * Copyright (C) 2011-2014:
+ * Copyright (C) 2011-2015:
  *
  *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
  *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
@@ -109,6 +109,7 @@
 #undef BIN_FILE_SIGNATURE_REAL
 #define BIN_FILE_SIGNATURE_REAL ( 0xEDB10EA1 )
 
+// Signature for integer-type data files.
 #undef BIN_FILE_SIGNATURE_INDEX
 #define BIN_FILE_SIGNATURE_INDEX ( 0xEDB101DE )
 
@@ -2877,14 +2878,9 @@ int matrix_load_binary_native( char const *restrict filename, void *restrict *re
 /*
  * Reads input matrix according to the selected file format.
  *
- * is_bin: Reads output matrix from a binary file.
- *		== 0: Disabled. Reads the file as ASCII text.
- *		== 1: Uses "non-native" format (i.e., double-precision data, and "unsigned int" for dimensions).
- *		 > 1: Uses "native" or raw format (i.e., the compiled types for matrix data and dimensions).
- *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_lbls, index_t is_bin, real *restrict *restrict matrix,
+int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_lbls, file_fmt_t file_fmt, real *restrict *restrict matrix,
 		index_t *restrict nrows, index_t *restrict ncols, index_t *restrict pitch, struct matrix_tags_t *restrict mt )
 {
 
@@ -2900,11 +2896,6 @@ int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_
 		return EXIT_FAILURE;
 	}
 
-	if ( is_bin < 0 ) {
-		print_errnum( error_shown_by_all, EINVAL, "Error in matrix_load( is_bin=%" PRI_IDX " )", is_bin );
-		return EXIT_FAILURE;
-	}
-
 	// Initializes matrix dimensions
 	*pitch = *ncols = *nrows = 0;
 
@@ -2916,36 +2907,48 @@ int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_
 
 	print_message( shown_by_all, "Loading input file...\n" );
 
-	if ( is_bin > 1 ) { // Input file is "native" binary.
+	switch ( file_fmt ) {
 
-		append_printed_message( shown_by_all, "\tFile selected as \"native\" binary (i.e., the file is read using the data "
-					"types specified at compilation).\n\tNo error-checking is performed.\n\tLoading...\n" );
+		// Input file is ASCII-text.
+		case ASCII_TEXT_FMT: {
 
-		bool const verbose = true;
-		size_t const data_size = sizeof(real);
+			append_printed_message( shown_by_all, "\tFile selected as ASCII text. Loading...\n"
+						"\t\tData matrix selected as having numeric column headers: %s.\n"
+						"\t\tData matrix selected as having numeric row labels: %s.\n",
+						( numeric_hdrs ? "Yes" : "No" ), ( numeric_lbls ? "Yes" : "No" ) );
 
-		status = matrix_load_binary_native( filename, (void *restrict *restrict) matrix, nrows, ncols, pitch, data_size, verbose, mt );
-	}
+			status = matrix_load_ascii_verb( filename, numeric_hdrs, numeric_lbls, matrix, nrows, ncols, pitch, mt );
 
-	// Input file is "non-native" binary.
-	else if ( is_bin ) {
+		} break;
 
-		append_printed_message( shown_by_all, "\tFile selected as (non-\"native\") binary (i.e., double-precision data and "
-					"unsigned integers).\n\tLoading...\n" );
-		status = matrix_load_binary_verb( filename, matrix, nrows, ncols, pitch, mt );
-	}
 
-	// Input file is ASCII-text.
-	else {
+		/* Input file is "non-native" binary:
+		 *	little-endian double-precision data, and 32-bits unsigned integers for matrix dimensions.
+		 */
+		case NON_NATIVE_BINARY_FMT: {
 
-		append_printed_message( shown_by_all, "\tFile selected as ASCII text. Loading...\n"
-				"\t\tData matrix selected as having numeric column headers: %s.\n"
-				"\t\tData matrix selected as having numeric row labels: %s.\n",
-				( numeric_hdrs ? "Yes" : "No" ), ( numeric_lbls ? "Yes" : "No" ) );
+			append_printed_message( shown_by_all, "\tFile selected as (non-\"native\") binary (i.e., little-endian "
+						"double-precision data, and 32-bits unsigned integers for matrix dimensions).\n"
+						"\tLoading...\n" );
 
-		status = matrix_load_ascii_verb( filename, numeric_hdrs, numeric_lbls, matrix, nrows, ncols, pitch, mt );
+			status = matrix_load_binary_verb( filename, matrix, nrows, ncols, pitch, mt );
+		} break;
 
-	} // If file is (native) binary or text.
+
+		// Input file is "native" binary (i.e., the compiled types for matrix data and dimensions).
+		case NATIVE_BINARY_FMT: {
+
+			append_printed_message( shown_by_all, "\tFile selected as \"native\" binary (i.e., the file is read using the data "
+						"types specified at compilation).\n\tNo error-checking is performed.\n\tLoading...\n" );
+
+			bool const verbose = true;
+			size_t const data_size = sizeof(real);
+
+			status = matrix_load_binary_native( filename, (void *restrict *restrict) matrix, nrows, ncols, pitch,
+								data_size, verbose, mt );
+		} break;
+
+	} // switch ( file_fmt )
 
 	// -------------------------------
 
@@ -3932,11 +3935,6 @@ int matrix_save_binary_native( char const *restrict filename, void const *restri
  * Writes matrix to a file according to the selected file format.
  * Skips name, headers and labels if "mt" is NULL.
  *
- * save_bin: Saves output matrix to a binary file.
- *		== 0: Disabled. Saves the file as ASCII text.
- *		== 1: Uses "non-native" format (i.e., double-precision data, and "unsigned int" for dimensions).
- *		 > 1: Uses "native" or raw format (i.e., the compiled types for matrix data and dimensions).
- *
  * If "transpose" is 'true':
  * - Reads from "matrix": <nrows> rows and <ncols> columns (padded to <pitch>).
  * - Writes to file:
@@ -3948,19 +3946,14 @@ int matrix_save_binary_native( char const *restrict filename, void const *restri
  * If verbose is 'true', shows some information messages (e.g., file format).
  *
  * WARNING:
- *	"Native" mode (i.e., save_bin > 1) skips ALL data transformation (matrix transposing, padding, etc).
- *	All related arguments are ignored, and the file is saved in raw format.
+ *	"Native" mode (i.e., file_fmt == NATIVE_BINARY) skips ALL data transformation (matrix transposing,
+ *	padding, etc). All related arguments are ignored, and the file is saved in raw format.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_save( char const *restrict filename, index_t save_bin, real const *restrict matrix, index_t nrows, index_t ncols, index_t pitch,
+int matrix_save( char const *restrict filename, file_fmt_t file_fmt, real const *restrict matrix, index_t nrows, index_t ncols, index_t pitch,
 		bool transpose, struct matrix_tags_t const *restrict mt, bool verbose )
 {
-
-	if ( save_bin < 0 ) {
-		print_errnum( error_shown_by_all, EINVAL, "Error in matrix_save( save_bin=%" PRI_IDX " )", save_bin );
-		return EXIT_FAILURE;
-	}
 
 	int status = EXIT_SUCCESS;
 
@@ -3969,36 +3962,50 @@ int matrix_save( char const *restrict filename, index_t save_bin, real const *re
 	if ( verbose )
 		print_message( shown_by_all, "\nSaving output file...\n" );
 
-	// Saves output as "native" binary.
-	if ( save_bin > 1 ) {
-		if ( verbose ) {
-			append_printed_message( shown_by_all, "\tFile selected as \"native\" binary (i.e., the file is written using the "
-						"data types specified at compilation).\n\tNo error-checking is performed.\n" );
-			if ( transpose )
-				append_printed_message( shown_by_all, "\tSkipping all transformation options (e.g., matrix transposing)...\n" );
-		}
-		status = matrix_save_binary_native( filename, (void const *restrict) matrix, nrows, ncols, pitch, sizeof(real), mt );
-	}
 
-	// Saves output as (non-"native") binary.
-	else if ( save_bin ) {
-		if ( verbose )
-			append_printed_message( shown_by_all, "\tFile selected as (non-\"native\") binary (i.e., double-precision data and "
-						"32-bits unsigned integers matrix dimensions).\n");
+	switch ( file_fmt ) {
 
-		status = matrix_save_binary( filename, matrix, nrows, ncols, pitch, transpose, mt );
-	}
+		// Saves output as ASCII text.
+		case ASCII_TEXT_FMT: {
+			if ( verbose )
+				append_printed_message( shown_by_all, "\tFile selected as ASCII text.\n" );
 
-	// Saves output as ASCII text.
-	else {
-		if ( verbose )
-			append_printed_message( shown_by_all, "\tFile selected as ASCII text.\n" );
+			bool const append = false;
+			bool const real_data = true;
 
-		bool const append = false;
-		bool const real_data = true;
+			status = matrix_save_ascii( filename, matrix, nrows, ncols, pitch, real_data, transpose, append, mt );
+		} break;
 
-		status = matrix_save_ascii( filename, matrix, nrows, ncols, pitch, real_data, transpose, append, mt );
-	}
+
+ 		/* Saves output file as "non-native" binary:
+		 *	little-endian double-precision data, and 32-bits unsigned integers for matrix dimensions.
+		 */
+		case NON_NATIVE_BINARY_FMT: {
+
+			if ( verbose )
+				append_printed_message( shown_by_all, "\tFile selected as (non-\"native\") binary (i.e., little-endian "
+							"double-precision data, and 32-bits unsigned integers for matrix dimensions).\n");
+
+			status = matrix_save_binary( filename, matrix, nrows, ncols, pitch, transpose, mt );
+		} break;
+
+
+		// Saves output as "native" binary.
+		case NATIVE_BINARY_FMT: {
+
+			if ( verbose ) {
+				append_printed_message( shown_by_all, "\tFile selected as \"native\" binary (i.e., the file is "
+							"written using the data types specified at compilation).\n"
+							"\tNo error-checking is performed.\n" );
+				if ( transpose )
+					append_printed_message( shown_by_all, "\tSkipping all transformation options "
+								"(e.g., matrix transposing)...\n" );
+			}
+
+			status = matrix_save_binary_native( filename, (void const *restrict) matrix, nrows, ncols, pitch, sizeof(real), mt );
+		} break;
+
+	} // switch ( file_fmt )
 
 	// ----------------------------------------
 

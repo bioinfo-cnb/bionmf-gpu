@@ -2,7 +2,7 @@
  *
  * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
- * Copyright (C) 2011-2014:
+ * Copyright (C) 2011-2015:
  *
  *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
  *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
@@ -85,6 +85,7 @@
 #define NMFGPU_MATRIX_IO_H (1)
 
 #include "matrix_io/matrix_io_routines.h"
+#include "common.h"
 #include "index_type.h"
 #include "real_type.h"
 
@@ -252,14 +253,9 @@ int matrix_load_binary_native( char const *restrict filename, void *restrict *re
 /*
  * Reads input matrix according to the selected file format
  *
- * is_bin: Reads output matrix from a binary file.
- *		== 0: Disabled. Reads the file as ASCII text.
- *		== 1: Uses "non-native" format (i.e., double-precision data, and "unsigned int" for dimensions).
- *		 > 1: Uses "native" or raw format (i.e., the compiled types for matrix data and dimensions).
- *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_lbls, index_t is_bin, real *restrict *restrict matrix,
+int matrix_load( char const *restrict filename, bool numeric_hdrs, bool numeric_lbls, file_fmt_t file_fmt, real *restrict *restrict matrix,
 		index_t *restrict nrows, index_t *restrict ncols, index_t *restrict pitch, struct matrix_tags_t *restrict mt );
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -351,11 +347,6 @@ int matrix_save_binary_native( char const *restrict filename, void const *restri
  * Writes matrix to a file according to the selected file format.
  * Skips name, headers and labels if "mt" is NULL.
  *
- * save_bin: Saves output matrix to a binary file.
- *		== 0: Disabled. Saves the file as ASCII text.
- *		== 1: Uses "non-native" format (i.e., double-precision data, and "unsigned int" for dimensions).
- *		 > 1: Uses "native" or raw format (i.e., the compiled types for matrix data and dimensions).
- *
  * If "transpose" is 'true':
  * - Reads from "matrix": <nrows> rows and <ncols> columns (padded to <pitch>).
  * - Writes to file:
@@ -367,12 +358,12 @@ int matrix_save_binary_native( char const *restrict filename, void const *restri
  * If verbose is 'true', shows some information messages (e.g., file format).
  *
  * WARNING:
- *	"Native" mode (i.e., save_bin > 1) skips ALL data transformation (matrix transposing, padding, etc).
- *	All related arguments are ignored, and the file is saved in raw format.
+ *	"Native" mode (i.e., file_fmt == NATIVE_BINARY) skips ALL data transformation (matrix transposing,
+ *	padding, etc). All related arguments are ignored, and the file is saved in raw format.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int matrix_save( char const *restrict filename, index_t save_bin, real const *restrict matrix, index_t nrows, index_t ncols, index_t pitch,
+int matrix_save( char const *restrict filename, file_fmt_t file_fmt, real const *restrict matrix, index_t nrows, index_t ncols, index_t pitch,
 		bool transpose, struct matrix_tags_t const *restrict mt, bool verbose );
 
 ////////////////////////////////////////////////////////////////////////////////////////////////

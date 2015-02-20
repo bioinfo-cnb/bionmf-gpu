@@ -142,7 +142,7 @@ After completion, both output matrices, **W** and **H**, are stored in the same 
 
    * *`<input_filename>_{W,H}.native.dat`*: If the file was saved as "*native*" binary (i.e., argument `-e 1`).
 
-These extensions are defined in `include/common.h`.
+These extensions are defined in `include/common_defaults.h`.
 
 
 <!-- ==================== -->
@@ -467,7 +467,7 @@ The output filename is composed by the input filename plus an additional extensi
 
    * *`<input_filename>.native.dat`*: If the file was saved as "*native*" binary (i.e., argument `-e 1`).
 
-The extensions are defined in `include/common.h`.
+The extensions are defined in `include/common_defaults.h`.
 
 
 <!-- ==================== -->

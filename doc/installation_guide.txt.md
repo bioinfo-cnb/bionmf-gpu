@@ -208,6 +208,7 @@ The `src/` folder is organized as follow:
    * Other C files:
       + `matrix_io/matrix_io.c`          ─ Functions to read/write data matrices.
       + `matrix_io/matrix_io_routines.c` ─ Auxiliary I/O routines.
+      + `common.c`                       ─ Miscellaneous functions and constants used by all programs.
 
    * Utility programs (see "[*Utility Programs*](#tools)"):
       + `tools/file_converter.c`  ─ ASCII-Binary file conversion.
@@ -225,6 +226,8 @@ The `include/` folder is similarly organized:
    * `timing.h`
    * `matrix_io/matrix_io.h`
    * `matrix_io/matrix_io_routines.h`
+   * `common.h`
+   * `common_defaults.h`              ─ Some default values.
 
 
 *****************************
@@ -778,7 +781,7 @@ If for any reason you need to debug the code, there are different options:
 
 
    * **Non-random values**: When the [`Makefile` parameter](#mkparams) *`FIXED_INIT`* is non-zero, matrices **W** and **H** are initialized from a fixed *seed*, so different executions of *NMF-mGPU* with similar [arguments](user_guide.txt.md#arguments), result in *exactly* the same output matrices.  
-     **Note:** The fixed seed value (currently set to `3`) is defined in `src/common.c`.
+     **Note:** The fixed seed value (currently set to `3`) is defined in `src/common_defaults.h`.
 
    * **Synchronous data transfers**: To discard synchronization problems, *synchronous* data transfers can be forced by setting the [`Makefile` parameter](#mkparams), *`SYNC_TRANSF`*, to `1`.
 

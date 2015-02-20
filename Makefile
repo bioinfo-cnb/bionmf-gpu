@@ -2,7 +2,7 @@
 #
 # NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
 #
-# Copyright (C) 2011-2014:
+# Copyright (C) 2011-2015:
 #
 #	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
 #	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).

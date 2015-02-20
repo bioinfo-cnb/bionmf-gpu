@@ -2,7 +2,7 @@
  *
  * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
- * Copyright (C) 2011-2014:
+ * Copyright (C) 2011-2015:
  *
  *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
  *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
@@ -162,8 +162,12 @@
 #undef MIN
 #define MIN(a,b) ( ( (a) <= (b) ) ? (a) : (b) )
 
+#undef MAX3
+#define MAX3(a,b,c) ( MAX( (MAX((a),(b))), (c)) )
+
 #undef MIN3
 #define MIN3(a,b,c) ( MIN( (MIN((a),(b))), (c)) )
+
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////

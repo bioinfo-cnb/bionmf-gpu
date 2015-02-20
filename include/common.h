@@ -2,7 +2,7 @@
  *
  * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
  *
- * Copyright (C) 2011-2014:
+ * Copyright (C) 2011-2015:
  *
  *	Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
  *	Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
@@ -157,6 +157,31 @@
 
 /* Data types */
 
+// File formats:
+typedef enum file_format {
+
+	// ASCII-text file.
+	ASCII_TEXT_FMT,
+
+	/* "Non-native" binary file:
+	 *	Little endian.
+	 *	Double-precision data
+	 *	32-bits unsigned integers for matrix dimensions.
+	 *	File signature.
+	 */
+	NON_NATIVE_BINARY_FMT,
+
+	/* "Native" binary file:
+	 *	Native endiannes.
+	 *	Compiled types for matrix data
+	 *	Compiled signedness for matrix dimensions.
+	 *	NO file signature.
+	 */
+	NATIVE_BINARY_FMT,
+
+} file_fmt_t;
+
+
 // Structure for arguments
 struct input_arguments {
 
@@ -164,13 +189,8 @@ struct input_arguments {
 	bool numeric_hdrs;		// Input matrix has numeric columns headers (ignored for binary files).
 	bool numeric_lbls;		// Input matrix has numeric row labels (ignored for binary files).
 
-	index_t is_bin;			// Input file is binary.
-					// == 1 for non-native format (i.e., double-precision data, and "unsigned int" for dimensions).
-					// > 1 for native format (i.e., the compiled types for matrix data and dimensions).
-
-	index_t save_bin;		// Saves output matrices to binary files.
-					// == 1 for non-native format (i.e., double-precision data, and "unsigned int" for dimensions).
-					// > 1 for native format (i.e., the compiled types for matrix data and dimensions).
+	file_fmt_t input_file_fmt;	// Input file format.
+	file_fmt_t output_file_fmt;	// Output file format.
 
 	index_t k;			// Starting factorization rank.
 	index_t kp;			// Padded factorization rank.
@@ -186,7 +206,7 @@ struct input_arguments {
 // ---------------------------------------------
 // ---------------------------------------------
 
-/* Global vaiables */
+/* Global variables */
 
 extern index_t process_id;		// Current process ID.
 extern index_t num_processes;		// (Maximum) Number of processes on the system.
@@ -223,6 +243,10 @@ extern real *restrict W;
 extern real *restrict H;
 extern real *restrict Vcol;	// Block of NpP rows from input matrix V.
 extern real *Vrow;		// Block of MpP columns from input matrix V.
+
+// File extensions for output files.
+extern char const *restrict const file_extension[ 3 ];
+
 
 ////////////////////////////////////////////////
 ////////////////////////////////////////////////
@@ -347,13 +371,13 @@ int flush_output( bool permanently );
 ////////////////////////////////////////////////
 
 /*
- * Prints all arguments regarding the input matrix (e.g., matrix dimensions and format).
+ * Prints all arguments regarding the file formats.
  *
  * This message is printed by process 0 only.
  *
  * Returns EXIT_SUCCESS or EXIT_FAILURE.
  */
-int help_matrix( void );
+int help_file_formats( void );
 
 ////////////////////////////////////////////////
 
