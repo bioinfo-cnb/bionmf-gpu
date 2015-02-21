@@ -34,18 +34,18 @@
  ************************************************************************
 -->
 <!-- ==================================================== -->
- <html lang="en" xml:lang="en" xmlns="http://www.w3.org/1999/xhtml">
+ <html lang="en-US" xml:lang="en-US">
  <head>
-   <meta name="application-name" content="NMF-mGPU"/>
+   <meta charset="UTF-8"/>
+   <meta http-equiv="X-UA-Compatible" content="chrome=1"/>
+   <meta name="application-name" content="NMF-mGPU: Non-negative Matrix Factorization on multi-GPU Systems"/>
    <meta name="author" content="Edgardo Mejia-Roa (edgardomejia@fis.ucm.es), Carlos Garcia, Jose Ignacio Gomez, Manuel Prieto, Francisco Tirado, and Alberto Pascual-Montano (pascual@cnb.csic.es)."/>
-   <meta name="description" content="Non-negative Matrix Factorization (NMF) for Biology on multi-GPU systems. User guide"/>
-   <meta name="keywords" content="bioNMF, NMF, Matrix factorization, GPU, multi-GPU, GPGPU, NVIDIA, CUDA, CUBLAS, Bioinformatics"/>
-   <meta name="language" content="en"/>
-   <meta name="copyright" content="(C) 2011-2014 Edgardo Mejia-Roa (edgardomejia@fis.ucm.es). ArTeCS Group, Complutense University of Madrid (UCM), Spain."/>
-   <meta http-equiv="content-Type" content="text/html; charset=UTF-8"/>
-   <meta http-equiv="last-modified" content="2015/02/20" scheme="YYYY/MM/DD"/>
+   <meta name="description" content="CUDA-based implementation of the Non-negative Matrix Factorization (NMF) for systems with one or more Graphics-Processing Units (GPUs). Optimized for gene-expression analysis. User Guide."/>
+   <meta name="keywords" content="Non-negative Matrix Factorization,NMF,Graphics-Processing Unit,GPU,CUDA,CUBLAS,Multi-GPU implementation,Message Passing Interface,MPI,Biclustering analysis,Sample classification,Gene-expression analysis,Bioinformatics,Free,Open source,software"/>
+   <meta name="copyright" content="Copyright (c) 2011-2015 Edgardo Mejia-Roa (edgardomejia@fis.ucm.es). ArTeCS Group, Complutense University of Madrid (UCM), Spain."/>
+   <meta http-equiv="last-modified" content="2015/02/21" scheme="YYYY/MM/DD"/>
    <link rel="stylesheet" type="text/css" href="styles.css"/>
-   <title>NMF-mGPU user guide</title>
+   <title>NMF-mGPU: Non-negative Matrix Factorization on multi-GPU systems - User Guide</title>
  </head>
  <body>
 
@@ -74,11 +74,11 @@ This documents shows how to use *NMF-mGPU*. To install and configure this progra
 
 ## 1. <a id="intro">Introduction</a>
 
-***NMF-mGPU*** implements the ***Non-negative Matrix Factorization*** (***NMF***) algorithm by making use of ***Graphics Processing Units*** (***GPUs***). NMF takes an input matrix (**V**) and returns two matrices, **W** and **H**, whose product is equal to the former (i.e., **V** ~ **W** \* **H**). If **V** has *n* rows and *m* columns, then dimensions for **W** and **H**, will be *n* × *k* and *k* × *m*, respectively. The *factorization rank* ("*k*") specified by the user, is usually a value much less than both, *n* and *m*.
+***NMF-mGPU*** implements the ***Non-negative Matrix Factorization*** (***NMF***) algorithm by making use of ***Graphics Processing Units*** (***GPUs***). NMF takes an input matrix (**V**) and returns two matrices, **W** and **H**, whose product is equal to the former (i.e., **V**&nbsp;&asymp;&nbsp;**W**&nbsp;&lowast;&nbsp;**H**). If **V** has *n* rows and *m* columns, then dimensions for **W** and **H**, will be *n*&nbsp;&times;&nbsp;*k* and *k*&nbsp;&times;&nbsp;*m*, respectively. The *factorization rank* ("*k*") specified by the user, is usually a value much less than both, *n* and *m*.
 
 This software has been developed using the NVIDIA's [***CUDA***][CUDA_homepage] ([***Compute Unified Device Architecture***][CUDA_homepage]) framework for GPU Computing. *CUDA* represents a GPU device as a programmable general-purpose *coprocessor* able to perform linear-algebra operations.
 
-On detached devices with low on-board memory available, large datasets can be blockwise transferred from the CPU's main memory to the GPU's memory and processed accordingly. In addition, *NMF-mGPU* has been explicitly optimized for the different CUDA architectures.
+On detached devices with low on-board memory available, large datasets can be **blockwise transferred** from the CPU's main memory to the GPU's memory and processed accordingly. In addition, *NMF-mGPU* has been explicitly optimized for the different existing CUDA architectures.
 
 Finally, *NMF-mGPU* also provides a *multi-GPU* version that makes use of multiple GPU devices through the [***MPI***][MPI_homepage] ([***Message Passing Interface***][MPI_homepage]) standard.
 
@@ -331,7 +331,7 @@ This section describes the NMF algorithm implemented on *NMF-mGPU*, as well as a
 
 ### 4.1 The NMF algorithm:
 
-NMF takes an input matrix (**V**) and returns two matrices, **W** and **H**, whose product is equal to the former (i.e., **V** ~ **W** \* **H**). If **V** has *n* rows and *m* columns, then dimensions for **W** and **H**, will be *n* × *k* and *k* × *m*, respectively. The *factorization rank* (*"k"*) specified by the user, is usually a value much less than *n* and *m*.
+NMF takes an input matrix (**V**) and returns two matrices, **W** and **H**, whose product is equal to the former (i.e., **V** ~ **W** \* **H**). If **V** has *n* rows and *m* columns, then dimensions for **W** and **H**, will be *n* &times; *k* and *k* &times; *m*, respectively. The *factorization rank* (*"k"*) specified by the user, is usually a value much less than *n* and *m*.
 
 NMF iteratively modifies **W** and **H** until their product approximates to **V**. Such modifications, composed by matrix products and other algebraic operations, are derived from minimizing a cost function that quantifies, in some way, the differences between **W** \* **H** and **V**. There are numerous objective functions, each leading to different update rules.
 
