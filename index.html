@@ -1,13 +1,55 @@
 <!doctype html>
-<html>
+<!--
+ ************************************************************************
+ *
+ * NMF-mGPU - Non-negative Matrix Factorization on multi-GPU systems.
+ *
+ * Copyright (C) 2011-2015:
+ *
+ *      Edgardo Mejia-Roa(*), Carlos Garcia(*), Jose Ignacio Gomez(*),
+ *      Manuel Prieto(*), Francisco Tirado(*) and Alberto Pascual-Montano(**).
+ *
+ *      (*)  ArTeCS Group, Complutense University of Madrid (UCM), Spain.
+ *      (**) Functional Bioinformatics Group, Biocomputing Unit,
+ *           National Center for Biotechnology-CSIC, Madrid, Spain.
+ *
+ *      E-mail for E. Mejia-Roa: <edgardomejia@fis.ucm.es>
+ *      E-mail for A. Pascual-Montano: <pascual@cnb.csic.es>
+ *
+ *
+ * This file is part of NMF-mGPU.
+ *
+ * NMF-mGPU is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * NMF-mGPU is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with NMF-mGPU. If not, see <http://www.gnu.org/licenses/>.
+ *
+ ************************************************************************
+-->
+<html lang="en-US" xml:lang="en-US">
   <head>
-    <meta charset="utf-8">
-    <meta http-equiv="X-UA-Compatible" content="chrome=1">
-    <title>Bionmf-gpu by bioinfo-cnb</title>
+    <meta charset="UTF-8"/>
+    <meta http-equiv="X-UA-Compatible" content="chrome=1"/>
+    <meta name="application-name" content="NMF-mGPU: Non-negative Matrix Factorization on multi-GPU Systems"/>
+    <meta name="author" content="Edgardo Mejia-Roa (edgardomejia@fis.ucm.es), Carlos Garcia, Jose Ignacio Gomez, Manuel Prieto, Francisco Tirado, and Alberto Pascual-Montano (pascual@cnb.csic.es)."/>
+    <meta name="description" content="CUDA-based implementation of the Non-negative Matrix Factorization (NMF) for systems with one or more Graphics-Processing Units (GPUs). Optimized for gene-expression analysis."/>
+    <meta name="keywords" content="Non-negative Matrix Factorization,NMF,Graphics-Processing Unit,GPU,CUDA,CUBLAS,Multi-GPU implementation,Message Passing Interface,MPI,Biclustering analysis,Sample classification,Gene-expression analysis,Bioinformatics,Free,Open source,software"/>
+    <meta name="copyright" content="Copyright (c) 2011-2015 Edgardo Mejia-Roa (edgardomejia@fis.ucm.es). ArTeCS Group, Complutense University of Madrid (UCM), Spain."/>
+    <meta http-equiv="last-modified" content="2015/02/21" scheme="YYYY/MM/DD"/>
 
-    <link rel="stylesheet" href="stylesheets/styles.css">
-    <link rel="stylesheet" href="stylesheets/pygment_trac.css">
-    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <title>NMF-mGPU: Non-negative Matrix Factorization on multi-GPU systems</title>
+
+    <link rel="stylesheet" href="stylesheets/styles.css"/>
+    <link rel="stylesheet" href="stylesheets/pygment_trac.css"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no"/>
     <!--[if lt IE 9]>
     <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
     <![endif]-->
@@ -15,25 +57,54 @@
   <body>
     <div class="wrapper">
       <header>
-        <h1>Bionmf-gpu</h1>
-        <p>BioNMF-GPU: Non-negative Matrix Factorization (NMF) on Graphics-Processing Units (GPU) for Biology</p>
-
-        <p class="view"><a href="https://github.com/bioinfo-cnb/bionmf-gpu">View the Project on GitHub <small>bioinfo-cnb/bionmf-gpu</small></a></p>
-
-
+        <h1>NMF-mGPU</h1>
+        <h2>Non-negative Matrix Factorization on multi-GPU Systems</h2>
+        <p class="view"><a href="https://github.com/bioinfo-cnb/bionmf-gpu">View the Project on GitHub
+           <small>bioinfo-cnb/bionmf-gpu</small></a>
+        </p>
         <ul>
           <li><a href="https://github.com/bioinfo-cnb/bionmf-gpu/zipball/master">Download <strong>ZIP File</strong></a></li>
           <li><a href="https://github.com/bioinfo-cnb/bionmf-gpu/tarball/master">Download <strong>TAR Ball</strong></a></li>
           <li><a href="https://github.com/bioinfo-cnb/bionmf-gpu">View On <strong>GitHub</strong></a></li>
         </ul>
       </header>
+
       <section>
-        <h1>
-<a name="bionmf---gpu" class="anchor" href="#bionmf---gpu"><span class="octicon octicon-link"></span></a>BioNMF - GPU</h1>
+        <p><strong><em>NMF-mGPU</em></strong> implements the <strong><em>Non-negative Matrix Factorization</em></strong>
+          (<strong><em>NMF</em></strong>) algorithm by making use of <strong><em>Graphics Processing Units</em></strong>
+          (<strong><em>GPUs</em></strong>). NMF takes an input matrix (<strong>V</strong>) and returns two matrices,
+          <strong>W</strong> and <strong>H</strong>, whose product is equal to the former (i.e.,
+          <strong>V</strong>&nbsp;&asymp;&nbsp;<strong>W</strong>&nbsp;&lowast;&nbsp;<strong>H</strong>).
+          If <strong>V</strong> has <em>n</em> rows and <em>m</em> columns, then dimensions for <strong>W</strong>
+          and <strong>H</strong>, will be <em>n</em>&nbsp;&times;&nbsp;<em>k</em> and <em>k</em>&nbsp;&times;&nbsp;<em>m</em>,
+          respectively. The <em>factorization rank</em> ("<em>k</em>") specified by the user, is usually a value much less
+          than both, <em>n</em> and <em>m</em>.
+        </p>
 
-<p><strong>BioNMF-GPU</strong> is an efficient implementation of the <strong><em>Non-negative Matrix Factorization</em></strong> (<strong><em>NMF</em></strong>) algorithm based on a programmable <strong><em>Graphics-Processing Unit</em></strong> (<strong><em>GPU</em></strong>). Since numerous linear-algebra operations are required to draw images on the screen, GPUs are devices specially designed to perform such tasks much faster than any conventional processor. Nevertheless, their architecture has evolved into a general-purpose programmable system able to execute <strong>non-graphics-related applications</strong>, just like a <em>co-processor</em>. GPUs represent a <em>cost-effective</em> alternative to conventional multi-processor clusters, since they are already present on almost any modern PC or laptop as a <em>graphics card</em>.</p>
+        <p>This software has been developed using the NVIDIA's <a href="http://www.nvidia.com/object/cuda_home_new.html"
+          title="CUDA Homepage"><strong><em>CUDA</em></strong></a> (<a href="http://www.nvidia.com/object/cuda_home_new.html"
+          title="CUDA Homepage"><strong><em>Compute Unified Device Architecture</em></strong></a>) framework for GPU Computing.
+          <em>CUDA</em> represents a GPU device as a programmable general-purpose <em>coprocessor</em> able to perform linear-algebra
+          operations.
+        </p>
 
-<p>This implementation is based on the NVIDIA’s programming model: <strong><em>CUDA</em></strong> (<strong><em>Compute Unified Device Architecture</em></strong>). Large input matrices are blockwise transferred and processed. Systems with multiple GPUs can be then synchronized through <strong><em>MPI</em></strong> (<strong><em>Message Passing Interface</em></strong>).</p>
+        <p>On detached devices with low on-board memory available, large datasets can be <strong>blockwise transferred</strong>
+          from the CPU's main memory to the GPU's memory and processed accordingly. In addition, <em>NMF-mGPU</em> has been
+          explicitly optimized for the different existing CUDA architectures.
+        </p>
+
+        <p>Finally, <em>NMF-mGPU</em> also provides a <em>multi-GPU</em> version that makes use of multiple GPU devices through
+          the <a href="http://mpi-forum.org/" title="MPI Forum"><strong><em>MPI</em></strong></a> (<a href="http://mpi-forum.org/"
+          title="MPI Forum"><strong><em>Message Passing Interface</em></strong></a>) standard.
+        </p>
+
+        <h3>If you use this software, please cite the following work:</h3>
+        <citation>E. Mejía-Roa, D. Tabas-Madrid, J. Setoain, C. García, F. Tirado and A. Pascual-Montano. <strong>NMF-mGPU: Non-negative
+          matrix factorization on multi-GPU systems</strong>. <em>BMC Bioinformatics</em> 2015, <strong>16</strong>:43.
+          doi:10.1186/s12859-015-0485-4
+          [<a href="http://www.biomedcentral.com/1471-2105/16/43">http://www.biomedcentral.com/1471-2105/16/43</a>]
+        </citation>
+
       </section>
       <footer>
         <p>This project is maintained by <a href="https://github.com/bioinfo-cnb">bioinfo-cnb</a></p>
@@ -41,6 +112,10 @@
       </footer>
     </div>
     <script src="javascripts/scale.fix.js"></script>
-    
+
   </body>
 </html>
+
+<!--
+  // kate: backspace-indents off; indent-mode normal; indent-width 2; keep-extra-spaces off; newline-at-eof on; replace-trailing-space-save on; replace-tabs on; replace-tabs-save on; remove-trailing-spaces all; tab-indents on; tab-width 2;
+-->
