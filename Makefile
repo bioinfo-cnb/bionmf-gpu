@@ -563,13 +563,13 @@ cc_fast_CFLAGS = $($(cc_name)_$(os_lower)_cc_fast_CFLAGS)
 
 # GCC on GNU/Linux:
 gcc_linux_common_CFLAGS		:= -Wextra -Wmissing-declarations -Wunsafe-loop-optimizations -Wno-type-limits
-gcc_linux_common_fast_CFLAGS	:= -Ofast -march=native -ftree-loop-distribution -fbranch-target-load-optimize -funsafe-loop-optimizations
+gcc_linux_common_fast_CFLAGS	:= -Ofast -march=native -funsafe-loop-optimizations
 gcc_linux_cc_CFLAGS		:= -Wno-unsuffixed-float-constants -Wno-unused-result
 gcc_linux_cc_fast_CFLAGS	:=
 
 # GCC on Darwin (i.e., Mac OS X):
 gcc_darwin_common_CFLAGS	:= -Wunsafe-loop-optimizations -Wmissing-field-initializers -Wempty-body -Wno-strict-aliasing
-gcc_darwin_common_fast_CFLAGS	:= -fast -fbranch-target-load-optimize -funsafe-loop-optimizations
+gcc_darwin_common_fast_CFLAGS	:= -fast -funsafe-loop-optimizations
 gcc_darwin_cc_CFLAGS		:= -Wmissing-declarations
 gcc_darwin_cc_fast_CFLAGS	:=
 
@@ -583,7 +583,7 @@ clang_linux_cc_fast_CFLAGS	:=
 # Clang on Darwin (i.e., Mac OS X):
 clang_darwin_common_CFLAGS	:= -Wextra -Wmissing-declarations -Qunused-arguments -Wno-tautological-compare -Wno-type-limits \
 					-Wno-unknown-warning-option
-clang_darwin_common_fast_CFLAGS	:= -O4 -march=native -ftree-loop-distribution -fbranch-target-load-optimize -funsafe-loop-optimizations
+clang_darwin_common_fast_CFLAGS	:= -O4 -march=native -funsafe-loop-optimizations
 clang_darwin_cc_CFLAGS		:= -Wno-unused-result
 clang_darwin_cc_fast_CFLAGS	:=
 
@@ -695,7 +695,7 @@ opencc_fast_CFLAGS  := -ffast-stdlib -ffast-math -inline
 
 # Many options for opencc are similar to those in common_CFLAGS, but not all.
 # They will be removed later from opencc_CFLAGS.
-not_in_opencc := -Wextra -Wstrict-overflow% -W%type-limits -ftree-loop-distribution -mfpmath=% -msse4.% -W%unsuffixed-float-constants \
+not_in_opencc := -Wextra -Wstrict-overflow% -W%type-limits -mfpmath=% -msse4.% -W%unsuffixed-float-constants \
 		-march=% -f%branch-target-load-optimize -f%branch-target-load-optimize2 -Ofast% -fast -fpch% -W%pch -f%pch \
 		-f%unsafe-loop-optimizations -Wunknown-% -Wno-unknown-% -Qunused-% -W%tautological-compare -W%missing-field-initializers
 
@@ -704,7 +704,7 @@ not_in_opencc := -Wextra -Wstrict-overflow% -W%type-limits -ftree-loop-distribut
 
 # Flags for PTX code compilation, which generates the actual GPU assembler.
 
-ptxas_CFLAGS	  := --warning-as-error 0
+ptxas_CFLAGS	  := #--warning-as-error 0
 ptxas_fast_CFLAGS := --opt-level=4 --allow-expensive-optimizations=true
 ptxas_warn_CFLAGS := --generate-line-info --verbose
 
